@@ -4,20 +4,20 @@ import fastifyStatic from '@fastify/static';
 import crypto from 'node:crypto';
 import { openDb, applyChanges, changesSince, COLLECTIONS } from './db.js';
 import { hashPassword, checkPassword, newToken, hashToken, newId, rateLimiter } from './auth.js';
+import { fail, norm, isObj } from './util.js';
+import { readSettings, updateSettings } from './settings.js';
+import { nowIn, zonedEpoch } from './time.js';
+import { evolutionClient, createMessenger, registerWhatsapp } from './whatsapp.js';
+import { registerBooking } from './booking.js';
 
 const YEAR = 365 * 24 * 60 * 60;
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 const MAX_RECORD = 20_000; // bytes por registro
 const HANDOFF_TTL = 3 * 24 * 60 * 60 * 1000;
 
-const norm = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 const slugify = s => norm(s).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'salao';
-const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
-
-class HttpError extends Error {
-  constructor(status, message) { super(message); this.statusCode = status; }
-}
-const fail = (status, message) => { throw new HttpError(status, message); };
+// Endereços que não podem virar link de salão
+const RESERVED = new Set(['api', 'app', 'admin', 'login', 'entrar', 'sair', 'cadastro', 'agendar', 'www', 'static', 'public', 'suporte', 'ajuda']);
 
 // Confere uma lista de mudanças vinda do app antes de gravar
 function cleanChanges(list) {
@@ -51,6 +51,7 @@ export function buildApp({
   allowSignup = true,
   secureCookies = false,
   handoffOrigins = '*',
+  evolution = {},        // { url, apikey, fetchImpl }
   logger = false,
 } = {}) {
   const db = openDb(dbFile);
@@ -60,6 +61,14 @@ export function buildApp({
 
   const limitAuth = rateLimiter({ max: 10, windowMs: 15 * 60 * 1000 });
   const limitHandoff = rateLimiter({ max: 20, windowMs: 60 * 60 * 1000 });
+  const limitBook = rateLimiter({ max: 10, windowMs: 60 * 60 * 1000 });
+
+  const evo = evolutionClient(evolution);
+  const messenger = createMessenger({ db, evo, log: app.log });
+  app.decorate('messenger', messenger);
+
+  const getSettings = tenantId => readSettings(db.prepare('SELECT settings FROM tenants WHERE id = ?').get(tenantId)?.settings);
+  const saveSettings = (tenantId, s) => db.prepare('UPDATE tenants SET settings = ? WHERE id = ?').run(JSON.stringify(s), tenantId);
 
   app.setErrorHandler((err, req, reply) => {
     const status = err.statusCode || 500;
@@ -120,7 +129,7 @@ export function buildApp({
     if (q.userByEmail.get(email)) fail(409, 'Já existe uma conta com esse e-mail. Use "Entrar".');
 
     let slug = slugify(salon);
-    for (let i = 2; q.slugTaken.get(slug); i++) slug = `${slugify(salon).slice(0, 36)}-${i}`;
+    for (let i = 2; q.slugTaken.get(slug) || RESERVED.has(slug); i++) slug = `${slugify(salon).slice(0, 36)}-${i}`;
     const passHash = await hashPassword(pass);
     const tenantId = newId(), userId = newId(), now = Date.now();
     db.transaction(() => {
@@ -155,12 +164,39 @@ export function buildApp({
     return changesSince(db, req.s.tenant_id, since);
   });
 
+  const apptExists = db.prepare("SELECT 1 FROM records WHERE tenant_id = ? AND coll = 'appts' AND id = ?");
   app.post('/api/sync', { preHandler: auth }, async req => {
+    const tenantId = req.s.tenant_id;
     const changes = cleanChanges(req.body?.changes);
-    const seq = changes.length ? applyChanges(db, req.s.tenant_id, changes)
-      : db.prepare('SELECT seq FROM tenants WHERE id = ?').get(req.s.tenant_id).seq;
+    const fresh = changes.filter(c => c.coll === 'appts' && !c.deleted && !apptExists.get(tenantId, c.id));
+    const seq = changes.length ? applyChanges(db, tenantId, changes)
+      : db.prepare('SELECT seq FROM tenants WHERE id = ?').get(tenantId).seq;
+
+    // Horário novo marcado no app: manda confirmação, se ela ligou essa opção
+    const s = fresh.length ? getSettings(tenantId) : null;
+    if (s?.whatsapp.confirmManual && s.whatsapp.instance) {
+      for (const c of fresh) {
+        const a = c.data;
+        if (a.status === 'cancelado' || !a.date || !a.time) continue;
+        if (zonedEpoch(a.date, a.time, s.timezone) > Date.now()) messenger.fire(tenantId, c.id, 'confirm');
+      }
+    }
     return { seq };
   });
+
+  /* ------------------------------ configurações ------------------------------ */
+  app.get('/api/settings', { preHandler: auth }, async req => {
+    const s = getSettings(req.s.tenant_id);
+    return { ...s, slug: req.s.slug, today: nowIn(s.timezone).date, whatsappAvailable: evo.enabled };
+  });
+  app.put('/api/settings', { preHandler: auth }, async req => {
+    const s = updateSettings(getSettings(req.s.tenant_id), req.body);
+    saveSettings(req.s.tenant_id, s);
+    return { ...s, slug: req.s.slug, today: nowIn(s.timezone).date, whatsappAvailable: evo.enabled };
+  });
+
+  registerWhatsapp(app, { db, evo, messenger, auth, getSettings, saveSettings });
+  registerBooking(app, { db, messenger, limitBook });
 
   // Recupera uma cópia de segurança. replace=true apaga o que tem antes.
   app.post('/api/import', { preHandler: auth }, async req => {
@@ -216,6 +252,20 @@ export function buildApp({
         // sw.js e index.html sempre atualizados; o resto pode ficar em cache curto
         if (/(sw\.js|index\.html|manifest\.json)$/.test(file)) res.setHeader('Cache-Control', 'no-cache');
       },
+    });
+  }
+
+  if (publicDir) {
+    // Link de agendamento do salão. Arquivos (app.js, style.css…) também caem aqui.
+    app.get('/:slug', async (req, reply) => {
+      const slug = req.params.slug;
+      if (!slug) return reply.header('Cache-Control', 'no-cache').sendFile('index.html');
+      if (slug.includes('.')) return reply.sendFile(slug);
+      if (!/^[a-z0-9-]{1,50}$/.test(slug) || !db.prepare('SELECT 1 FROM tenants WHERE slug = ?').get(slug)) {
+        return reply.code(404).type('text/html').send('<meta charset="utf-8"><p style="font:18px system-ui;padding:2rem">Link não encontrado.</p>');
+      }
+      reply.header('Cache-Control', 'no-cache');
+      return reply.sendFile('agendar.html');
     });
   }
 

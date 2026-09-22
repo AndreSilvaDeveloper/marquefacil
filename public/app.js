@@ -141,6 +141,7 @@ async function syncNow() {
       // 2) busca o que mudou no servidor (ex.: agendamento feito pelo link)
       const r = await api('GET', `/api/changes?since=${seq}`);
       let changed = false;
+      const fromLink = [];
       for (const c of r.changes) {
         const k = c.coll + '/' + c.id, list = db[c.coll];
         if (!list) continue;
@@ -151,12 +152,17 @@ async function syncNow() {
         snap[k] = JSON.stringify(c.data);
         if (hasLocalEdit) continue; // a mudança feita aqui vale; vai no próximo envio
         if (i >= 0) list[i] = c.data; else list.push(c.data);
+        if (i < 0 && c.coll === 'appts' && c.data.source === 'online' && seq > 0) fromLink.push(c.data);
         changed = true;
       }
       seq = r.seq;
       persist();
       syncState = pendingChanges().length ? 'pending' : 'ok';
       if (changed && !$('#app form')) render();
+      if (fromLink.length) {
+        const a = fromLink[fromLink.length - 1];
+        toast(fromLink.length > 1 ? `🌐 ${fromLink.length} agendamentos novos pelo link` : `🌐 Novo pelo link: ${clientName(a.clientId)}, ${dayName(a.date).toLowerCase()} ${a.time}`);
+      }
     } catch (e) {
       if (e.status === 401) { logoutLocal(); return; }
       syncState = e.offline ? 'offline' : 'pending';
@@ -252,7 +258,7 @@ function parseHash() {
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
   agendar: vApptForm, agendamento: vAppt, venda: vSaleForm, financeiro: vFin, mais: vMore,
-  itens: vItems, item: vItemForm,
+  itens: vItems, item: vItemForm, link: vLink, whatsapp: vWhats,
 };
 
 let lastHash = '';
@@ -292,6 +298,7 @@ function badgesFor(a) {
       : `<span class="badge warn">${apptDue(a) ? 'Não pago' : 'A pagar'} ${brl(a.price)}</span>`);
     else if (a.paid) b.push('<span class="badge ok">Pago</span>');
     if (conflictsFor(a.date, a.time, a.duration, a.id).length) b.push('<span class="badge warn">⚠️ Horário junto</span>');
+    if (a.source === 'online') b.push('<span class="badge">🌐 Pelo link</span>');
   }
   return b.join('');
 }
@@ -1085,6 +1092,8 @@ function vMore() {
       <div class="stack">
         <a class="btn" href="#/itens/services">💇 Meus serviços (${db.services.length})</a>
         <a class="btn" href="#/itens/products">🛍️ Meus produtos (${db.products.length})</a>
+        <a class="btn" href="#/link">🔗 Link para as clientes agendarem</a>
+        <a class="btn" href="#/whatsapp">💬 WhatsApp automático</a>
       </div>
 
       <h2>Tamanho da letra</h2>
@@ -1156,6 +1165,8 @@ function vItemForm(kind, q) {
         <div class="field"><label for="n">Nome <em>*</em></label><input type="text" id="n" value="${esc(it?.name || '')}"></div>
         ${K.withDur ? `<div class="field"><label for="d">Duração em minutos <span class="opt">(se quiser)</span></label>
           <input type="number" id="d" inputmode="numeric" min="5" step="5" value="${it?.duration || ''}" placeholder="Ex.: 60"></div>` : ''}
+        ${K.withDur ? `<div class="field"><span class="lbl">Aparece no link de agendamento?</span>
+          ${toggle2('online', it?.online !== false, '✓ Sim', 'Não')}</div>` : ''}
         <div class="field"><label for="p">Valor <span class="opt">(se quiser)</span></label>
           <div class="money"><input type="text" id="p" inputmode="decimal" placeholder="0,00" value="${moneyVal(it?.price)}"></div></div>
         <button class="btn main" type="submit">✓ Salvar</button>
@@ -1163,6 +1174,7 @@ function vItemForm(kind, q) {
       </form>`,
     bind(el) {
       if (!it) $('#n', el).focus();
+      $('#online', el) && bindToggle2($('#online', el), () => {});
       $('#f', el).addEventListener('submit', e => {
         e.preventDefault();
         const name = $('#n', el).value.trim().replace(/\s+/g, ' ');
@@ -1172,7 +1184,11 @@ function vItemForm(kind, q) {
         const pv = $('#p', el).value, price = parseMoney(pv);
         if (pv.trim() && price == null) { $('#err', el).innerHTML = '<div class="error">O valor não está certo. Exemplo: 50,00</div>'; return; }
         const data = { name, price };
-        if (K.withDur) { const d = parseInt($('#d', el).value, 10); data.duration = d > 0 ? d : null; }
+        if (K.withDur) {
+          const d = parseInt($('#d', el).value, 10);
+          data.duration = d > 0 ? d : null;
+          data.online = $('#online .yes', el).classList.contains('on');
+        }
         if (it) Object.assign(it, data); else K.list().push({ id: uid(), createdAt: Date.now(), ...data });
         save(); toast('Salvo ✓'); back(`#/itens/${kind}`);
       });
@@ -1183,6 +1199,265 @@ function vItemForm(kind, q) {
       });
     },
   };
+}
+
+/* =====================================================================
+   LINK DE AGENDAMENTO E WHATSAPP AUTOMÁTICO (precisam de internet)
+   ===================================================================== */
+const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+const opts = (list, cur, label) => list.map(v => `<option value="${v}" ${+v === +cur ? 'selected' : ''}>${label(v)}</option>`).join('');
+
+// Tela que carrega dados do servidor antes de mostrar o conteúdo
+function onlineView(title, load, paint) {
+  return {
+    title, tab: 'mais', back: true,
+    html: '<div id="box"><div class="empty">Carregando…</div></div>',
+    async bind(el) {
+      try { paint($('#box', el), await load()); }
+      catch (e) { $('#box', el).innerHTML = `<div class="error">${esc(e.offline ? 'Precisa de internet para abrir esta tela.' : e.message)}</div>`; }
+    },
+  };
+}
+
+function vLink() {
+  return onlineView('Link de agendamento', () => api('GET', '/api/settings'), (box, S) => {
+    const b = S.booking;
+    const url = `${location.origin}/${S.slug}`;
+    const share = `Agende seu horário no ${session.tenant.name} por aqui: ${url}`;
+    box.innerHTML = `
+      <div class="form">
+        <span class="lbl">Clientes podem agendar pelo link?</span>
+        ${toggle2('enabled', b.enabled, '✓ Sim, ligado', 'Desligado')}
+
+        <div class="card" style="margin-top:1rem">
+          <div class="muted" style="font-size:.85rem">Seu link:</div>
+          <b style="word-break:break-all">${esc(url)}</b>
+          <div class="row" style="margin-top:.7rem;flex-wrap:wrap">
+            <button type="button" class="btn small" id="copy">📋 Copiar</button>
+            <a class="btn small" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(share)}">💬 Mandar</a>
+            <a class="btn small" target="_blank" rel="noopener" href="${esc(url)}">👀 Ver</a>
+          </div>
+        </div>
+
+        <h2>Dias e horários de atendimento</h2>
+        <div class="list" id="days">${WEEKDAYS.map((name, d) => {
+          const r = b.days[d];
+          return `<div class="card daysrow" data-d="${d}">
+            <button type="button" class="chip ${r ? 'on' : ''}" data-toggle>${r ? '✓ ' : ''}${name}</button>
+            <div class="hours" ${r ? '' : 'hidden'}>
+              <input type="text" inputmode="numeric" maxlength="5" data-a value="${r ? r[0] : '09:00'}"> até
+              <input type="text" inputmode="numeric" maxlength="5" data-b value="${r ? r[1] : '18:00'}">
+            </div>
+            <span class="muted" ${r ? 'hidden' : ''}>Fechado</span>
+          </div>`;
+        }).join('')}</div>
+
+        <h2>Almoço</h2>
+        <div class="card daysrow" id="lunch">
+          <button type="button" class="chip ${b.lunch ? 'on' : ''}" data-toggle>${b.lunch ? '✓ ' : ''}Parar para almoço</button>
+          <div class="hours" ${b.lunch ? '' : 'hidden'}>
+            <input type="text" inputmode="numeric" maxlength="5" data-a value="${b.lunch ? b.lunch[0] : '12:00'}"> até
+            <input type="text" inputmode="numeric" maxlength="5" data-b value="${b.lunch ? b.lunch[1] : '13:00'}">
+          </div>
+        </div>
+
+        <h2>Como aparecem os horários</h2>
+        <div class="field"><label for="interval">Horários de quanto em quanto tempo</label>
+          <select id="interval">${opts([15, 20, 30, 45, 60], b.interval, v => `A cada ${fmtDur(+v)}`)}</select></div>
+        <div class="field"><label for="adv">Antecedência mínima</label>
+          <select id="adv">${opts([0, 1, 2, 3, 6, 12, 24, 48], b.minAdvanceHours, v => +v ? `${v} hora${+v > 1 ? 's' : ''} antes` : 'Pode agendar em cima da hora')}</select></div>
+        <div class="field"><label for="max">Até quanto tempo para frente</label>
+          <select id="max">${opts([7, 14, 30, 60, 90], b.maxDays, v => `${v} dias`)}</select></div>
+        <div class="field"><label for="dur">Tempo reservado quando a cliente não escolhe serviço</label>
+          <select id="dur">${opts([30, 45, 60, 90, 120], b.defaultDuration, v => fmtDur(+v))}</select></div>
+        <p class="muted">Os serviços que aparecem no link são escolhidos em <a href="#/itens/services">Meus serviços</a>.</p>
+
+        <h2>Folgas e feriados</h2>
+        <div id="closed" class="chips"></div>
+        <div class="row" style="margin-top:.6rem"><input type="date" id="newclosed" min="${S.today}"><button type="button" class="btn small" id="addclosed" style="flex:0 0 auto">+ Adicionar</button></div>
+
+        <h2>Recado no topo do link <span class="opt">(se quiser)</span></h2>
+        <textarea id="msg" placeholder="Ex.: Chegue 5 minutos antes 😊">${esc(b.message)}</textarea>
+
+        <div id="err" style="margin-top:1rem"></div>
+        <button type="button" class="btn main" id="save" style="margin-top:1rem">✓ Salvar</button>
+      </div>`;
+
+    let enabled = b.enabled;
+    let closed = [...b.closedDates];
+    const paintClosed = () => {
+      $('#closed', box).innerHTML = closed.length
+        ? closed.map(d => `<button type="button" class="chip" data-del="${d}">${fmtShort(d)} ✕</button>`).join('')
+        : '<span class="muted">Nenhuma.</span>';
+    };
+    paintClosed();
+    bindToggle2($('#enabled', box), v => (enabled = v));
+    $('#copy', box).onclick = async () => {
+      try { await navigator.clipboard.writeText(url); toast('Link copiado ✓'); } catch { prompt('Copie o link:', url); }
+    };
+    box.querySelectorAll('.daysrow').forEach(row => {
+      row.querySelectorAll('input').forEach(maskTime);
+      $('[data-toggle]', row).onclick = e => {
+        const on = !e.currentTarget.classList.contains('on');
+        e.currentTarget.classList.toggle('on', on);
+        e.currentTarget.textContent = (on ? '✓ ' : '') + e.currentTarget.textContent.replace('✓ ', '');
+        $('.hours', row).hidden = !on;
+        const closedLbl = row.querySelector('span.muted');
+        if (closedLbl) closedLbl.hidden = on;
+      };
+    });
+    $('#closed', box).onclick = e => { const d = e.target.closest('[data-del]')?.dataset.del; if (d) { closed = closed.filter(x => x !== d); paintClosed(); } };
+    $('#addclosed', box).onclick = () => {
+      const d = $('#newclosed', box).value;
+      if (d && !closed.includes(d)) { closed = [...closed, d].sort(); paintClosed(); }
+    };
+
+    const readRange = row => {
+      if (!$('[data-toggle]', row).classList.contains('on')) return null;
+      const a = parseTime($('[data-a]', row).value), z = parseTime($('[data-b]', row).value);
+      if (!a || !z || a >= z) throw new Error(`Confira os horários de ${$('[data-toggle]', row).textContent.replace('✓ ', '')}.`);
+      return [a, z];
+    };
+    $('#save', box).onclick = async () => {
+      const btn = $('#save', box);
+      try {
+        const days = {};
+        box.querySelectorAll('#days .daysrow').forEach(row => { days[row.dataset.d] = readRange(row); });
+        const booking = {
+          enabled, days, lunch: readRange($('#lunch', box)),
+          interval: +$('#interval', box).value, minAdvanceHours: +$('#adv', box).value,
+          maxDays: +$('#max', box).value, defaultDuration: +$('#dur', box).value,
+          closedDates: closed, message: $('#msg', box).value.trim(),
+        };
+        btn.disabled = true;
+        await api('PUT', '/api/settings', { booking });
+        toast(enabled ? 'Salvo ✓ O link está ligado' : 'Salvo ✓');
+        $('#err', box).innerHTML = '';
+      } catch (e) {
+        $('#err', box).innerHTML = `<div class="error">${esc(e.offline ? 'Precisa de internet para salvar.' : e.message)}</div>`;
+      } finally { btn.disabled = false; }
+    };
+  });
+}
+
+let waPoll = null;
+function vWhats() {
+  clearInterval(waPoll);
+  return onlineView('WhatsApp automático',
+    async () => {
+      const S = await api('GET', '/api/settings');
+      const st = S.whatsappAvailable ? await api('GET', '/api/whatsapp/status') : { state: 'off' };
+      const msgs = S.whatsappAvailable ? await api('GET', '/api/messages') : [];
+      return { S, st, msgs };
+    },
+    (box, { S, st, msgs }) => {
+      if (!S.whatsappAvailable) {
+        box.innerHTML = '<div class="empty">O WhatsApp automático ainda não está disponível.<br>Fale com o suporte do Marque Fácil.</div>';
+        return;
+      }
+      const w = S.whatsapp;
+      const connected = st.state === 'open';
+      const kinds = { confirm: 'Confirmação', reminder: 'Lembrete', owner: 'Aviso para você', test: 'Teste' };
+      const status = { sent: '<span class="badge ok">Enviada</span>', error: '<span class="badge bad">Falhou</span>', skipped: '<span class="badge warn">Sem telefone</span>', sending: '<span class="badge">Enviando</span>' };
+      box.innerHTML = `
+        <div class="card">
+          ${connected
+            ? `<b style="color:var(--ok)">✓ WhatsApp conectado</b>${st.number ? `<div class="muted">+${esc(st.number)}</div>` : ''}
+               <div class="row" style="margin-top:.7rem"><button class="btn small" id="test">📨 Mandar teste</button><button class="btn small danger" id="disc">Desconectar</button></div>`
+            : `<b>WhatsApp não conectado</b>
+               <p class="muted">Conecte o WhatsApp do salão para as mensagens saírem sozinhas.</p>
+               <div class="field form"><label for="ph">Número do WhatsApp do salão</label>
+                 <input type="tel" id="ph" placeholder="(11) 99999-9999" value="${esc(w.ownerPhone || '')}"></div>
+               <button class="btn main" id="code">🔢 Conectar com código</button>
+               <button class="btn" id="qr" style="margin-top:.6rem">📷 Conectar com QR code (outro aparelho)</button>
+               <div id="connect" style="margin-top:1rem"></div>`}
+        </div>
+
+        <div class="form">
+          <h2>O que mandar</h2>
+          <div class="field"><span class="lbl">Confirmação quando a cliente agenda pelo link</span>${toggle2('confirmOnline', w.confirmOnline, '✓ Mandar', 'Não')}</div>
+          <div class="field"><span class="lbl">Confirmação quando eu agendo no app</span>${toggle2('confirmManual', w.confirmManual, '✓ Mandar', 'Não')}</div>
+          <div class="field"><label for="rem">Lembrete antes do horário</label>
+            <select id="rem">${opts([0, 2, 3, 6, 12, 24, 48], w.reminderHours, v => +v ? (+v === 24 ? '1 dia antes' : +v === 48 ? '2 dias antes' : `${v} horas antes`) : 'Não mandar lembrete')}</select></div>
+          <div class="field"><span class="lbl">Me avisar quando alguém agendar pelo link</span>${toggle2('notifyOwner', w.notifyOwner, '✓ Avisar', 'Não')}</div>
+          <div class="field"><label for="own">Número que recebe o aviso <span class="opt">(vazio = o próprio WhatsApp conectado)</span></label>
+            <input type="tel" id="own" placeholder="(11) 99999-9999" value="${esc(w.ownerPhone || '')}"></div>
+
+          <details><summary class="btn">✏️ Mudar o texto das mensagens</summary>
+            <p class="muted">Pode usar: {nome}, {dia}, {hora}, {servico}, {salao}, {telefone}. Linha com campo vazio (ex.: sem serviço) some sozinha.</p>
+            <div class="field"><label for="t-confirm">Confirmação</label><textarea id="t-confirm" rows="6">${esc(w.templates.confirm)}</textarea></div>
+            <div class="field"><label for="t-reminder">Lembrete</label><textarea id="t-reminder" rows="6">${esc(w.templates.reminder)}</textarea></div>
+            <div class="field"><label for="t-owner">Aviso para você</label><textarea id="t-owner" rows="5">${esc(w.templates.owner)}</textarea></div>
+          </details>
+          <div id="err" style="margin-top:1rem"></div>
+          <button class="btn main" id="save" style="margin-top:1rem">✓ Salvar</button>
+        </div>
+
+        <h2>Últimas mensagens</h2>
+        <div class="list">${msgs.length ? msgs.map(m => `<div class="card">
+          <div class="line"><div class="grow"><b>${kinds[m.kind] || m.kind}${m.name ? ' — ' + esc(m.name) : ''}</b>
+          <span>${new Date(m.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${m.error ? ' · ' + esc(m.error) : ''}</span></div>
+          ${status[m.status] || ''}</div></div>`).join('') : '<div class="muted">Nenhuma mensagem ainda.</div>'}</div>`;
+
+      const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner };
+      for (const k of Object.keys(flags)) bindToggle2($('#' + k, box), v => (flags[k] = v));
+
+      const err = e => { $('#err', box).innerHTML = `<div class="error">${esc(e.offline ? 'Precisa de internet.' : e.message)}</div>`; };
+      $('#save', box).onclick = async () => {
+        try {
+          await api('PUT', '/api/settings', { whatsapp: {
+            ...flags, reminderHours: +$('#rem', box).value, ownerPhone: $('#own', box).value.trim(),
+            templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value },
+          } });
+          toast('Salvo ✓');
+          $('#err', box).innerHTML = '';
+        } catch (e) { err(e); }
+      };
+
+      // Espera o WhatsApp conectar e recarrega a tela
+      const waitConnected = () => {
+        clearInterval(waPoll);
+        waPoll = setInterval(async () => {
+          if (!$('#connect')) return clearInterval(waPoll);
+          const s = await api('GET', '/api/whatsapp/status').catch(() => null);
+          if (s?.state === 'open') { clearInterval(waPoll); toast('WhatsApp conectado ✓'); render(); }
+        }, 3000);
+      };
+      const connect = async withCode => {
+        const out = $('#connect', box);
+        const phone = $('#ph', box).value.trim();
+        if (withCode && !phone) { out.innerHTML = '<div class="error">Escreva o número do WhatsApp do salão.</div>'; return; }
+        out.innerHTML = '<div class="muted">Preparando…</div>';
+        try {
+          const r = await api('POST', '/api/whatsapp/connect', withCode ? { phone } : {});
+          if (r.state === 'open') { render(); return; }
+          if (withCode && r.pairingCode) {
+            out.innerHTML = `<div class="summary" style="text-align:center">
+              <div class="muted">Seu código:</div>
+              <div style="font-size:2rem;font-weight:800;letter-spacing:.2rem">${esc(r.pairingCode.replace(/(.{4})/, '$1-'))}</div></div>
+              <ol class="steps"><li>Abra o <b>WhatsApp</b> do salão</li><li>Toque em <b>⋮</b> ou <b>Configurações</b> → <b>Aparelhos conectados</b></li>
+              <li><b>Conectar aparelho</b> → <b>Conectar com número de telefone</b></li><li>Digite o código acima</li></ol>
+              <p class="muted">Esta tela atualiza sozinha quando conectar.</p>`;
+          } else if (r.qr) {
+            out.innerHTML = `<img src="${esc(r.qr)}" alt="QR code" style="width:100%;max-width:280px;display:block;margin:0 auto">
+              <ol class="steps"><li>Abra o <b>WhatsApp</b> do salão em <b>outro aparelho</b></li><li><b>Aparelhos conectados</b> → <b>Conectar aparelho</b></li><li>Aponte a câmera para o código</li></ol>`;
+          } else {
+            out.innerHTML = '<div class="error">Não veio o código. Tente de novo em alguns segundos.</div>';
+            return;
+          }
+          waitConnected();
+        } catch (e) { out.innerHTML = `<div class="error">${esc(e.offline ? 'Precisa de internet.' : e.message)}</div>`; }
+      };
+      $('#code', box) && ($('#code', box).onclick = () => connect(true));
+      $('#qr', box) && ($('#qr', box).onclick = () => connect(false));
+      $('#test', box) && ($('#test', box).onclick = async () => {
+        try { await api('POST', '/api/whatsapp/test', {}); toast('Mensagem de teste enviada ✓'); render(); } catch (e) { err(e); }
+      });
+      $('#disc', box) && ($('#disc', box).onclick = async () => {
+        if (!confirm('Desconectar o WhatsApp? As mensagens automáticas param.')) return;
+        try { await api('POST', '/api/whatsapp/disconnect'); render(); } catch (e) { err(e); }
+      });
+    });
 }
 
 async function exportBackup() {

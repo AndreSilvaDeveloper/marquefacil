@@ -242,3 +242,15 @@ input[type=email], input[type=password] {
 .sync.ok { color: var(--ok); }
 .sync.pending { color: var(--warn); }
 .sync.offline { color: var(--muted); }
+
+/* ---------- Link e WhatsApp ---------- */
+.daysrow { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.daysrow .chip { min-width: 8.5rem; text-align: left; }
+.daysrow .hours { display: flex; align-items: center; gap: .4rem; }
+.daysrow .hours[hidden], .daysrow [hidden] { display: none; }
+.daysrow .hours input { width: 5.2rem; min-height: 2.8rem; text-align: center; font-weight: 700; }
+details summary { list-style: none; cursor: pointer; margin: .5rem 0 1rem; }
+details summary::-webkit-details-marker { display: none; }
+.steps { padding-left: 1.3rem; }
+.steps li { margin: .35rem 0; }
+.summary { background: var(--brand-soft); border-radius: 12px; padding: .8rem 1rem; margin-bottom: 1rem; }

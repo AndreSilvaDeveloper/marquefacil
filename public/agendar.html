@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#8e3a6b">
+  <title>Agendar horário</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body { padding-bottom: 2rem; }
+    .step { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; }
+    .step h2 { margin: 0 0 .8rem; display: flex; gap: .5rem; align-items: center; }
+    .step h2 .n { background: var(--brand); color: #fff; border-radius: 50%; width: 1.8rem; height: 1.8rem; display: inline-grid; place-items: center; font-size: .95rem; }
+    .step.done h2 .n { background: var(--ok); }
+    .pick { display: grid; gap: .5rem; }
+    .pick button {
+      text-align: left; border: 2px solid var(--line); background: #fff; border-radius: 12px;
+      padding: .8rem 1rem; min-height: 3.2rem; font-weight: 700; cursor: pointer;
+    }
+    .pick button small { display: block; font-weight: 400; color: var(--muted); }
+    .pick button.on { border-color: var(--brand); background: var(--brand-soft); }
+    .days { display: flex; gap: .45rem; overflow-x: auto; padding-bottom: .4rem; scroll-snap-type: x mandatory; }
+    .days button {
+      flex: 0 0 4.4rem; scroll-snap-align: start; border: 2px solid var(--line); background: #fff; border-radius: 12px;
+      padding: .45rem 0; text-align: center; font-size: .8rem; color: var(--muted); cursor: pointer;
+    }
+    .days button b { display: block; font-size: 1.3rem; color: var(--ink); }
+    .days button:disabled { opacity: .35; cursor: default; }
+    .days button.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+    .days button.on b { color: #fff; }
+    .times { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.2rem, 1fr)); gap: .45rem; }
+    .times button { border: 2px solid var(--line); background: #fff; border-radius: 12px; min-height: 3rem; font-weight: 800; font-size: 1.05rem; cursor: pointer; }
+    .times button.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+    .summary { background: var(--brand-soft); border-radius: 12px; padding: .8rem 1rem; margin-bottom: 1rem; }
+    .hp { position: absolute; left: -5000px; }
+    .ok-box { text-align: center; padding: 1.5rem 1rem; }
+    .ok-box .big { font-size: 3rem; }
+  </style>
+</head>
+<body>
+  <header id="top"><h1 id="title">Agendar horário</h1></header>
+  <main id="app"><div class="empty">Carregando…</div></main>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/agendar.js"></script>
+</body>
+</html>

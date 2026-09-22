@@ -13,10 +13,12 @@ const app = buildApp({
   allowSignup: env.ALLOW_SIGNUP !== 'false',
   secureCookies: env.NODE_ENV === 'production',
   handoffOrigins: env.HANDOFF_ORIGINS || '*',
+  evolution: { url: env.EVOLUTION_URL, apikey: env.EVOLUTION_APIKEY },
   logger: { level: env.LOG_LEVEL || 'info' },
 });
 
 startBackups(app.db, path.join(dataDir, 'backups'));
+app.messenger.startScheduler(); // lembretes pelo WhatsApp
 
 const port = Number(env.PORT || 3000);
 app.listen({ port, host: '0.0.0.0' }).catch(err => { app.log.error(err); process.exit(1); });

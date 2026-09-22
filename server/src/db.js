@@ -49,6 +49,21 @@ export function openDb(file) {
     );
     CREATE INDEX IF NOT EXISTS records_seq ON records (tenant_id, seq);
     CREATE INDEX IF NOT EXISTS records_appt_date ON records (tenant_id, coll, json_extract(data, '$.date'));
+    CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      appt_id TEXT,
+      kind TEXT NOT NULL,
+      phone TEXT,
+      name TEXT,
+      body TEXT,
+      status TEXT NOT NULL,
+      error TEXT,
+      attempts INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      UNIQUE (tenant_id, appt_id, kind)
+    );
+    CREATE INDEX IF NOT EXISTS messages_recent ON messages (tenant_id, created_at);
     CREATE TABLE IF NOT EXISTS handoffs (
       code TEXT PRIMARY KEY,
       data TEXT NOT NULL,
