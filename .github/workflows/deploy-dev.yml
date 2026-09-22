@@ -20,9 +20,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Testes do servidor
-        working-directory: server
         run: |
-          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/w -w /w node:22-slim \
+          # monta o repositório inteiro: os testes também conferem as páginas de public/
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/w -w /w/server node:22-slim \
             sh -c "npm ci && npm test"
 
       - name: Construir imagem
