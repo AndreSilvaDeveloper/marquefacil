@@ -1,15 +1,13 @@
-# Bloco para acrescentar no Caddyfile que JÁ EXISTE no servidor
-# (não substituir o arquivo — ele também atende o dev.workid.com.br).
-# Depois de colar: caddy validate + caddy reload (ou restart do container do Caddy).
+# Bloco para ACRESCENTAR no fim de /var/www/caddy/Caddyfile (não substituir o arquivo:
+# ele atende zenfra, vault e dev.workid). O Caddy precisa estar na rede `marquefacil`:
+#   docker network connect marquefacil caddy
+# Depois:
+#   docker exec caddy caddy validate --config /etc/caddy/Caddyfile
+#   docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+# Só depois que maquefacil.com.br já apontar para 77.37.40.221.
 
-# --- Opção 1: Caddy instalado direto na máquina (systemd) — APP_BIND=127.0.0.1
 maquefacil.com.br, www.maquefacil.com.br {
-	encode gzip
-	reverse_proxy 127.0.0.1:3100
+	import security_headers
+	encode zstd gzip
+	reverse_proxy marquefacil-app:3000
 }
-
-# --- Opção 2: Caddy rodando em container — APP_BIND=172.17.0.1
-# maquefacil.com.br, www.maquefacil.com.br {
-# 	encode gzip
-# 	reverse_proxy 172.17.0.1:3100
-# }

@@ -16,7 +16,6 @@ jobs:
     env:
       APP_DIR: /opt/marquefacil
       APP_PORT: ${{ vars.APP_PORT || '3100' }}
-      APP_BIND: ${{ vars.APP_BIND || '127.0.0.1' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -48,7 +47,6 @@ jobs:
             echo "EVOLUTION_URL=$EVOLUTION_URL"
             echo "EVOLUTION_APIKEY=$EVOLUTION_APIKEY"
             echo "APP_PORT=$APP_PORT"
-            echo "APP_BIND=$APP_BIND"
           } > "$APP_DIR/.env"
           chmod 600 "$APP_DIR/.env"
 
@@ -58,11 +56,15 @@ jobs:
           # sem --remove-orphans de propósito: não mexer em nada que não seja do projeto marquefacil
           docker compose -p marquefacil up -d
           docker compose -p marquefacil ps
+          # o Caddy da máquina precisa enxergar a rede do app (não recria o Caddy; só conecta)
+          if docker ps --format '{{.Names}}' | grep -qx caddy; then
+            docker network connect marquefacil caddy 2>/dev/null && echo "Caddy conectado à rede marquefacil" || echo "Caddy já estava na rede marquefacil"
+          fi
 
       - name: Teste de fumaça
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS "http://$APP_BIND:$APP_PORT/api/health"; then echo; echo "OK"; exit 0; fi
+            if curl -fsS "http://127.0.0.1:$APP_PORT/api/health"; then echo; echo "OK"; exit 0; fi
             sleep 2
           done
           echo "::error::O app não respondeu em /api/health"

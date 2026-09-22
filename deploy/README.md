@@ -8,15 +8,17 @@ Run workflow**), num runner próprio do Marque Fácil.
 > não usar `docker compose down --remove-orphans` fora do projeto `marquefacil`.
 > Mudanças no Caddy, firewall ou portas: combinar antes com o dono da máquina.
 
-## 1. Conferir antes (como root)
-```bash
-docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}'   # Caddy é container ou systemd?
-systemctl is-active caddy
-ls /etc/caddy/Caddyfile
-ss -tlnp | grep -E ':3100\b' || echo "3100 livre"
-free -h; df -h /; nproc
-systemctl list-units 'actions.runner.*' --no-pager       # runner do WorkID (não mexer)
-```
+## 1. Como a máquina está (conferido em 22/09/2026)
+- Ubuntu 24.04, 2 CPUs, 7,8 GB de RAM (4,6 GB livres), 63 GB livres em disco.
+- Rodam também: WorkID dev (`ponto-pro-dev*`), zenfra (`zenfrapp-web`), vault (`vault-app-1`),
+  finance (`finance-api`) e cloudbeaver. Runners: `nd2-workid-dev`, `nd2-zenfra-landing`, `nd2` (RPG).
+- **Caddy em container** (`caddy`, compose em `/var/www/caddy`), Caddyfile em `/var/www/caddy/Caddyfile`.
+  Ele entra na rede de cada app e chama o container pelo nome.
+- ⚠️ O `docker-compose.yml` do Caddy está desatualizado (declara `vault-default`, a rede real é
+  `vault_default`; a rede do WorkID foi conectada à mão). **Não recriar o Caddy com
+  `docker compose up`** — use `docker network connect` e `caddy reload`, que não derrubam nada.
+- Firewall (ufw): só 443 aberto para a internet; SSH só pela tailnet.
+- Porta 3100 livre.
 
 ## 2. Pasta do app (uma vez)
 ```bash
@@ -49,7 +51,6 @@ Repositório → **Settings → Secrets and variables → Actions**.
 | Tipo | Nome | Valor |
 |---|---|---|
 | Variable | `DOMAIN` | `maquefacil.com.br` |
-| Variable | `APP_BIND` | `127.0.0.1` (Caddy na máquina) ou `172.17.0.1` (Caddy em container) |
 | Variable | `APP_PORT` | `3100` (opcional) |
 | Variable | `ALLOW_SIGNUP` | `true` |
 | Secret | `EVOLUTION_URL` | URL da Evolution API (etapa 2) |
@@ -63,14 +64,15 @@ Repositório → **Settings → Secrets and variables → Actions**.
 
 Conferir: `dig +short maquefacil.com.br` deve mostrar `77.37.40.221`.
 
-## 6. Caddy
-Acrescentar o bloco de [`Caddyfile.snippet`](Caddyfile.snippet) no Caddyfile que já existe
-(**não substituir** o arquivo), escolhendo a opção certa. Depois:
+## 6. Caddy (depois do 1º deploy e com o DNS já apontando)
+O workflow já conecta o Caddy à rede `marquefacil`. Falta acrescentar o bloco de
+[`Caddyfile.snippet`](Caddyfile.snippet) no **fim** de `/var/www/caddy/Caddyfile` (não substituir) e recarregar:
 ```bash
-caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy
-# se for container: docker exec <caddy> caddy reload --config /etc/caddy/Caddyfile
+cp /var/www/caddy/Caddyfile /var/www/caddy/Caddyfile.bak-$(date +%Y%m%d-%H%M%S)
+cat deploy/Caddyfile.snippet | grep -v '^#' >> /var/www/caddy/Caddyfile
+docker exec caddy caddy validate --config /etc/caddy/Caddyfile
+docker exec caddy caddy reload --config /etc/caddy/Caddyfile
 ```
-Só faça isso **depois** que o DNS já estiver apontando, senão o Caddy tenta tirar o certificado e falha.
 
 ## 7. Primeiro deploy
 GitHub → Actions → **Deploy dev** → Run workflow (branch `dev`). O workflow:

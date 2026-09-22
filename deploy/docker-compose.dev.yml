@@ -1,26 +1,28 @@
-# Marque Fácil no servidor de dev (máquina compartilhada com o WorkID dev).
+# Marque Fácil no servidor de dev (máquina nd2, compartilhada com WorkID, zenfra, vault…).
 #
 # Regras desta máquina:
-#  - nada de Caddy/80/443 aqui: o Caddy do servidor já faz o HTTPS e repassa para o app;
-#  - nomes com prefixo "marquefacil-" (evita que o deploy de um derrube o outro);
-#  - porta só no endereço interno, e limite de memória/CPU.
+#  - o HTTPS é do container `caddy` (/var/www/caddy). Ele entra na rede de cada app e
+#    chama o container pelo nome — aqui: `marquefacil-app:3000`, na rede `marquefacil`;
+#  - o serviço NÃO pode se chamar "app": o Caddy já usa `app:3000` para o vault, e o nome
+#    repetido numa rede que ele enxerga poderia desviar o tráfego;
+#  - nomes com prefixo "marquefacil-", limite de memória/CPU;
+#  - a porta 3100 fica só no 127.0.0.1 (teste de fumaça e diagnóstico).
 #
-# O workflow copia este arquivo para /opt/marquefacil/docker-compose.yml
-# e gera o .env ao lado. A imagem é construída pelo próprio workflow.
+# O workflow copia este arquivo para /opt/marquefacil/docker-compose.yml e gera o .env ao lado.
 name: marquefacil
 
 services:
-  app:
+  marquefacil:
     image: marquefacil-app:dev
     container_name: marquefacil-app
     restart: unless-stopped
     env_file: .env
     ports:
-      # APP_BIND=127.0.0.1 se o Caddy roda direto na máquina;
-      # APP_BIND=172.17.0.1 (docker0) se o Caddy roda em container.
-      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-3100}:3000"
+      - "127.0.0.1:${APP_PORT:-3100}:3000"
     volumes:
       - marquefacil-data:/data   # banco SQLite + cópias diárias em /data/backups
+    networks:
+      - marquefacil
     mem_limit: 512m
     cpus: 1.0
     logging:
@@ -32,3 +34,7 @@ services:
 volumes:
   marquefacil-data:
     name: marquefacil-data
+
+networks:
+  marquefacil:
+    name: marquefacil
