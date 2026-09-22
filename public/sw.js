@@ -1,6 +1,6 @@
 // Guarda os arquivos do app para abrir mesmo sem internet.
 // Ao mudar qualquer arquivo, aumente a versão abaixo.
-const CACHE = 'agenda-v3';
+const CACHE = 'agenda-v4';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -13,7 +13,9 @@ self.addEventListener('activate', e => {
 });
 // Tenta a internet primeiro (pega atualizações); sem internet, usa a cópia guardada.
 self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
+  const url = new URL(e.request.url);
+  // A API nunca vem do cache: os dados precisam ser sempre os de verdade
+  if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
   e.respondWith(
     fetch(e.request)
       .then(r => { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); return r; })

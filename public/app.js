@@ -5,7 +5,8 @@
    Tudo fica salvo no próprio aparelho (localStorage).
    ===================================================================== */
 
-const KEY = 'agendaSalao.v1';
+const OLD_KEY = 'agendaSalao.v1'; // dados da versão antiga (só no celular)
+const COLLS = ['clients', 'services', 'products', 'appts', 'sales'];
 const DEFAULT_SLOT = 30; // minutos considerados quando o horário não tem duração
 
 /* ---------------------------- utilidades ---------------------------- */
@@ -54,19 +55,129 @@ function toast(msg) {
 }
 
 /* ---------------------------- dados ---------------------------- */
+// Os dados ficam no servidor e também guardados no celular (para abrir rápido e
+// funcionar sem internet). `snap` guarda como cada registro está no servidor;
+// o que for diferente em `db` ainda precisa ser enviado.
 function migrate(d) {
   d = d && typeof d === 'object' ? d : {};
-  for (const k of ['clients', 'services', 'products', 'appts', 'sales']) if (!Array.isArray(d[k])) d[k] = [];
+  for (const k of COLLS) if (!Array.isArray(d[k])) d[k] = [];
   d.settings = d.settings || {};
   return d;
 }
-function load() {
-  try { return migrate(JSON.parse(localStorage.getItem(KEY))); } catch { return migrate({}); }
+const readLS = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
+const writeLS = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+
+let session = readLS('mf.session'); // { user, tenant }
+let db = migrate({});
+let snap = {};   // "coll/id" -> JSON do registro como está no servidor
+let seq = 0;     // até onde já buscamos mudanças do servidor
+const cacheKey = () => `mf.data.${session.tenant.id}`;
+
+function loadCache() {
+  const c = readLS(cacheKey()) || {};
+  db = migrate(c.db);
+  snap = c.snap || {};
+  seq = c.seq || 0;
+  db.settings = { ...readLS('mf.settings'), ...db.settings };
 }
-let db = load();
+function persist() {
+  try {
+    writeLS(cacheKey(), { db, snap, seq });
+    writeLS('mf.settings', db.settings);
+  } catch { alert('Não foi possível salvar! O armazenamento do celular pode estar cheio.'); }
+}
 function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(db)); }
-  catch { alert('Não foi possível salvar! O armazenamento do celular pode estar cheio.'); }
+  persist();
+  scheduleSync();
+}
+
+// O que mudou no celular e ainda não foi para o servidor
+function pendingChanges() {
+  const out = [], seen = new Set();
+  for (const coll of COLLS) for (const it of db[coll]) {
+    const k = coll + '/' + it.id, json = JSON.stringify(it);
+    seen.add(k);
+    if (snap[k] !== json) out.push({ coll, id: it.id, data: it, json });
+  }
+  for (const k of Object.keys(snap)) if (!seen.has(k)) {
+    const [coll, id] = k.split('/');
+    out.push({ coll, id, deleted: true });
+  }
+  return out;
+}
+
+/* ---------------------------- servidor ---------------------------- */
+async function api(method, url, body) {
+  let r;
+  try {
+    r = await fetch(url, {
+      method, credentials: 'same-origin',
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    const e = new Error('Sem internet agora.'); e.offline = true; throw e;
+  }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || 'Algo deu errado.'); e.status = r.status; throw e; }
+  return j;
+}
+
+let syncState = 'ok'; // ok | pending | offline
+let syncing = null, syncTimer = null;
+function scheduleSync(ms = 400) { clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, ms); }
+
+async function syncNow() {
+  if (!session) return;
+  if (syncing) return syncing;
+  syncing = (async () => {
+    try {
+      // 1) envia o que mudou aqui
+      const out = pendingChanges();
+      if (out.length) {
+        await api('POST', '/api/sync', { changes: out.map(({ json, ...c }) => c) });
+        for (const c of out) { const k = c.coll + '/' + c.id; if (c.deleted) delete snap[k]; else snap[k] = c.json; }
+      }
+      // 2) busca o que mudou no servidor (ex.: agendamento feito pelo link)
+      const r = await api('GET', `/api/changes?since=${seq}`);
+      let changed = false;
+      for (const c of r.changes) {
+        const k = c.coll + '/' + c.id, list = db[c.coll];
+        if (!list) continue;
+        const i = list.findIndex(x => x.id === c.id);
+        const localJson = i >= 0 ? JSON.stringify(list[i]) : undefined;
+        const hasLocalEdit = localJson !== snap[k];
+        if (c.deleted) { delete snap[k]; if (!hasLocalEdit && i >= 0) { list.splice(i, 1); changed = true; } continue; }
+        snap[k] = JSON.stringify(c.data);
+        if (hasLocalEdit) continue; // a mudança feita aqui vale; vai no próximo envio
+        if (i >= 0) list[i] = c.data; else list.push(c.data);
+        changed = true;
+      }
+      seq = r.seq;
+      persist();
+      syncState = pendingChanges().length ? 'pending' : 'ok';
+      if (changed && !$('#app form')) render();
+    } catch (e) {
+      if (e.status === 401) { logoutLocal(); return; }
+      syncState = e.offline ? 'offline' : 'pending';
+    } finally {
+      syncing = null;
+      paintSync();
+    }
+  })();
+  return syncing;
+}
+function paintSync() {
+  const el = $('#sync');
+  if (!el) return;
+  el.className = 'sync ' + syncState;
+  el.textContent = { ok: '✓ Tudo salvo', pending: '⏳ Salvando…', offline: '📵 Sem internet — salvo no celular' }[syncState];
+}
+
+function logoutLocal() {
+  session = null;
+  localStorage.removeItem('mf.session');
+  showLogin();
 }
 
 const client = id => db.clients.find(c => c.id === id);
@@ -146,6 +257,7 @@ const routes = {
 
 let lastHash = '';
 function render() {
+  if (!session) return showLogin();
   const { parts, q } = parseHash();
   const view = routes[parts[0]] || vAgenda;
   const v = view(parts[1], q) || {};
@@ -258,8 +370,8 @@ function bindClientPhone(el, iClient, iPhone) {
   if (iClient.value) upd();
 }
 
-function toggle2(id, yes, labelYes, labelNo) {
-  return `<div class="toggle2" id="${id}">
+function toggle2(id, yes, labelYes, labelNo, neutral = false) {
+  return `<div class="toggle2 ${neutral ? 'neutral' : ''}" id="${id}">
     <button type="button" class="yes ${yes ? 'on' : ''}" data-v="1">${labelYes}</button>
     <button type="button" class="no ${!yes ? 'on' : ''}" data-v="0">${labelNo}</button></div>`;
 }
@@ -976,10 +1088,18 @@ function vMore() {
       </div>
 
       <h2>Tamanho da letra</h2>
-      ${toggle2('big', !!db.settings.big, 'A+ Grande', 'A Normal')}
+      ${toggle2('big', !!db.settings.big, 'A+ Grande', 'A Normal', true)}
+
+      <h2>Minha conta</h2>
+      <div class="card">
+        <b>${esc(session.tenant.name)}</b>
+        <div class="muted">${esc(session.user.name)} · ${esc(session.user.email)}</div>
+        <div id="sync" class="sync"></div>
+      </div>
+      <button class="btn danger" id="logout" style="margin-top:.7rem">Sair da conta</button>
 
       <h2>Cópia de segurança</h2>
-      <p class="muted" style="margin-top:0">Seus dados ficam guardados só neste celular. Faça uma cópia de vez em quando e mande para o seu WhatsApp ou e-mail — assim, se trocar de celular, não perde nada.</p>
+      <p class="muted" style="margin-top:0">Seus dados ficam guardados na internet, na sua conta. Se quiser, também pode guardar uma cópia no celular ou mandar para o seu WhatsApp/e-mail.</p>
       <div class="stack">
         <button class="btn main" id="exp">📤 Fazer cópia de segurança</button>
         <label class="btn">📥 Recuperar de uma cópia
@@ -993,6 +1113,14 @@ function vMore() {
       bindToggle2($('#big', el), v => { db.settings.big = v; save(); applySettings(); });
       $('#exp', el).onclick = exportBackup;
       $('#imp', el).onchange = e => importBackup(e.target.files[0]);
+      $('#logout', el).onclick = async () => {
+        const n = pendingChanges().length;
+        if (!confirm(n ? `Ainda tem ${n} alteração(ões) sem enviar (sem internet). Se sair agora, elas se perdem. Sair mesmo assim?` : 'Sair da conta neste celular?')) return;
+        await api('POST', '/api/logout').catch(() => {});
+        localStorage.removeItem(cacheKey());
+        logoutLocal();
+      };
+      paintSync();
     },
   };
 }
@@ -1082,23 +1210,144 @@ function importBackup(f) {
   r.onload = () => {
     try {
       const d = migrate(JSON.parse(r.result));
-      if (!confirm(`Essa cópia tem ${d.clients.length} clientes e ${d.appts.length} horários.\n\nTrocar TUDO o que está no celular por ela?`)) return;
-      db = d; save(); applySettings(); toast('Dados recuperados ✓'); render();
+      if (!confirm(`Essa cópia tem ${d.clients.length} clientes e ${d.appts.length} horários.\n\nTrocar TUDO o que está na sua conta por ela?`)) return;
+      uploadAll(d, true);
     } catch { alert('Esse arquivo não é uma cópia válida da agenda.'); }
   };
   r.readAsText(f);
 }
 
+// Manda uma cópia inteira para a conta (recuperar cópia / trazer dados antigos)
+async function uploadAll(data, replace) {
+  try {
+    await syncNow();
+    const r = await api('POST', '/api/import', { data, replace });
+    await resetFromServer();
+    toast(`${r.imported} registros recuperados ✓`);
+    return true;
+  } catch (e) {
+    alert(e.offline ? 'Precisa de internet para isso.' : e.message);
+    return false;
+  }
+}
+// Joga fora a cópia do celular e baixa tudo de novo da conta
+async function resetFromServer() {
+  const settings = db.settings;
+  db = migrate({ settings }); snap = {}; seq = 0;
+  persist();
+  await syncNow();
+  render();
+}
+
+/* ---------------------------- entrar / criar conta ---------------------------- */
+function showLogin(mode = 'entrar') {
+  document.body.classList.add('logged-out');
+  $('#title').textContent = 'Marque Fácil';
+  $('#btn-back').hidden = true;
+  const signup = mode === 'criar';
+  const main = $('#app').cloneNode(false);
+  main.innerHTML = `
+    <div class="login">
+      <img src="icon.svg" alt="" width="72" height="72">
+      <h2>${signup ? 'Criar conta do salão' : 'Entrar'}</h2>
+      <form class="form" id="f" novalidate>
+        <div id="err"></div>
+        ${signup ? `
+        <div class="field"><label for="salon">Nome do salão</label><input type="text" id="salon" autocapitalize="words" placeholder="Ex.: Studio Ana Beleza"></div>
+        <div class="field"><label for="name">Seu nome</label><input type="text" id="name" autocapitalize="words" autocomplete="name"></div>` : ''}
+        <div class="field"><label for="email">E-mail</label><input type="email" id="email" autocomplete="email" inputmode="email" autocapitalize="off"></div>
+        <div class="field"><label for="pass">Senha</label><input type="password" id="pass" autocomplete="${signup ? 'new-password' : 'current-password'}">
+          ${signup ? '<small class="hint">Pelo menos 6 letras ou números.</small>' : ''}</div>
+        <button class="btn main" type="submit">${signup ? 'Criar conta' : 'Entrar'}</button>
+      </form>
+      <button class="btn" id="switch" style="margin-top:1rem">${signup ? 'Já tenho conta — Entrar' : 'Ainda não tenho conta — Criar'}</button>
+    </div>`;
+  $('#app').replaceWith(main);
+  $('#switch').onclick = () => showLogin(signup ? 'entrar' : 'criar');
+  $('#f').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = $('#f button[type=submit]');
+    btn.disabled = true;
+    try {
+      const body = { email: $('#email').value, password: $('#pass').value };
+      if (signup) Object.assign(body, { salonName: $('#salon').value, name: $('#name').value });
+      const me = await api('POST', signup ? '/api/signup' : '/api/login', body);
+      await startSession(me);
+    } catch (err) {
+      $('#err').innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      btn.disabled = false;
+    }
+  });
+}
+
+async function startSession(me) {
+  session = me;
+  writeLS('mf.session', me);
+  document.body.classList.remove('logged-out');
+  loadCache();
+  applySettings();
+  render();
+  await syncNow();
+  await offerOldData();
+}
+
+// Traz os dados da versão antiga do app (que ficavam só no celular)
+async function offerOldData() {
+  const code = sessionStorage.getItem('mf.handoff');
+  if (code) {
+    try {
+      const r = await api('POST', '/api/handoff/claim', { code });
+      sessionStorage.removeItem('mf.handoff');
+      await resetFromServer();
+      toast(`${r.imported} registros trazidos do app antigo ✓`);
+    } catch (e) {
+      if (!e.offline) { sessionStorage.removeItem('mf.handoff'); alert(e.message); }
+    }
+    return;
+  }
+  const old = readLS(OLD_KEY);
+  if (!old || localStorage.getItem('mf.oldImported')) return;
+  const d = migrate(old);
+  const n = COLLS.reduce((t, k) => t + d[k].length, 0);
+  if (!n) return;
+  if (confirm(`Encontramos dados da versão antiga neste celular (${d.clients.length} clientes, ${d.appts.length} horários).\n\nLevar para a sua conta?`)) {
+    if (await uploadAll(d, false)) localStorage.setItem('mf.oldImported', '1');
+  } else localStorage.setItem('mf.oldImported', 'no');
+}
+
 /* ---------------------------- início ---------------------------- */
 function applySettings() { document.documentElement.classList.toggle('big', !!db.settings.big); }
 
-applySettings();
+// Link vindo do app antigo: #/migrar?code=...
+function catchHandoff() {
+  const { parts, q } = parseHash();
+  if (parts[0] !== 'migrar') return false;
+  if (q.code) sessionStorage.setItem('mf.handoff', q.code);
+  history.replaceState(null, '', '#/agenda');
+  return true;
+}
+catchHandoff();
+window.addEventListener('hashchange', () => { if (catchHandoff() && session) { render(); offerOldData(); } });
 stack.push(curHash());
-render();
+if (session) {
+  loadCache();
+  applySettings();
+  render();
+  // confere se a sessão ainda vale (sem internet, segue com a cópia do celular)
+  api('GET', '/api/me').then(me => { session = me; writeLS('mf.session', me); return syncNow(); })
+    .then(offerOldData)
+    .catch(e => { if (e.status === 401) logoutLocal(); else { syncState = 'offline'; paintSync(); } });
+} else showLogin();
 
 // Pede ao navegador para não apagar os dados sozinho
 navigator.storage?.persist?.();
 // Funciona sem internet depois de aberto uma vez
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 // Atualiza a tela quando volta para o app (ex.: horário "passou")
-document.addEventListener('visibilitychange', () => { if (!document.hidden && !$('#app form')) { db = load(); render(); } });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !session) return;
+  syncNow();
+  if (!$('#app form')) render();
+});
+window.addEventListener('online', () => syncNow());
+setInterval(() => { if (!document.hidden && session) syncNow(); }, 30_000);

@@ -167,6 +167,7 @@ textarea { min-height: 5rem; resize: vertical; }
 .toggle2 button { min-height: 3.2rem; border-radius: 12px; border: 2px solid var(--line); background: #fff; font-weight: 700; }
 .toggle2 button.on.yes { background: var(--ok); border-color: var(--ok); color: #fff; }
 .toggle2 button.on.no { background: var(--warn); border-color: var(--warn); color: #fff; }
+.toggle2.neutral button.on { background: var(--brand); border-color: var(--brand); color: #fff; }
 
 .conflict-box {
   background: var(--warn-soft); border: 2px solid var(--warn); color: var(--warn);
@@ -225,3 +226,19 @@ textarea { min-height: 5rem; resize: vertical; }
   opacity: 0; pointer-events: none; transition: .25s; z-index: 50; max-width: 90vw; text-align: center;
 }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ---------- Entrar / conta ---------- */
+body.logged-out #tabs { display: none; }
+.login { max-width: 420px; margin: 1rem auto; text-align: center; }
+.login img { border-radius: 18px; }
+.login h2 { margin: .8rem 0 1.2rem; font-size: 1.4rem; }
+.login .form { text-align: left; }
+input[type=email], input[type=password] {
+  width: 100%; min-height: 3.2rem; padding: .6rem .8rem;
+  border: 2px solid var(--line); border-radius: 12px; background: #fff;
+}
+.btn:disabled { opacity: .6; }
+.sync { margin-top: .5rem; font-weight: 700; font-size: .9rem; }
+.sync.ok { color: var(--ok); }
+.sync.pending { color: var(--warn); }
+.sync.offline { color: var(--muted); }
