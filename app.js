@@ -305,9 +305,12 @@ function vAgenda(_, q) {
       </div>
       <h2>${active.length ? `${active.length} ${active.length === 1 ? 'horário' : 'horários'}` : ''}</h2>
       <div class="list">
-        ${list.length ? list.map(a => apptCard(a)).join('') : '<div class="empty">Nenhum horário marcado neste dia.<br>Toque em <b>+ Agendar</b> para marcar.</div>'}
+        ${list.length ? list.map(a => apptCard(a)).join('') : '<div class="empty">Nenhum horário marcado neste dia.<br>Toque em <b>Agendar</b> para marcar.</div>'}
       </div>
-      <a class="fab" href="#/agendar?d=${d}">+ Agendar</a>`,
+      <div class="fabs">
+        <a class="fab sell" href="#/venda">🛍️ Vender</a>
+        <a class="fab" href="#/agendar?d=${d}">📅 Agendar</a>
+      </div>`,
     bind(el) {
       $('#prev', el).onclick = () => replaceTo(`#/agenda?d=${addDays(d, -1)}`);
       $('#next', el).onclick = () => replaceTo(`#/agenda?d=${addDays(d, 1)}`);
@@ -871,8 +874,8 @@ function vSaleForm(_, q) {
         if (edit) Object.assign(edit, data);
         else db.sales.push({ id: uid(), createdAt: Date.now(), ...data });
         save();
-        toast(edit ? 'Venda salva ✓' : 'Venda lançada ✓');
-        if (edit) back(); else replaceTo(`#/cliente/${c.id}`);
+        toast(edit ? 'Venda salva ✓' : `Venda lançada para ${c.name} ✓`);
+        back(); // volta para onde estava (agenda ou ficha da cliente)
       });
       $('#del', el) && ($('#del', el).onclick = () => {
         if (!confirm('Apagar esta venda?')) return;
