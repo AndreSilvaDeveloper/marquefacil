@@ -1,0 +1,34 @@
+# Marque Fácil no servidor de dev (máquina compartilhada com o WorkID dev).
+#
+# Regras desta máquina:
+#  - nada de Caddy/80/443 aqui: o Caddy do servidor já faz o HTTPS e repassa para o app;
+#  - nomes com prefixo "marquefacil-" (evita que o deploy de um derrube o outro);
+#  - porta só no endereço interno, e limite de memória/CPU.
+#
+# O workflow copia este arquivo para /opt/marquefacil/docker-compose.yml
+# e gera o .env ao lado. A imagem é construída pelo próprio workflow.
+name: marquefacil
+
+services:
+  app:
+    image: marquefacil-app:dev
+    container_name: marquefacil-app
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # APP_BIND=127.0.0.1 se o Caddy roda direto na máquina;
+      # APP_BIND=172.17.0.1 (docker0) se o Caddy roda em container.
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-3100}:3000"
+    volumes:
+      - marquefacil-data:/data   # banco SQLite + cópias diárias em /data/backups
+    mem_limit: 512m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  marquefacil-data:
+    name: marquefacil-data

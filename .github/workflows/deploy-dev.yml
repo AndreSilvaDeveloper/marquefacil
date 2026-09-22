@@ -1,0 +1,82 @@
+name: Deploy dev
+
+# Disparo manual: Actions → "Deploy dev" → Run workflow.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Runner próprio do Marque Fácil na máquina de dev (não usa o runner do WorkID)
+    runs-on: [self-hosted, marquefacil-dev]
+    timeout-minutes: 20
+    env:
+      APP_DIR: /opt/marquefacil
+      APP_PORT: ${{ vars.APP_PORT || '3100' }}
+      APP_BIND: ${{ vars.APP_BIND || '127.0.0.1' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Testes do servidor
+        working-directory: server
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/w -w /w node:22-slim \
+            sh -c "npm ci && npm test"
+
+      - name: Construir imagem
+        run: |
+          docker build -t marquefacil-app:dev -t marquefacil-app:${GITHUB_SHA::7} .
+
+      - name: Preparar pasta e .env
+        env:
+          DOMAIN: ${{ vars.DOMAIN }}
+          ALLOW_SIGNUP: ${{ vars.ALLOW_SIGNUP || 'true' }}
+          HANDOFF_ORIGINS: ${{ vars.HANDOFF_ORIGINS || 'https://andresilvadeveloper.github.io' }}
+          EVOLUTION_URL: ${{ secrets.EVOLUTION_URL }}
+          EVOLUTION_APIKEY: ${{ secrets.EVOLUTION_APIKEY }}
+        run: |
+          test -w "$APP_DIR" || { echo "::error::$APP_DIR não existe ou não é do usuário do runner (veja deploy/README.md)"; exit 1; }
+          cp deploy/docker-compose.dev.yml "$APP_DIR/docker-compose.yml"
+          umask 077
+          {
+            echo "DOMAIN=$DOMAIN"
+            echo "ALLOW_SIGNUP=$ALLOW_SIGNUP"
+            echo "HANDOFF_ORIGINS=$HANDOFF_ORIGINS"
+            echo "EVOLUTION_URL=$EVOLUTION_URL"
+            echo "EVOLUTION_APIKEY=$EVOLUTION_APIKEY"
+            echo "APP_PORT=$APP_PORT"
+            echo "APP_BIND=$APP_BIND"
+          } > "$APP_DIR/.env"
+          chmod 600 "$APP_DIR/.env"
+
+      - name: Subir
+        working-directory: /opt/marquefacil
+        run: |
+          # sem --remove-orphans de propósito: não mexer em nada que não seja do projeto marquefacil
+          docker compose -p marquefacil up -d
+          docker compose -p marquefacil ps
+
+      - name: Teste de fumaça
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "http://$APP_BIND:$APP_PORT/api/health"; then echo; echo "OK"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::O app não respondeu em /api/health"
+          docker logs --tail 80 marquefacil-app
+          exit 1
+
+      - name: Teste pelo domínio (se já estiver no ar)
+        if: ${{ vars.DOMAIN != '' }}
+        continue-on-error: true
+        run: curl -fsS --max-time 15 "https://${{ vars.DOMAIN }}/api/health" && echo
+
+      - name: Limpar imagens antigas (mantém as 3 últimas)
+        if: always()
+        run: |
+          docker images marquefacil-app --format '{{.Tag}} {{.CreatedAt}}' \
+            | grep -v '^dev ' | sort -k2 -r | tail -n +4 | awk '{print $1}' \
+            | xargs -r -I{} docker rmi marquefacil-app:{} || true

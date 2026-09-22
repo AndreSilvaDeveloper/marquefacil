@@ -1,0 +1,15 @@
+# Bloco para acrescentar no Caddyfile que JÁ EXISTE no servidor
+# (não substituir o arquivo — ele também atende o dev.workid.com.br).
+# Depois de colar: caddy validate + caddy reload (ou restart do container do Caddy).
+
+# --- Opção 1: Caddy instalado direto na máquina (systemd) — APP_BIND=127.0.0.1
+maquefacil.com.br, www.maquefacil.com.br {
+	encode gzip
+	reverse_proxy 127.0.0.1:3100
+}
+
+# --- Opção 2: Caddy rodando em container — APP_BIND=172.17.0.1
+# maquefacil.com.br, www.maquefacil.com.br {
+# 	encode gzip
+# 	reverse_proxy 172.17.0.1:3100
+# }

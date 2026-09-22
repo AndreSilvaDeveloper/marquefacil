@@ -33,7 +33,11 @@ npm test
 ```
 Os dados ficam em `data/` (fora do git).
 
-## Colocar no ar (VPS)
+## Servidor de dev (junto com o WorkID)
+Deploy pelo GitHub Actions num runner próprio, atrás do Caddy que já existe na máquina.
+Passo a passo em [`deploy/README.md`](deploy/README.md).
+
+## Colocar no ar numa VPS só nossa
 
 **O que precisa:** uma VPS com Ubuntu (ex.: Hostinger KVM 1, datacenter São Paulo) e um domínio
 (ex.: registro.br). No painel do domínio, crie um registro **A** apontando para o IP da VPS.
