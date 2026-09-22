@@ -1,0 +1,17 @@
+{
+  "name": "Minha Agenda",
+  "short_name": "Agenda",
+  "description": "Agenda, clientes e financeiro do salão",
+  "lang": "pt-BR",
+  "start_url": "./#/agenda",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fbf6f8",
+  "theme_color": "#8e3a6b",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

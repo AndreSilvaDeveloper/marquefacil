@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#8e3a6b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Minha Agenda">
+  <title>Minha Agenda</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="top">
+    <button id="btn-back" class="back" hidden aria-label="Voltar">‹ Voltar</button>
+    <h1 id="title">Minha Agenda</h1>
+  </header>
+
+  <main id="app"></main>
+
+  <nav id="tabs">
+    <a href="#/agenda" data-tab="agenda"><span>📅</span>Agenda</a>
+    <a href="#/buscar" data-tab="buscar"><span>🔍</span>Buscar</a>
+    <a href="#/clientes" data-tab="clientes"><span>👩</span>Clientes</a>
+    <a href="#/financeiro" data-tab="financeiro"><span>💰</span>Dinheiro</a>
+    <a href="#/mais" data-tab="mais"><span>⚙️</span>Mais</a>
+  </nav>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
