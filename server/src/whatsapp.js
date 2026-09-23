@@ -130,17 +130,19 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
     let sent = 0;
     for (const t of tenantsOn.all()) {
       const s = readSettings(t.settings);
-      const H = s.whatsapp.reminderHours;
-      if (!H) continue;
+      const R = s.whatsapp.reminderMinutes * 60e3; // quanto antes mandar (ms)
+      if (!R) continue;
+      // não manda se já estiver em cima da hora (para lembrete de 30 min: menos de 10 min antes)
+      const tooLate = Math.min(20 * 60e3, R / 3);
       const today = nowIn(s.timezone, now).date;
-      for (const r of apptsBetween.all(t.id, today, addDays(today, Math.ceil(H / 24) + 1))) {
+      for (const r of apptsBetween.all(t.id, today, addDays(today, Math.ceil(R / 86400e3) + 1))) {
         const a = JSON.parse(r.data);
         if ((a.status && a.status !== 'marcado') || !a.time) continue; // só horário confirmado ganha lembrete
         const start = zonedEpoch(a.date, a.time, s.timezone);
         const left = start - now;
-        if (left > H * 3600e3 || left < 20 * 60e3) continue;         // fora da janela
+        if (left > R || left < tooLate) continue;                    // fora da janela
         // marcou já dentro da janela e recebeu a confirmação: não precisa de lembrete logo em seguida
-        if (a.createdAt >= start - H * 3600e3 && confirmSent.get(t.id, r.id)) continue;
+        if (a.createdAt >= start - R && confirmSent.get(t.id, r.id)) continue;
         if (await sendForAppt(t.id, r.id, 'reminder') === 'sent') sent++;
       }
     }

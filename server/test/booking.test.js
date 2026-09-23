@@ -371,3 +371,44 @@ test('confirmar com "avaliar na hora": mensagem avisa; sem valor, linha some', a
   assert.doesNotMatch(evo.sent.find(m => m.number === '5511922222222').text, /Valor/, 'sem valor: linha some');
   await app.close();
 });
+
+test('lembrete livre: 1 hora antes, 30 minutos, e configuração antiga em horas', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl } });
+  const call = await salon(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  const set = await call('PUT', '/api/settings', { whatsapp: { reminderMinutes: 60 } });
+  assert.equal(set.body.whatsapp.reminderMinutes, 60);
+  assert.equal((await call('PUT', '/api/settings', { whatsapp: { reminderMinutes: 99999 } })).status, 400, 'no máximo 3 dias');
+
+  const date = nextWeekday(4);
+  const start = Date.parse(`${date}T15:00:00-03:00`);
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'c1', data: { name: 'Lia', phone: '11944443333' } },
+    { coll: 'appts', id: 'a1', data: { clientId: 'c1', date, time: '15:00', status: 'marcado', createdAt: start - 3 * 86400e3 } },
+  ] });
+  const m = app.messenger, lembretes = () => evo.sent.filter(x => /Passando para lembrar/.test(x.text)).length;
+  await m.runReminders(start - 2 * 3600e3);
+  assert.equal(lembretes(), 0, '2h antes: ainda não');
+  await m.runReminders(start - 55 * 60e3);
+  assert.equal(lembretes(), 1, '1h antes: manda');
+
+  // 30 minutos: manda com 25 min, não manda com 5 min
+  await call('PUT', '/api/settings', { whatsapp: { reminderMinutes: 30 } });
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'appts', id: 'a2', data: { clientId: 'c1', date, time: '17:00', status: 'marcado', createdAt: start - 3 * 86400e3 } },
+    { coll: 'appts', id: 'a3', data: { clientId: 'c1', date, time: '17:30', status: 'marcado', createdAt: start - 3 * 86400e3 } },
+  ] });
+  const s17 = Date.parse(`${date}T17:00:00-03:00`);
+  await m.runReminders(s17 - 25 * 60e3);
+  assert.equal(lembretes(), 2);
+  await m.runReminders(Date.parse(`${date}T17:25:00-03:00`)); // 5 min antes das 17:30
+  assert.equal(lembretes(), 2, 'em cima da hora não manda');
+
+  // configuração antiga (reminderHours) vira minutos
+  app.db.prepare("UPDATE tenants SET settings = json_set(settings, '$.whatsapp.reminderHours', 3) WHERE 1").run();
+  app.db.prepare("UPDATE tenants SET settings = json_remove(settings, '$.whatsapp.reminderMinutes') WHERE 1").run();
+  assert.equal((await call('GET', '/api/settings')).body.whatsapp.reminderMinutes, 180);
+  await app.close();
+});

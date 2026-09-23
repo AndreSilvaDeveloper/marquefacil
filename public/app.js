@@ -2446,6 +2446,16 @@ function vLink() {
   });
 }
 
+// Lembrete: minutos antes do horário
+const REMINDER_OPTIONS = [0, 30, 60, 120, 180, 360, 720, 1440, 2880];
+function reminderLabel(m) {
+  if (!m) return 'Não mandar lembrete';
+  if (m % 1440 === 0) return m === 1440 ? '1 dia antes' : `${m / 1440} dias antes`;
+  if (m % 60 === 0) return m === 60 ? '1 hora antes' : `${m / 60} horas antes`;
+  if (m > 60) return `${Math.floor(m / 60)}h${pad(m % 60)} antes`;
+  return `${m} minutos antes`;
+}
+
 let waPoll = null;
 function vWhats() {
   clearInterval(waPoll);
@@ -2485,7 +2495,19 @@ function vWhats() {
           <div class="field"><span class="lbl">Aviso para a cliente quando eu recuso um pedido</span>${toggle2('declineMessage', w.declineMessage, '✓ Mandar', 'Não')}</div>
           <div class="field"><span class="lbl">Confirmação quando eu agendo no app</span>${toggle2('confirmManual', w.confirmManual, '✓ Mandar', 'Não')}</div>
           <div class="field"><label for="rem">Lembrete antes do horário</label>
-            <select id="rem">${opts([0, 2, 3, 6, 12, 24, 48], w.reminderHours, v => +v ? (+v === 24 ? '1 dia antes' : +v === 48 ? '2 dias antes' : `${v} horas antes`) : 'Não mandar lembrete')}</select></div>
+            <select id="rem">${(() => {
+              const cur = w.reminderMinutes ?? 1440;
+              const std = REMINDER_OPTIONS.map(m => `<option value="${m}" ${m === cur ? 'selected' : ''}>${reminderLabel(m)}</option>`).join('');
+              const custom = !REMINDER_OPTIONS.includes(cur);
+              return std + `<option value="outro" ${custom ? 'selected' : ''}>${custom ? `Outro: ${reminderLabel(cur)}` : 'Outro tempo…'}</option>`;
+            })()}</select>
+            <div class="row" id="rem-other" style="margin-top:.5rem;align-items:center" ${REMINDER_OPTIONS.includes(w.reminderMinutes ?? 1440) ? 'hidden' : ''}>
+              <input type="number" id="rem-n" inputmode="numeric" min="1" step="1" style="max-width:6rem" value="${(() => { const m = w.reminderMinutes ?? 1440; return m % 1440 === 0 ? m / 1440 : m % 60 === 0 ? m / 60 : m; })()}">
+              <select id="rem-u">${[['1', 'minutos'], ['60', 'horas'], ['1440', 'dias']].map(([u, n]) => {
+                const m = w.reminderMinutes ?? 1440, unit = m % 1440 === 0 ? '1440' : m % 60 === 0 ? '60' : '1';
+                return `<option value="${u}" ${u === unit ? 'selected' : ''}>${n} antes</option>`; }).join('')}</select>
+            </div>
+            <small class="hint">No máximo 3 dias antes.</small></div>
           <div class="field"><span class="lbl">Também me avisar pelo WhatsApp quando chegar pedido</span>${toggle2('notifyOwner', w.notifyOwner, '✓ Avisar', 'Não')}</div>
           <div class="field"><label for="own">Número que recebe o aviso <span class="opt">(vazio = o próprio WhatsApp conectado)</span></label>
             <input type="tel" id="own" placeholder="(11) 99999-9999" value="${esc(w.ownerPhone || '')}"></div>
@@ -2511,10 +2533,19 @@ function vWhats() {
       for (const k of Object.keys(flags)) bindToggle2($('#' + k, box), v => (flags[k] = v));
 
       const err = e => { $('#err', box).innerHTML = `<div class="error">${esc(e.offline ? 'Precisa de internet.' : e.message)}</div>`; };
+      // lembrete: opção pronta ou "outro tempo" (número + minutos/horas/dias)
+      const reminderValue = () => {
+        const v = $('#rem', box).value;
+        if (v !== 'outro') return +v;
+        const n = Math.round(+$('#rem-n', box).value * +$('#rem-u', box).value);
+        if (!(n > 0) || n > 3 * 1440) throw new Error('Escolha um tempo de lembrete entre 1 minuto e 3 dias.');
+        return n;
+      };
+      $('#rem', box).onchange = e => { $('#rem-other', box).hidden = e.target.value !== 'outro'; if (e.target.value === 'outro') $('#rem-n', box).focus(); };
       $('#save', box).onclick = async () => {
         try {
           await api('PUT', '/api/settings', { whatsapp: {
-            ...flags, reminderHours: +$('#rem', box).value, ownerPhone: $('#own', box).value.trim(),
+            ...flags, reminderMinutes: reminderValue(), ownerPhone: $('#own', box).value.trim(),
             templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value, decline: $('#t-decline', box).value },
           } });
           toast('Salvo ✓');

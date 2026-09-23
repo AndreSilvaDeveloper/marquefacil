@@ -23,7 +23,7 @@ export const DEFAULTS = {
     confirmOnline: true,    // confirmar para a cliente quando o pedido do link é aceito
     confirmManual: true,    // confirmar quando a profissional agenda no app (e a cliente tem telefone)
     declineMessage: true,   // avisar a cliente quando o pedido é recusado
-    reminderHours: 24,      // lembrete X horas antes (0 = não manda)
+    reminderMinutes: 1440,  // lembrete X minutos antes (0 = não manda; até 3 dias)
     notifyOwner: true,      // avisar a profissional de agendamento pelo link
     ownerPhone: '',         // número que recebe o aviso (vazio = o próprio número conectado)
     templates: {
@@ -47,6 +47,11 @@ export function readSettings(json) {
   try { saved = JSON.parse(json || '{}'); } catch { /* usa padrão */ }
   const s = merge(DEFAULTS, saved);
   s.booking.days = { ...DEFAULTS.booking.days, ...(saved.booking?.days || {}) };
+  // configuração antiga guardava em horas
+  if (saved.whatsapp?.reminderMinutes === undefined && saved.whatsapp?.reminderHours !== undefined) {
+    s.whatsapp.reminderMinutes = saved.whatsapp.reminderHours * 60;
+  }
+  delete s.whatsapp.reminderHours;
   return s;
 }
 
@@ -96,7 +101,8 @@ export function updateSettings(current, input) {
   const w = input.whatsapp;
   if (isObj(w)) {
     for (const k of ['confirmOnline', 'confirmManual', 'notifyOwner', 'declineMessage']) if (w[k] !== undefined) s.whatsapp[k] = bool(w[k]);
-    if (w.reminderHours !== undefined) s.whatsapp.reminderHours = int(w.reminderHours, 0, 72, 'lembrete');
+    if (w.reminderMinutes !== undefined) s.whatsapp.reminderMinutes = int(w.reminderMinutes, 0, 3 * 24 * 60, 'lembrete');
+    else if (w.reminderHours !== undefined) s.whatsapp.reminderMinutes = int(w.reminderHours, 0, 72, 'lembrete') * 60;
     if (w.ownerPhone !== undefined) s.whatsapp.ownerPhone = text(w.ownerPhone, 30);
     if (isObj(w.templates)) {
       for (const k of ['confirm', 'reminder', 'owner', 'decline']) {
