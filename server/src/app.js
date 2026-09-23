@@ -3,7 +3,7 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import fs from 'node:fs';
 import path from 'node:path';
-import { brandFor, brandHtml, manifestFor } from './brands.js';
+import { brandFor, brandDomain, brandHtml, manifestFor } from './brands.js';
 import { openDb, applyChanges, changesSince, COLLECTIONS } from './db.js';
 import { hashPassword, checkPassword, newToken, hashToken, newId, rateLimiter } from './auth.js';
 import { fail, norm, isObj } from './util.js';
@@ -118,6 +118,19 @@ export function buildApp({
     if (!s) fail(401, 'Entre com seu e-mail e senha.');
     if (Date.now() - s.last_seen > 24 * 60 * 60 * 1000) q.touch.run(Date.now(), s.token_hash);
     req.s = s;
+    rememberSite(req, s.tenant_id);
+  }
+
+  // Salão que usa um domínio próprio (ex.: studiokadosh.com): os links das mensagens usam esse domínio
+  const siteSeen = new Map();
+  function rememberSite(req, tenantId) {
+    const host = brandDomain(req.hostname);
+    if (!host) return;
+    const site = `https://${host}`;
+    if (siteSeen.get(tenantId) === site) return;
+    const s = getSettings(tenantId);
+    if (s.site !== site) { s.site = site; saveSettings(tenantId, s); }
+    siteSeen.set(tenantId, site);
   }
 
   const emailOk = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && e.length <= 200;

@@ -8,8 +8,8 @@ import { nowIn, addDays, weekday } from '../src/time.js';
 
 function client(app) {
   let cookie = '';
-  return async (method, url, body) => {
-    const res = await app.inject({ method, url, payload: body, headers: { cookie } });
+  return async (method, url, body, headers = {}) => {
+    const res = await app.inject({ method, url, payload: body, headers: { cookie, ...headers } });
     const set = res.headers['set-cookie'];
     if (set) cookie = [].concat(set).map(c => c.split(';')[0]).join('; ');
     return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
@@ -259,6 +259,15 @@ test('WhatsApp: conectar, pedido pelo link, confirmar/recusar, agendamento no ap
   const n2 = evo.sent.length;
   await m.runReminders(start - 22 * 3600e3);
   assert.equal(evo.sent.length, n2, 'não repete o lembrete');
+
+  // 6) Salão com domínio próprio: depois de usar o app por studiokadosh.com, os links saem com esse domínio
+  assert.match(conf.text, /https:\/\/maquefacil\.com\.br\/studio-ana#meus=/, 'antes: endereço padrão');
+  await call('GET', '/api/me', undefined, { host: 'www.studiokadosh.com' });
+  assert.equal((await call('GET', '/api/settings')).body.site, 'https://studiokadosh.com');
+  await call('GET', '/api/me', undefined, { host: 'qualquer-coisa.com' }); // domínio que não é de salão não muda nada
+  await call('POST', '/api/sync', { changes: [{ coll: 'appts', id: 'k1', data: { clientId: 'cm', date, time: '18:00', status: 'marcado', createdAt: Date.now() } }] });
+  await wait();
+  assert.match(evo.sent.at(-1).text, /https:\/\/studiokadosh\.com\/studio-ana#meus=/);
 
   await call('POST', '/api/whatsapp/disconnect');
   assert.equal((await call('GET', '/api/whatsapp/status')).body.state, 'off');

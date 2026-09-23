@@ -4,6 +4,7 @@ import { validTz } from './time.js';
 // Configurações de cada salão (coluna tenants.settings). O que não foi salvo usa estes padrões.
 export const DEFAULTS = {
   timezone: 'America/Sao_Paulo',
+  site: '',                 // domínio próprio do salão (ex.: https://studiokadosh.com), usado nos links das mensagens; preenchido sozinho
   booking: {
     enabled: false,
     // dia da semana (0 = domingo) -> [abre, fecha] ou null (fechado)

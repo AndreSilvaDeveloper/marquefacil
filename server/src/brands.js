@@ -30,6 +30,12 @@ export function brandFor(hostname) {
   return BRANDS[host] ? { ...DEFAULT, ...BRANDS[host], host } : { ...DEFAULT, host };
 }
 
+// Domínio próprio de um salão (só os cadastrados acima): "studiokadosh.com" ou null
+export function brandDomain(hostname) {
+  const host = String(hostname || '').toLowerCase().replace(/:\d+$/, '').replace(/^www\./, '');
+  return BRANDS[host] ? host : null;
+}
+
 // O que o navegador precisa saber (vai em window.BRAND)
 export const publicBrand = b => ({ name: b.name, short: b.short, logo: b.logo || null, colors: b.colors || null });
 

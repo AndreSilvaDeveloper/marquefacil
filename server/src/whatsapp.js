@@ -86,8 +86,10 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
   }
 
   function varsFor(tenant, appt, client, kind) {
+    // links com o domínio do salão (ex.: studiokadosh.com), ou o endereço padrão do sistema
+    const base = readSettings(tenant.settings).site || publicUrl;
     // link pessoal "ver ou remarcar" (só nas mensagens para a cliente)
-    const meus = client && kind !== 'owner' && publicUrl ? portalUrl(publicUrl, tenant.slug, newPortalToken(db, tenant.id, client.id)) : '';
+    const meus = client && kind !== 'owner' && base ? portalUrl(base, tenant.slug, newPortalToken(db, tenant.id, client.id)) : '';
     return {
       meus_horarios: meus,
       nome: (client?.name || '').split(' ')[0],
@@ -100,7 +102,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
       valor: appt.price > 0 ? brl(appt.price) : appt.priceLater ? 'avaliado na hora do atendimento' : '',
       sinal: appt.price > 0 ? brl(Math.round(appt.price * (readSettings(tenant.settings).whatsapp.depositPercent / 100) * 100) / 100) : '',
       pacote: packageLabel(tenant.id, appt),
-      link: publicUrl ? `${publicUrl.replace(/\/+$/, '')}/${tenant.slug}` : '',
+      link: base ? `${base.replace(/\/+$/, '')}/${tenant.slug}` : '',
     };
   }
 

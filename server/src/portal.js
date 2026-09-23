@@ -60,7 +60,7 @@ export function registerPortal(app, { db, messenger, push, publicUrl, limitBook,
     if (!wa) fail(400, 'Escreva o seu WhatsApp com DDD. Exemplo: (11) 99999-9999');
     const client = q.clients.all(t.id).map(r => JSON.parse(r.data)).find(c => waNumber(c.phone) === wa);
     if (client) {
-      const link = portalUrl(publicUrl, t.slug, newPortalToken(db, t.id, client.id));
+      const link = portalUrl(readSettings(t.settings).site || publicUrl, t.slug, newPortalToken(db, t.id, client.id));
       const first = (client.name || '').split(' ')[0];
       messenger.sendText(t.id, client.phone, `Olá, ${first}! 📋 Aqui está o seu link para ver ou remarcar seus horários no *${t.name}*:\n${link}`, 'access')
         .catch(() => {});
