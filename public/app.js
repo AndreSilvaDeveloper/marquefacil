@@ -1449,13 +1449,24 @@ function vPedidos() {
 const SEARCH_SHORTCUTS = {
   hoje: ['📅 Hoje', () => db.appts.filter(a => a.date === today() && a.status !== 'cancelado').sort(byWhen)],
   amanha: ['📆 Amanhã', () => db.appts.filter(a => a.date === addDays(today(), 1) && a.status !== 'cancelado').sort(byWhen)],
-  semana: ['🗓️ Próximos 7 dias', () => db.appts.filter(a => a.date >= today() && a.date <= addDays(today(), 7) && a.status !== 'cancelado' && !isPast(a)).sort(byWhen)],
+  semana: ['🗓️ Próx. 7 dias', () => db.appts.filter(a => a.date >= today() && a.date <= addDays(today(), 7) && a.status !== 'cancelado' && !isPast(a)).sort(byWhen)],
   pedidos: ['⏳ Pedidos', () => pendingAppts()],
   devendo: ['💸 Quem deve', null],
   prereservas: ['💳 Pré-reservas', () => preAppts()],
   semvalor: ['✏️ Sem valor', () => db.appts.filter(a => isPast(a) && a.status !== 'cancelado' && a.status !== 'pendente' && a.status !== PRE && !a.packageId && !(a.price > 0) && !a.paid).sort(byWhen).reverse()],
   cancelados: ['❌ Cancelados', () => db.appts.filter(a => a.status === 'cancelado').sort(byWhen).reverse()],
+  aniver: ['🎂 Aniversário', null],
 };
+// Atalhos que pedem atenção ficam destacados quando têm algo
+const SHORTCUT_ALERT = ['pedidos', 'devendo', 'prereservas', 'semvalor'];
+const bdaysSoon = () => db.clients.filter(c => bdayIn(c.birthday) <= 7).sort((a, b) => bdayIn(a.birthday) - bdayIn(b.birthday));
+function shortcutCount(key) {
+  if (key === 'devendo') return db.clients.filter(c => clientOwes(c.id) > 0).length;
+  if (key === 'aniver') return bdaysSoon().length;
+  if (key === 'cancelados') return null; // não precisa de número
+  return SEARCH_SHORTCUTS[key][1]().length;
+}
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 const recentKey = () => `mf.buscas.${session.tenant.id}`;
 function rememberSearch(text) {
   const t = text.trim();
@@ -1465,9 +1476,10 @@ function rememberSearch(text) {
 }
 // Texto onde cada coisa é procurada (sem acento, minúsculo)
 function dateWords(d) {
-  const x = toDate(d);
+  const x = toDate(d), t = today();
+  const rel = d === t ? 'hoje' : d === addDays(t, 1) ? 'amanha' : d === addDays(t, -1) ? 'ontem' : '';
   return [fmtShort(d), `${x.getDate()}/${x.getMonth() + 1}`, `${pad(x.getDate())}/${pad(x.getMonth() + 1)}`,
-    fmtDate(d, { weekday: 'long' }), fmtDate(d, { month: 'long' })].join(' ');
+    fmtDate(d, { weekday: 'long' }), fmtDate(d, { month: 'long' }), rel].join(' ');
 }
 const moneyWords = v => (v > 0 ? `${moneyVal(v)} ${Math.round(v)} ${brl(v)}` : '');
 function searchText(kind, x) {
@@ -1496,7 +1508,12 @@ function vBuscar(_, q) {
       const [label, fn] = SEARCH_SHORTCUTS[k];
       if (k === 'devendo') {
         const cs = db.clients.map(c => ({ c, owes: clientOwes(c.id) })).filter(x => x.owes > 0).sort((a, b) => b.owes - a.owes);
-        return `<h2>${label} · ${cs.length}</h2><div class="list">${cs.length ? cs.map(x => clientRow(x.c, undefined, 'devendo')).join('') : '<div class="empty">Ninguém devendo. 🎉</div>'}</div>`;
+        return `<h2>${label} · ${cs.length} · ${brl(cs.reduce((t, x) => t + x.owes, 0))}</h2><div class="list">${cs.length ? cs.map(x => clientRow(x.c, undefined, 'devendo')).join('') : '<div class="empty">Ninguém devendo. 🎉</div>'}</div>`;
+      }
+      if (k === 'aniver') {
+        const cs = bdaysSoon();
+        return `<h2>${label} · próximos 7 dias</h2><div class="list">${cs.length ? cs.map(c => clientRow(c, undefined, 'aniver')).join('')
+          : '<div class="empty">Nenhum aniversário nos próximos 7 dias.<br><small>Coloque o aniversário na ficha da cliente (✏️ Editar).</small></div>'}</div>`;
       }
       const list = fn();
       return `<h2>${label} · ${list.length}</h2><div class="list">${list.length ? list.map(a => apptCard(a, { showDate: true })).join('') : '<div class="empty">Nada por aqui.</div>'}</div>`;
@@ -1504,23 +1521,38 @@ function vBuscar(_, q) {
     const words = norm(text).split(/\s+/).filter(Boolean);
     if (!words.length) return '';
     const hit = str => words.every(w => str.includes(w));
+    const appts = db.appts.filter(x => hit(searchText('a', x)));
+    const itemRow = (kind, it) => `<a class="card line" href="#/item/${kind}?id=${it.id}"><div class="grow"><b>${esc(it.name)}</b>
+      <span>${kind === 'services' ? [it.duration ? fmtDur(it.duration) : '', it.package?.total ? `📦 ${it.package.total} sessões` : '', it.online === false ? '🔒 só no salão' : ''].filter(Boolean).join(' · ') || 'Serviço'
+        : [it.price ? brl(it.price) : '', hasStock(it) ? stockLabel(it) : ''].filter(Boolean).join(' · ') || 'Produto'}</span></div><span class="muted">›</span></a>`;
     const groups = {
       c: ['👩 Clientes', db.clients.filter(x => hit(searchText('c', x))).sort(byName), clientRow],
-      a: ['📅 Horários', db.appts.filter(x => hit(searchText('a', x))).sort((a, b) => {
-        const fa = !isPast(a), fb = !isPast(b);           // próximos primeiro, depois os mais recentes
-        return fa !== fb ? (fa ? -1 : 1) : fa ? byWhen(a, b) : byWhen(b, a);
-      }), a => apptCard(a, { showDate: true })],
+      a: ['📅 Horários', appts, null],
       s: ['🛍️ Vendas', db.sales.filter(x => hit(searchText('s', x))).sort(byWhen).reverse(), x => saleCard(x)],
       e: ['➖ Despesas', db.expenses.filter(x => hit(searchText('e', x))).sort((a, b) => b.date.localeCompare(a.date)), expenseRow],
+      v: ['💇 Serviços', db.services.filter(x => hit(norm(`${x.name} ${x.description || ''} servico`))).sort(byName), it => itemRow('services', it)],
+      p: ['🧴 Produtos', db.products.filter(x => hit(norm(`${x.name} produto`))).sort(byName), it => itemRow('products', it)],
     };
     const total = Object.values(groups).reduce((t, g) => t + g[1].length, 0);
     if (!total) return `<div class="empty">Nada encontrado para "<b>${esc(text)}</b>".<br><small>Tente só uma parte do nome, ou um dia como 15/09.</small></div>`;
     const chips = `<div class="chips filters">${[['', 'Tudo', total], ...Object.entries(groups).map(([key, g]) => [key, g[0], g[1].length])]
       .filter(([key, , n]) => !key || n).map(([key, n, c]) => `<a class="chip ${type === key ? 'on' : ''}" href="${url({ t: key })}" data-go>${n} <small>${c}</small></a>`).join('')}</div>`;
+    const lim = type ? 200 : 8;
+    const more = (key, n) => (n > lim ? `<a class="btn small" href="${url({ t: key })}" data-go style="margin-top:.6rem">Ver todos (${n})</a>` : '');
+    // Horários: próximos (do mais perto) e anteriores (do mais recente), com o total em R$
+    const apptsHtml = () => {
+      const live = appts.filter(a => a.status !== 'cancelado');
+      const sum = round2(live.reduce((t, a) => t + valueOf(a), 0)), paid = round2(live.reduce((t, a) => t + paidOf(a), 0));
+      const soon = appts.filter(a => !isPast(a)).sort(byWhen), past = appts.filter(isPast).sort(byWhen).reverse();
+      const part = (title, list) => (list.length ? `<h3 class="subh">${title} · ${list.length}</h3><div class="list">${list.slice(0, lim).map(a => apptCard(a, { showDate: true })).join('')}</div>${more('a', list.length)}` : '');
+      return `<h2>📅 Horários · ${appts.length}</h2>
+        ${sum ? `<p class="muted sumline">Valor: <b>${brl(sum)}</b> · recebido <b style="color:var(--ok)">${brl(paid)}</b>${sum > paid ? ` · a receber <b style="color:var(--warn)">${brl(round2(sum - paid))}</b>` : ''}</p>` : ''}
+        ${part('Próximos', soon)}${part('Anteriores', past)}`;
+    };
     const show = Object.entries(groups).filter(([key, g]) => g[1].length && (!type || type === key)).map(([key, [label, list, row]]) => {
-      const lim = type ? 200 : 8;
-      return `<h2>${label} · ${list.length}</h2><div class="list">${list.slice(0, lim).map(row).join('')}</div>
-        ${list.length > lim ? `<a class="btn small" href="${url({ t: key })}" data-go style="margin-top:.6rem">Ver todos (${list.length})</a>` : ''}`;
+      if (key === 'a') return apptsHtml();
+      const money = key === 's' ? brl(list.reduce((t, x) => t + (x.total || 0), 0)) : key === 'e' ? brl(list.reduce((t, x) => t + (x.amount || 0), 0)) : '';
+      return `<h2>${label} · ${list.length}${money ? ' · ' + money : ''}</h2><div class="list">${list.slice(0, lim).map(row).join('')}</div>${more(key, list.length)}`;
     }).join('');
     return chips + show;
   }
@@ -1530,17 +1562,21 @@ function vBuscar(_, q) {
     const next = db.appts.filter(a => !isPast(a) && a.status !== 'cancelado').sort(byWhen).slice(0, 5);
     return `
       <h2>Atalhos</h2>
-      <div class="shortcuts">${Object.entries(SEARCH_SHORTCUTS).map(([key, [label]]) => `<a class="chip" href="${url({ k: key, q: '', t: '' })}" data-go>${label}</a>`).join('')}</div>
+      <div class="shortcuts">${Object.entries(SEARCH_SHORTCUTS).map(([key, [label]]) => {
+        const n = shortcutCount(key);
+        return `<a class="chip ${n && SHORTCUT_ALERT.includes(key) ? 'alert' : ''}" href="${url({ k: key, q: '', t: '' })}" data-go>${label}${n ? ` <small>${n}</small>` : ''}</a>`;
+      }).join('')}</div>
       ${recent.length ? `<h2>Buscas recentes</h2><div class="chips">${recent.map(r => `<a class="chip" href="${url({ q: r, k: '', t: '' })}" data-go>🕘 ${esc(r)}</a>`).join('')}</div>` : ''}
       <h2>Próximos horários</h2>
       <div class="list">${next.length ? next.map(a => apptCard(a, { showDate: true })).join('') : '<div class="muted">Nada marcado para os próximos dias.</div>'}</div>
-      <p class="muted" style="margin-top:1.5rem;font-size:.9rem">💡 Dá para buscar por nome, telefone, serviço, produto, dia (<b>15/09</b>), dia da semana (<b>sexta</b>), mês (<b>setembro</b>), <b>cancelado</b>, <b>devendo</b> ou valor (<b>60</b>). Juntar palavras também funciona: <b>maria escova</b>.</p>`;
+      <p class="muted" style="margin-top:1.5rem;font-size:.9rem">💡 Dá para buscar por nome, telefone, serviço, produto, dia (<b>15/09</b>, <b>amanhã</b>), dia da semana (<b>sexta</b>), mês (<b>setembro</b>), <b>cancelado</b>, <b>devendo</b> ou valor (<b>60</b>). Juntar palavras também funciona: <b>maria escova</b>.${SpeechRec ? ' Ou toque em 🎤 e fale.' : ''}</p>`;
   }
 
   return {
     title: 'Buscar', tab: 'buscar',
     html: `
-      <div class="search"><input type="search" id="s" placeholder="🔍 Nome, telefone, serviço, dia…" value="${esc(text)}" enterkeyhint="search"></div>
+      <div class="search ${SpeechRec ? 'with-mic' : ''}"><input type="search" id="s" placeholder="🔍 Nome, telefone, dia…" value="${esc(text)}" enterkeyhint="search">
+        ${SpeechRec ? '<button type="button" class="mic" id="mic" aria-label="Buscar falando">🎤</button>' : ''}</div>
       ${k ? `<a class="btn small" href="#/buscar" data-go style="margin-bottom:.8rem">✕ Limpar atalho</a>` : ''}
       <div id="res">${k || text ? results() : idle()}</div>`,
     bind(el) {
@@ -1561,6 +1597,17 @@ function vBuscar(_, q) {
         }, 180);
       });
       s.addEventListener('change', () => rememberSearch(s.value));
+      // Buscar falando (Chrome/Android e Safari novos)
+      $('#mic', el) && ($('#mic', el).onclick = () => {
+        const rec = new SpeechRec();
+        rec.lang = 'pt-BR'; rec.interimResults = false; rec.maxAlternatives = 1;
+        const mic = $('#mic', el);
+        mic.classList.add('on'); s.placeholder = '🎤 Pode falar…';
+        rec.onresult = e => { s.value = e.results[0][0].transcript.replace(/[.?!]$/, ''); s.dispatchEvent(new Event('input')); rememberSearch(s.value); };
+        rec.onerror = e => { if (e.error === 'not-allowed') toast('Libere o microfone para buscar falando'); };
+        rec.onend = () => { mic.classList.remove('on'); s.placeholder = '🔍 Nome, telefone, dia…'; };
+        try { rec.start(); } catch { mic.classList.remove('on'); }
+      });
       s.addEventListener('keydown', e => { if (e.key === 'Enter') { rememberSearch(s.value); s.blur(); } });
       el.addEventListener('click', e => {
         const a = e.target.closest('a[data-go]');
