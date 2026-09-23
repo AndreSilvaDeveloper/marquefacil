@@ -547,7 +547,7 @@ function nameHint(el, list, name, newMsg, okMsg) {
 
 // Mostra se a cliente é nova e já preenche o telefone de quem está cadastrada
 function bindClientPhone(el, iClient, iPhone) {
-  let auto = '';
+  let auto = iPhone.value; // o número que já veio preenchido é o da cliente: se trocar o nome, ele sai junto
   const upd = () => {
     nameHint($('#h-client', el), db.clients, iClient.value, '✨ Cliente nova — vai ser cadastrada sozinha', '✓ Cliente já cadastrada');
     const c = findByName(db.clients, iClient.value);
@@ -575,35 +575,13 @@ function bindToggle2(el, onChange) {
 /* =====================================================================
    AGENDA DO DIA
    ===================================================================== */
-// Linha do tempo de um dia: horários + espaços livres + "agora"
+// Linha do tempo de um dia: horários + almoço + "agora" (os horários livres aparecem ao agendar)
 function dayTimeline(d, active) {
   const hours = salonHours();
   const open = hours?.days?.[toDate(d).getDay()];
   const closedDay = hours && hours.days && open === null;
   const isToday = d === today(), now = nowMins();
-  const busy = active.map(a => [mins(a.time), apptEnd(a)]);
-  if (open && hours.lunch) busy.push([mins(hours.lunch[0]), mins(hours.lunch[1])]);
-
-  // espaços livres (dentro do horário de atendimento; sem ele, só entre um horário e outro)
-  const gaps = [];
-  let cursor = open ? mins(open[0]) : (active.length ? apptEnd(active[0]) : null);
-  const limit = open ? mins(open[1]) : (active.length ? mins(active.at(-1).time) : null);
-  if (cursor !== null) {
-    for (const [st, en] of [...busy].sort((a, b) => a[0] - b[0])) {
-      if (st > cursor) gaps.push([cursor, Math.min(st, limit)]);
-      cursor = Math.max(cursor, en);
-    }
-    if (limit > cursor) gaps.push([cursor, limit]);
-  }
-  const freeGaps = gaps
-    .map(([a, b]) => [isToday ? Math.max(a, Math.ceil(now / 5) * 5) : a, b])
-    .filter(([a, b]) => b - a >= 30 && (!isToday || b > now) && (d >= today()));
-
-  const items = [
-    ...active.map(a => ({ t: mins(a.time), html: apptRow(a) })),
-    ...freeGaps.map(([a, b]) => ({ t: a, html: `<a class="gap" href="#/agendar?d=${d}&t=${hhmm(a)}">
-      <span>🟢 Livre das <b>${hhmm(a)}</b> às <b>${hhmm(b)}</b> · ${fmtDur(b - a)}</span><em>+ Agendar</em></a>` })),
-  ];
+  const items = active.map(a => ({ t: mins(a.time), html: apptRow(a) }));
   if (open && hours.lunch && !(isToday && mins(hours.lunch[1]) <= now)) items.push({ t: mins(hours.lunch[0]), html: `<div class="lunch">🍽️ Almoço ${hours.lunch[0]}–${hours.lunch[1]}</div>` });
   if (isToday && active.length) items.push({ t: now + 0.5, html: `<div class="nowline"><span>agora ${hhmm(now)}</span></div>` });
   items.sort((a, b) => a.t - b.t);
@@ -641,19 +619,34 @@ function vAgenda(_, q) {
     const cancelled = list.filter(a => a.status === 'cancelado');
     const done = active.filter(a => a.status === 'feito').length;
     const expectedDay = round2(active.filter(a => a.status !== 'pendente').reduce((s, a) => s + valueOf(a), 0));
+    const paidDay = round2(active.reduce((s, a) => s + paidOf(a), 0));
     const tl = dayTimeline(d, active);
+    // Hoje: quem está sendo atendida agora e quem vem depois
+    const now = nowMins();
+    const going = d === t ? active.filter(a => ['marcado', PRE].includes(a.status) && apptEnd(a) > now) : [];
+    const cur = going.find(a => mins(a.time) <= now), next = going.find(a => mins(a.time) > now);
+    const inTxt = m => (m < 60 ? `em ${m} min` : `em ${fmtDur(Math.round(m / 5) * 5)}`);
+    const upCard = (a, label) => {
+      const c = client(a.clientId), first = (c?.name || '').split(' ')[0];
+      const wa = c?.phone && waLink(c.phone, `Olá, ${first}! Tudo certo para o seu horário hoje às ${a.time}? 😊`);
+      return `<div class="card upnext">
+        <a class="line" href="#/agendamento/${a.id}"><div class="grow"><small>${label}</small>
+          <b>${a.time} · ${esc(clientName(a.clientId))}</b>${a.service ? `<span>${esc(a.service)}</span>` : ''}</div></a>
+        ${wa && a === next ? `<a class="btn small" target="_blank" rel="noopener" href="${wa}">💬 Chamar</a>` : ''}</div>`;
+    };
     title = `<div class="label"><b>${dayName(d)}</b><span>${fmtDate(d, { day: 'numeric', month: 'long', year: 'numeric' })}</span></div>`;
     body = `
       ${active.length ? `<div class="daysum">
         <span><b>${active.length}</b> ${active.length === 1 ? 'horário' : 'horários'}</span>
         ${done ? `<span><b>${done}</b> ${done === 1 ? 'feito' : 'feitos'}</span>` : ''}
-        ${expectedDay ? `<span>💰 <b>${brl(expectedDay)}</b></span>` : ''}
+        ${expectedDay ? `<span>💰 <b>${brl(expectedDay)}</b>${paidDay ? ` · recebido <b>${brl(paidDay)}</b>` : ''}</span>` : ''}
       </div>` : ''}
+      ${cur ? upCard(cur, `✂️ Agora (até ${hhmm(apptEnd(cur))})`) : ''}
+      ${next ? upCard(next, `⏭️ Próxima · ${inTxt(mins(next.time) - now)}`) : ''}
       ${tl.closedDay ? '<div class="muted" style="text-align:center;margin:.5rem 0">🔒 Dia fechado no seu horário de atendimento.</div>' : ''}
       <div class="list timeline">
         ${tl.html || `<div class="empty">Nenhum horário marcado neste dia.${d >= t ? `<br><a class="btn main" href="#/agendar?d=${d}" style="margin-top:1rem">📅 Agendar neste dia</a>` : ''}</div>`}
       </div>
-      ${!salonHours() && active.length ? '<p class="muted" style="font-size:.85rem">Dica: configure seus dias e horários em Mais → Link para ver aqui os horários livres do dia todo.</p>' : ''}
       ${cancelled.length ? `<details class="cancelled"><summary>Cancelados (${cancelled.length})</summary><div class="list">${cancelled.map(a => apptCard(a)).join('')}</div></details>` : ''}`;
   } else {
     const ws = weekStart(d);
@@ -3472,7 +3465,7 @@ function vWhats(_, q = {}) {
       }
       const w = S.whatsapp;
       const connected = st.state === 'open';
-      const kinds = { confirm: 'Confirmação', reminder: 'Lembrete', owner: 'Aviso para você', decline: 'Pedido recusado', prereserve: 'Pré-reserva', rescheduleNo: 'Remarcação recusada', access: 'Link "meus horários"', test: 'Teste' };
+      const kinds = { confirm: 'Confirmação', change: 'Horário mudou', reminder: 'Lembrete', owner: 'Aviso para você', decline: 'Pedido recusado', prereserve: 'Pré-reserva', rescheduleNo: 'Remarcação recusada', access: 'Link "meus horários"', test: 'Teste' };
       const status = { sent: '<span class="badge ok">Enviada</span>', error: '<span class="badge bad">Falhou</span>', skipped: '<span class="badge warn">Sem telefone</span>', sending: '<span class="badge">Enviando</span>' };
       box.innerHTML = `
         <div class="card">
@@ -3495,7 +3488,7 @@ function vWhats(_, q = {}) {
           <div class="field"><span class="lbl">Mensagem de pré-reserva (pede o sinal)</span>${toggle2('prereserveMessage', w.prereserveMessage, '✓ Mandar', 'Não')}</div>
           <div class="field"><label for="dep">Sinal da pré-reserva</label>
             <select id="dep">${opts([20, 30, 40, 50, 60, 100], w.depositPercent ?? 50, v => `${v}% do valor`)}</select></div>
-          <div class="field"><span class="lbl">Confirmação quando eu agendo no app</span>${toggle2('confirmManual', w.confirmManual, '✓ Mandar', 'Não')}</div>
+          <div class="field"><span class="lbl">Confirmação quando eu agendo ou mudo um horário no app</span>${toggle2('confirmManual', w.confirmManual, '✓ Mandar', 'Não')}</div>
           <div class="field"><label for="rem">Lembrete antes do horário</label>
             <select id="rem">${(() => {
               const cur = w.reminderMinutes ?? 1440;
@@ -3517,6 +3510,7 @@ function vWhats(_, q = {}) {
           <details id="textos" ${openTexts ? 'open' : ''}><summary class="btn">✏️ Mudar o texto das mensagens</summary>
             <p class="muted">Pode usar: {nome} (só o primeiro nome), {dia}, {hora}, {servico}, {valor}, {sinal}, {pacote}, {salao}, {telefone}, {meus_horarios}. Linha com campo vazio (ex.: sem serviço) some sozinha.</p>
             <div class="field"><label for="t-confirm">Confirmação</label><textarea id="t-confirm" rows="6">${esc(w.templates.confirm)}</textarea></div>
+            <div class="field"><label for="t-change">Horário mudou <span class="opt">(quando você muda o dia ou a hora de um horário já marcado)</span></label><textarea id="t-change" rows="6">${esc(w.templates.change)}</textarea></div>
             <div class="field"><label for="t-reminder">Lembrete</label><textarea id="t-reminder" rows="6">${esc(w.templates.reminder)}</textarea></div>
             <div class="field"><label for="t-prereserve">Pré-reserva</label><textarea id="t-prereserve" rows="8">${esc(w.templates.prereserve)}</textarea></div>
             <div class="field"><label for="t-decline">Pedido recusado</label><textarea id="t-decline" rows="4">${esc(w.templates.decline)}</textarea></div>
@@ -3528,9 +3522,10 @@ function vWhats(_, q = {}) {
 
         <h2>Últimas mensagens</h2>
         <div class="list">${msgs.length ? msgs.map(m => `<div class="card">
-          <div class="line"><div class="grow"><b>${kinds[m.kind] || m.kind}${m.name ? ' — ' + esc(m.name) : ''}</b>
-          <span>${new Date(m.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${m.error ? ' · ' + esc(m.error) : ''}</span></div>
-          ${status[m.status] || ''}</div></div>`).join('') : '<div class="muted">Nenhuma mensagem ainda.</div>'}</div>`;
+          <div class="line"><div class="grow"><b>${kinds[m.kind.split(':')[0]] || m.kind}${m.name ? ' — ' + esc(m.name) : ''}</b>
+          <span>${new Date(m.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${m.phone ? ' · para ' + esc(m.phone.replace(/^55(\d\d)(\d+)(\d{4})$/, '($1) $2-$3')) : ''}${m.error ? ' · ' + esc(m.error) : ''}</span></div>
+          ${status[m.status] || ''}</div>
+          ${m.body ? `<details class="msgbody"><summary>Ver o que foi enviado</summary><p>${esc(m.body).replace(/\n/g, '<br>')}</p></details>` : ''}</div>`).join('') : '<div class="muted">Nenhuma mensagem ainda.</div>'}</div>`;
 
       const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner, declineMessage: w.declineMessage, prereserveMessage: w.prereserveMessage };
       for (const k of Object.keys(flags)) bindToggle2($('#' + k, box), v => (flags[k] = v));
@@ -3550,7 +3545,7 @@ function vWhats(_, q = {}) {
           cacheSalon(await api('PUT', '/api/settings', { whatsapp: {
             ...flags, reminderMinutes: reminderValue(), ownerPhone: $('#own', box).value.trim(),
             depositPercent: +$('#dep', box).value,
-            templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value, decline: $('#t-decline', box).value, prereserve: $('#t-prereserve', box).value },
+            templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value, decline: $('#t-decline', box).value, prereserve: $('#t-prereserve', box).value, change: $('#t-change', box).value },
           } }));
           toast('Salvo ✓');
           $('#err', box).innerHTML = '';

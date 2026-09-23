@@ -216,6 +216,33 @@ test('WhatsApp: conectar, pedido pelo link, confirmar/recusar, agendamento no ap
   const msgs = (await call('GET', '/api/messages')).body;
   assert.ok(msgs.some(x => x.apptId === 'm2' && x.status === 'skipped'));
 
+  // 4b) Duas clientes com os horários trocados: a profissional corrige e cada uma recebe o horário certo
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'cd', data: { name: 'Deleia Souza', phone: '(41) 94444-3333' } },
+    { coll: 'appts', id: 'm3', data: { clientId: 'cd', date, time: '16:30', status: 'marcado', service: 'Corte', createdAt: Date.now() } },
+  ] });
+  await wait();
+  const all = (await call('GET', '/api/changes?since=0')).body.changes;
+  const m1 = all.find(x => x.id === 'm1').data, m3 = all.find(x => x.id === 'm3').data;
+  const nSwap = evo.sent.length;
+  const swap = [{ coll: 'appts', id: 'm1', data: { ...m1, time: '16:30' } }, { coll: 'appts', id: 'm3', data: { ...m3, time: '16:00' } }];
+  await call('POST', '/api/sync', { changes: swap });
+  await wait();
+  const changed = evo.sent.slice(nSwap);
+  assert.equal(changed.length, 2);
+  assert.ok(changed.some(x => x.number === '5531955554444' && /mudou/.test(x.text) && /16:30/.test(x.text)), 'Carla: novo horário 16:30');
+  assert.ok(changed.some(x => x.number === '5541944443333' && /mudou/.test(x.text) && /16:00/.test(x.text)), 'Deleia: novo horário 16:00');
+  await call('POST', '/api/sync', { changes: swap }); // mesma coisa de novo: não repete
+  // trocou a cliente do horário: a nova cliente recebe a confirmação
+  await call('POST', '/api/sync', { changes: [{ coll: 'appts', id: 'm3', data: { ...m3, time: '16:00', clientId: 'cm' } }] });
+  await wait();
+  assert.equal(evo.sent.length, nSwap + 3);
+  assert.ok(/✅/.test(evo.sent.at(-1).text) && evo.sent.at(-1).number === '5531955554444');
+  await call('POST', '/api/sync', { changes: [ // tira da frente para o teste do lembrete
+    { coll: 'appts', id: 'm1', data: { ...m1, time: '16:30', status: 'cancelado' } },
+    { coll: 'appts', id: 'm3', data: { ...m3, time: '16:00', clientId: 'cm', status: 'cancelado' } },
+  ] });
+
   // 5) Lembrete 24h antes, uma vez só; pedido pendente não ganha lembrete
   const start = Date.parse(`${date}T15:00:00-03:00`);
   await call('POST', '/api/sync', { changes: [

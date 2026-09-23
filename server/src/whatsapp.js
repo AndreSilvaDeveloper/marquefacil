@@ -105,7 +105,8 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
   }
 
   // kind: 'confirm' | 'reminder' | 'owner' | 'decline'. Cada combinação horário+tipo só é enviada uma vez.
-  async function sendForAppt(tenantId, apptId, kind) {
+  // key: identifica o envio (uma vez por horário+key). O aviso de mudança usa uma key por novo dia/hora/cliente.
+  async function sendForAppt(tenantId, apptId, kind, key = kind) {
     const tenant = q.tenant.get(tenantId);
     if (!tenant || !evo.enabled) return 'off';
     const s = readSettings(tenant.settings);
@@ -120,16 +121,16 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
     // horário de pacote: a cliente sempre fica sabendo em qual sessão está, mesmo se o texto foi editado sem {pacote}
     const tplFinal = vars.pacote && ['confirm', 'reminder', 'prereserve'].includes(kind) && !tpl.includes('{pacote}') ? `${tpl}\n📦 {pacote}` : tpl;
     const body = renderTemplate(tplFinal, vars);
-    const row = { tenantId, apptId, kind, phone, name: client?.name || '', body, now: Date.now() };
+    const row = { tenantId, apptId, kind: key, phone, name: client?.name || '', body, now: Date.now() };
 
     if (!q.claim.run(row).changes && !q.reclaim.run(row).changes) return 'already';
-    if (!phone) { q.doneBy.run('skipped', 'sem telefone', tenantId, apptId, kind); return 'skip'; }
+    if (!phone) { q.doneBy.run('skipped', 'sem telefone', tenantId, apptId, key); return 'skip'; }
     try {
       await evo.send(s.whatsapp.instance, phone, body);
-      q.doneBy.run('sent', null, tenantId, apptId, kind);
+      q.doneBy.run('sent', null, tenantId, apptId, key);
       return 'sent';
     } catch (e) {
-      q.doneBy.run('error', String(e.message).slice(0, 300), tenantId, apptId, kind);
+      q.doneBy.run('error', String(e.message).slice(0, 300), tenantId, apptId, key);
       log.warn?.({ err: e.message, tenantId, apptId, kind }, 'whatsapp: falha ao enviar');
       return 'error';
     }

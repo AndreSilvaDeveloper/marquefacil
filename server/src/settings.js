@@ -32,6 +32,7 @@ export const DEFAULTS = {
       confirm: 'Olá, {nome}! ✅\nSeu horário no *{salao}* está marcado:\n📅 {dia} às {hora}\n💇 {servico}\n📦 {pacote}\n💰 Valor: {valor}\n\n📋 Ver ou remarcar: {meus_horarios}',
       reminder: 'Olá, {nome}! Passando para lembrar do seu horário no *{salao}*:\n📅 {dia} às {hora}\n💇 {servico}\n📦 {pacote}\n\nTe esperamos! 💖\n📋 Precisa remarcar? {meus_horarios}',
       prereserve: 'Olá, {nome}! ✅\nSeu horário no *{salao}* está pré-reservado:\n📅 {dia} às {hora}\n💇 {servico}\n📦 {pacote}\n💰 Valor: {valor}\n* A confirmação do horário será feita mediante ao pagamento do valor de 50% do valor do serviço.\n\nSe precisar remarcar, é só responder esta mensagem.',
+      change: 'Olá, {nome}! 🔁\nSeu horário no *{salao}* mudou. O certo agora é:\n📅 {dia} às {hora}\n💇 {servico}\n📦 {pacote}\n\nQualquer dúvida, é só responder esta mensagem.\n📋 Ver ou remarcar: {meus_horarios}',
       rescheduleNo: 'Olá, {nome}. Não conseguimos mudar o seu horário para {dia} às {hora}. 😕\nO seu horário de antes continua marcado.\n📋 Ver seus horários: {meus_horarios}',
       owner: '📅 Novo pedido de agendamento pelo link!\n👩 {nome_completo} — {telefone}\n📅 {dia} às {hora}\n💇 {servico}\n\nAbra o app para confirmar.',
       decline: 'Olá, {nome}. Infelizmente não conseguimos atender {dia} às {hora} no *{salao}*. 😕\nEscolha outro horário aqui: {link}',
@@ -113,7 +114,7 @@ export function updateSettings(current, input) {
     else if (w.reminderHours !== undefined) s.whatsapp.reminderMinutes = int(w.reminderHours, 0, 72, 'lembrete') * 60;
     if (w.ownerPhone !== undefined) s.whatsapp.ownerPhone = text(w.ownerPhone, 30);
     if (isObj(w.templates)) {
-      for (const k of ['confirm', 'reminder', 'owner', 'decline', 'rescheduleNo', 'prereserve']) {
+      for (const k of ['confirm', 'reminder', 'owner', 'decline', 'rescheduleNo', 'prereserve', 'change']) {
         if (w.templates[k] !== undefined) s.whatsapp.templates[k] = text(w.templates[k], 1000).trim() || DEFAULTS.whatsapp.templates[k];
       }
     }

@@ -197,7 +197,7 @@ export function buildApp({
   });
 
   const apptNow = db.prepare("SELECT data FROM records WHERE tenant_id = ? AND coll = 'appts' AND id = ? AND deleted = 0");
-  const statusOf = (tenantId, id) => { const r = apptNow.get(tenantId, id); return r ? JSON.parse(r.data).status || 'marcado' : null; };
+  const apptOf = (tenantId, id) => { const r = apptNow.get(tenantId, id); return r ? JSON.parse(r.data) : null; };
 
   // Pedido do link aceito ou recusado: avisa a cliente pelo WhatsApp.
   // Se era uma remarcação: aceito → cancela o horário antigo; recusado → o antigo continua.
@@ -222,19 +222,28 @@ export function buildApp({
   app.post('/api/sync', { preHandler: auth }, async req => {
     const tenantId = req.s.tenant_id;
     const changes = cleanChanges(req.body?.changes);
-    const before = new Map(changes.filter(c => c.coll === 'appts').map(c => [c.id, statusOf(tenantId, c.id)]));
+    const old = new Map(changes.filter(c => c.coll === 'appts').map(c => [c.id, apptOf(tenantId, c.id)]));
     const seq = changes.length ? applyChanges(db, tenantId, changes)
       : db.prepare('SELECT seq FROM tenants WHERE id = ?').get(tenantId).seq;
 
     let s = null;
     for (const c of changes) {
       if (c.coll !== 'appts' || c.deleted) continue;
-      const from = before.get(c.id), to = c.data.status || 'marcado';
+      const prev = old.get(c.id), from = prev ? prev.status || 'marcado' : null, to = c.data.status || 'marcado';
       s ||= getSettings(tenantId);
       // pré-reserva que virou confirmada (a cliente pagou o sinal): manda a confirmação
       if (from === 'prereserva' && to === 'marcado') { if (s.whatsapp.confirmManual) messenger.fire(tenantId, c.id, 'confirm'); continue; }
-      if (from) { afterDecision(tenantId, c.id, from, to); continue; }
       const future = c.data.date && c.data.time && zonedEpoch(c.data.date, c.data.time, s.timezone) > Date.now();
+      // Horário já marcado que a profissional mudou (dia, hora ou cliente): a cliente recebe o horário certo
+      if (from === 'marcado' && to === 'marcado') {
+        const { clientId, date, time } = c.data;
+        if (future && s.whatsapp.confirmManual) {
+          if (clientId !== prev.clientId) messenger.fire(tenantId, c.id, 'confirm', `confirm:${clientId}:${date} ${time}`);
+          else if (date !== prev.date || time !== prev.time) messenger.fire(tenantId, c.id, 'change', `change:${date} ${time}`);
+        }
+        continue;
+      }
+      if (from) { afterDecision(tenantId, c.id, from, to); continue; }
       // pré-reserva nova: mensagem de pré-reserva (pede o sinal)
       if (to === 'prereserva') { if (s.whatsapp.prereserveMessage && future && !(c.data.seriesIndex > 0)) messenger.fire(tenantId, c.id, 'prereserve'); continue; }
       // Horário novo marcado no app: manda confirmação, se a opção estiver ligada
