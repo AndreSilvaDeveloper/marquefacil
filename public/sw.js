@@ -1,6 +1,6 @@
 // Guarda os arquivos do app para abrir mesmo sem internet.
 // Ao mudar qualquer arquivo, aumente a versão abaixo.
-const CACHE = 'agenda-v33';
+const CACHE = 'agenda-v34';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

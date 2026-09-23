@@ -1784,7 +1784,6 @@ function vClient(id, q) {
   }).join('');
 
   const stat = (label, value) => `<div class="stat"><span>${label}</span><b>${value}</b></div>`;
-  const phoneDigits = (c.phone || '').replace(/\D/g, '');
   const jump = [next.length && ['#c-next', `📅 Próximos (${next.length})`], pkgs.length && ['#c-pkgs', `📦 Pacotes (${activePkgs.length})`], allHistory.length && ['#hist', `🕘 Histórico (${allHistory.length})`]].filter(Boolean);
 
   return {
@@ -1799,8 +1798,7 @@ function vClient(id, q) {
         </div>
       </div>
       <div class="actions3">
-        ${c.phone ? `<a class="btn" target="_blank" rel="noopener" href="${waLink(c.phone)}">💬<small>WhatsApp</small></a>
-        <a class="btn" href="tel:${phoneDigits}">📞<small>Ligar</small></a>` : ''}
+        ${c.phone ? `<a class="btn" target="_blank" rel="noopener" href="${waLink(c.phone)}">💬<small>WhatsApp</small></a>` : ''}
         <a class="btn" href="#/agendar?c=${c.id}">📅<small>Agendar</small></a>
         <a class="btn" href="#/venda?c=${c.id}">🛍️<small>Vender</small></a>
         <a class="btn" href="#/cliente-editar?id=${c.id}">✏️<small>Editar</small></a>
