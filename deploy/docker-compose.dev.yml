@@ -3,12 +3,14 @@
 # Regras desta máquina:
 #  - o HTTPS é do container `caddy` (/var/www/caddy). Ele entra na rede de cada app e
 #    chama o container pelo nome — aqui: `marquefacil-app:3000`, na rede `marquefacil`;
-#  - o serviço NÃO pode se chamar "app": o Caddy já usa `app:3000` para o vault, e o nome
-#    repetido numa rede que ele enxerga poderia desviar o tráfego;
+#  - o serviço do app NÃO pode se chamar "app": o Caddy já usa `app:3000` para o vault, e o
+#    nome repetido numa rede que ele enxerga poderia desviar o tráfego;
 #  - nomes com prefixo "marquefacil-", limite de memória/CPU;
-#  - a porta 3100 fica só no 127.0.0.1 (teste de fumaça e diagnóstico).
+#  - portas só no 127.0.0.1 (teste de fumaça e diagnóstico por túnel SSH).
 #
-# O workflow copia este arquivo para /opt/marquefacil/docker-compose.yml e gera o .env ao lado.
+# O workflow copia este arquivo para /opt/marquefacil/docker-compose.yml e gera ao lado:
+#   .env            → configuração do app
+#   .env.evolution  → chave da Evolution e senha do banco dela (criadas uma vez, nunca mudam)
 name: marquefacil
 
 services:
@@ -25,16 +27,90 @@ services:
       - marquefacil
     mem_limit: 512m
     cpus: 1.0
-    logging:
+    logging: &logging
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
+  # WhatsApp: Evolution API só do Marque Fácil (separada da do WorkID).
+  # Não fica exposta na internet: o app fala com ela pela rede interna.
+  # Painel: ssh -L 3101:127.0.0.1:3101 root@nd2  →  http://localhost:3101/manager
+  evolution:
+    image: evoapicloud/evolution-api:v2.3.7
+    container_name: marquefacil-evolution
+    restart: unless-stopped
+    env_file: .env.evolution     # AUTHENTICATION_API_KEY, EVOLUTION_DB_PASSWORD
+    environment:
+      SERVER_URL: http://marquefacil-evolution:8080
+      SERVER_PORT: "8080"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:${EVOLUTION_DB_PASSWORD}@marquefacil-evolution-db:5432/evolution?schema=evolution_api
+      DATABASE_CONNECTION_CLIENT_NAME: marquefacil
+      # só envia mensagens: não guarda conversas, contatos nem histórico do WhatsApp do salão
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
+      DATABASE_SAVE_MESSAGE_UPDATE: "false"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_LABELS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+      CACHE_REDIS_ENABLED: "false"
+      CACHE_LOCAL_ENABLED: "true"
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "false"
+      CONFIG_SESSION_PHONE_CLIENT: Marque Facil
+      CONFIG_SESSION_PHONE_NAME: Chrome
+      DEL_INSTANCE: "false"
+      TELEMETRY_ENABLED: "false"
+      LOG_LEVEL: ERROR,WARN
+      LOG_BAILEYS: error
+      LANGUAGE: pt-BR
+    ports:
+      - "127.0.0.1:${EVOLUTION_PORT:-3101}:8080"
+    volumes:
+      - marquefacil-evolution-instances:/evolution/instances
+    networks:
+      - marquefacil
+      - marquefacil-internal
+    depends_on:
+      evolution-db:
+        condition: service_healthy
+    mem_limit: 768m
+    cpus: 1.0
+    logging: *logging
+
+  evolution-db:
+    image: postgres:16-alpine
+    container_name: marquefacil-evolution-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${EVOLUTION_DB_PASSWORD}
+      POSTGRES_DB: evolution
+    volumes:
+      - marquefacil-evolution-db:/var/lib/postgresql/data
+    networks:
+      - marquefacil-internal     # só a Evolution enxerga o banco
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 256m
+    cpus: 0.5
+    logging: *logging
+
 volumes:
   marquefacil-data:
     name: marquefacil-data
+  marquefacil-evolution-instances:
+    name: marquefacil-evolution-instances
+  marquefacil-evolution-db:
+    name: marquefacil-evolution-db
 
 networks:
   marquefacil:
     name: marquefacil
+  marquefacil-internal:
+    name: marquefacil-internal
+    internal: true

@@ -34,17 +34,26 @@ jobs:
           DOMAIN: ${{ vars.DOMAIN }}
           ALLOW_SIGNUP: ${{ vars.ALLOW_SIGNUP || 'true' }}
           HANDOFF_ORIGINS: ${{ vars.HANDOFF_ORIGINS || 'https://andresilvadeveloper.github.io' }}
-          EVOLUTION_URL: ${{ secrets.EVOLUTION_URL }}
-          EVOLUTION_APIKEY: ${{ secrets.EVOLUTION_APIKEY }}
         run: |
           test -w "$APP_DIR" || { echo "::error::$APP_DIR não existe ou não é do usuário do runner (veja deploy/README.md)"; exit 1; }
           cp deploy/docker-compose.dev.yml "$APP_DIR/docker-compose.yml"
           umask 077
+
+          # Chave da Evolution e senha do banco dela: criadas no 1º deploy e mantidas depois
+          # (trocar a senha depois quebraria o banco já criado)
+          rnd() { head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+          if [ ! -s "$APP_DIR/.env.evolution" ]; then
+            { echo "AUTHENTICATION_API_KEY=$(rnd)"; echo "EVOLUTION_DB_PASSWORD=$(rnd)"; } > "$APP_DIR/.env.evolution"
+            echo "Chave da Evolution criada"
+          fi
+          chmod 600 "$APP_DIR/.env.evolution"
+          EVOLUTION_APIKEY=$(grep '^AUTHENTICATION_API_KEY=' "$APP_DIR/.env.evolution" | cut -d= -f2)
+
           {
             echo "DOMAIN=$DOMAIN"
             echo "ALLOW_SIGNUP=$ALLOW_SIGNUP"
             echo "HANDOFF_ORIGINS=$HANDOFF_ORIGINS"
-            echo "EVOLUTION_URL=$EVOLUTION_URL"
+            echo "EVOLUTION_URL=http://marquefacil-evolution:8080"
             echo "EVOLUTION_APIKEY=$EVOLUTION_APIKEY"
             echo "APP_PORT=$APP_PORT"
           } > "$APP_DIR/.env"
@@ -54,7 +63,9 @@ jobs:
         working-directory: /opt/marquefacil
         run: |
           # sem --remove-orphans de propósito: não mexer em nada que não seja do projeto marquefacil
-          docker compose -p marquefacil up -d
+          # os dois arquivos preenchem as variáveis do compose (portas, senha do banco da Evolution)
+          docker compose -p marquefacil --env-file .env --env-file .env.evolution pull evolution evolution-db
+          docker compose -p marquefacil --env-file .env --env-file .env.evolution up -d
           docker compose -p marquefacil ps
           # o Caddy da máquina precisa enxergar a rede do app (não recria o Caddy; só conecta)
           if docker ps --format '{{.Names}}' | grep -qx caddy; then
@@ -69,6 +80,20 @@ jobs:
           done
           echo "::error::O app não respondeu em /api/health"
           docker logs --tail 80 marquefacil-app
+          exit 1
+
+      - name: Teste da Evolution (app → WhatsApp)
+        run: |
+          # a Evolution demora um pouco no 1º start (cria as tabelas do banco)
+          for i in $(seq 1 45); do
+            if docker exec marquefacil-app node -e "fetch(process.env.EVOLUTION_URL + '/instance/fetchInstances', { headers: { apikey: process.env.EVOLUTION_APIKEY } }).then(r => { console.log('app → evolution:', r.status); process.exit(r.ok ? 0 : 1) }).catch(() => process.exit(1))"; then
+              curl -fsS "http://127.0.0.1:${EVOLUTION_PORT:-3101}/" | head -c 200; echo
+              exit 0
+            fi
+            sleep 4
+          done
+          echo "::error::O app não conseguiu falar com a Evolution"
+          docker logs --tail 80 marquefacil-evolution
           exit 1
 
       - name: Teste pelo domínio (se já estiver no ar)

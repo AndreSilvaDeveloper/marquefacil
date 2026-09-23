@@ -53,8 +53,6 @@ Repositório → **Settings → Secrets and variables → Actions**.
 | Variable | `DOMAIN` | `maquefacil.com.br` |
 | Variable | `APP_PORT` | `3100` (opcional) |
 | Variable | `ALLOW_SIGNUP` | `true` |
-| Secret | `EVOLUTION_URL` | URL da Evolution API (etapa 2) |
-| Secret | `EVOLUTION_APIKEY` | chave da Evolution API (etapa 2) |
 
 ## 5. Domínio (painel da Hostinger → DNS)
 | Tipo | Nome | Aponta para |
@@ -78,10 +76,25 @@ docker exec caddy caddy reload --config /etc/caddy/Caddyfile
 GitHub → Actions → **Deploy dev** → Run workflow (branch `dev`). O workflow:
 testa → constrói a imagem → gera `/opt/marquefacil/.env` → `docker compose up -d` → confere `/api/health`.
 
+## WhatsApp (Evolution API própria)
+O compose sobe também a **Evolution API v2.3.7** do Marque Fácil (`marquefacil-evolution`) com um
+Postgres só dela (`marquefacil-evolution-db`). Ela é separada da Evolution do WorkID e **não fica
+exposta na internet**: o app fala com ela por `http://marquefacil-evolution:8080`.
+
+- A chave (`AUTHENTICATION_API_KEY`) e a senha do banco são criadas pelo workflow no 1º deploy, em
+  `/opt/marquefacil/.env.evolution` (permissão 600). **Não apague esse arquivo**: sem a senha, o banco
+  da Evolution não abre mais.
+- A Evolution não guarda conversas, contatos nem histórico do WhatsApp dos salões (só envia mensagens).
+- Painel `/manager`, pela tailnet:
+  ```bash
+  ssh -L 3101:127.0.0.1:3101 root@100.85.80.113
+  # no navegador: http://localhost:3101/manager  (chave: grep AUTHENTICATION_API_KEY /opt/marquefacil/.env.evolution)
+  ```
+
 ## Dia a dia
 ```bash
 cd /opt/marquefacil
-docker compose -p marquefacil logs -f --tail 100
+docker compose -p marquefacil logs -f --tail 100            # app + Evolution
 docker compose -p marquefacil restart
 docker compose -p marquefacil cp app:/data/backups ./backups   # cópias diárias do banco
 ```
