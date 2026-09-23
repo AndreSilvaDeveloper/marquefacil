@@ -1496,7 +1496,7 @@ function vBuscar(_, q) {
       const [label, fn] = SEARCH_SHORTCUTS[k];
       if (k === 'devendo') {
         const cs = db.clients.map(c => ({ c, owes: clientOwes(c.id) })).filter(x => x.owes > 0).sort((a, b) => b.owes - a.owes);
-        return `<h2>${label} · ${cs.length}</h2><div class="list">${cs.length ? cs.map(x => clientRow(x.c)).join('') : '<div class="empty">Ninguém devendo. 🎉</div>'}</div>`;
+        return `<h2>${label} · ${cs.length}</h2><div class="list">${cs.length ? cs.map(x => clientRow(x.c, undefined, 'devendo')).join('') : '<div class="empty">Ninguém devendo. 🎉</div>'}</div>`;
       }
       const list = fn();
       return `<h2>${label} · ${list.length}</h2><div class="list">${list.length ? list.map(a => apptCard(a, { showDate: true })).join('') : '<div class="empty">Nada por aqui.</div>'}</div>`;
@@ -1605,22 +1605,54 @@ function avatar(name, big = false) {
   return `<span class="avatar ${big ? 'big' : ''}" style="background:hsl(${hue} 45% 88%);color:hsl(${hue} 45% 28%)" aria-hidden="true">${esc(initials(name))}</span>`;
 }
 
-function clientRow(c, st = clientStats(c)) {
+// Aniversário guardado como "MM-DD"
+const MONTHS = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+const bdayLabel = b => (b ? `${+b.slice(3)} de ${MONTHS[+b.slice(0, 2) - 1].toLowerCase()}` : '');
+function bdayIn(b) { // dias até o próximo aniversário (0 = hoje)
+  if (!b) return Infinity;
+  const t = toDate(today());
+  let d = new Date(t.getFullYear(), +b.slice(0, 2) - 1, +b.slice(3));
+  if (d < t) d = new Date(t.getFullYear() + 1, +b.slice(0, 2) - 1, +b.slice(3));
+  return Math.round((d - t) / 86400000);
+}
+const firstName = c => (c.name || '').split(' ')[0];
+const bdayText = c => `Feliz aniversário, ${firstName(c)}! 🎂🎉 Todo o carinho do ${session.tenant.name} para você. Que seu dia seja lindo! 💖`;
+
+// Mensagem pronta do botão de WhatsApp, conforme o filtro da lista
+function clientWaText(c, st, f) {
+  const n = firstName(c);
+  if (f === 'aniver' && bdayIn(c.birthday) === 0) return bdayText(c);
+  if (f === 'devendo' && st.owes > 0) return `Olá, ${n}! Tudo bem? 😊 Passando para lembrar que ficou um valor em aberto de ${brl(st.owes)} aqui no ${session.tenant.name}. Pode ser por Pix, dinheiro ou cartão. Obrigada! 💖`;
+  if (f === 'sumidas') return `Oi, ${n}! Quanto tempo! 😊 Estamos com saudade de você aqui no ${session.tenant.name}. Que tal marcar um horário esta semana?`;
+  return `Olá, ${n}! 😊`;
+}
+
+function clientRow(c, st = clientStats(c), f = '') {
   const lines = [];
   lines.push(st.last ? `Última vez ${daysAgo(st.last.date)}${st.last.service ? ' · ' + esc(st.last.service) : ''}` : 'Ainda não veio');
   if (st.next) lines.push(`📅 ${st.next.status === 'pendente' ? 'Pedido' : 'Próximo'}: ${esc(fmtDate(st.next.date, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', ''))} ${st.next.time}`);
-  return `<a class="card line client-row" href="#/cliente/${c.id}" data-name="${esc(norm(c.name + ' ' + (c.phone || '').replace(/\D/g, '') + ' ' + (c.phone || '')))}">
-    ${avatar(c.name)}
-    <div class="grow"><b>${esc(c.name)}</b>${lines.map(l => `<span>${l}</span>`).join('')}</div>
-    ${st.owes > 0 ? `<span class="badge warn">Deve ${brl(st.owes)}</span>` : ''}
-  </a>`;
+  const bd = bdayIn(c.birthday);
+  const badges = [
+    st.owes > 0 ? `<span class="badge warn">Deve ${brl(st.owes)}</span>` : '',
+    bd === 0 ? '<span class="badge warn">🎂 Hoje!</span>' : bd <= 7 ? `<span class="badge">🎂 ${bd === 1 ? 'amanhã' : 'em ' + bd + ' dias'}</span>` : '',
+    st.visits >= LOYAL ? `<span class="badge ok">⭐ ${st.visits} visitas</span>` : '',
+  ].filter(Boolean).join('');
+  return `<div class="card line client-row" data-name="${esc(norm(c.name + ' ' + (c.phone || '').replace(/\D/g, '') + ' ' + (c.phone || '')))}">
+    <a class="line" href="#/cliente/${c.id}">${avatar(c.name)}
+      <div class="grow"><b>${esc(c.name)}</b>${lines.map(l => `<span>${l}</span>`).join('')}${badges ? `<div class="badges">${badges}</div>` : ''}</div></a>
+    ${c.phone ? `<a class="wa-btn" target="_blank" rel="noopener" href="${waLink(c.phone, clientWaText(c, st, f))}" aria-label="WhatsApp de ${esc(c.name)}">💬</a>` : ''}
+  </div>`;
 }
 
 let clientsSearch = '';
+const LOYAL = 5; // a partir de quantas visitas é cliente fiel
 const CLIENT_FILTERS = {
   '': ['Todas', () => true],
   devendo: ['💸 Devendo', st => st.owes > 0],
   marcado: ['📅 Com horário', st => !!st.next],
+  aniver: ['🎂 Aniversário', (st, c) => bdayIn(c.birthday) <= 30],
+  novas: ['✨ Novas', st => !!st.since && st.since >= addDays(today(), -30)],
+  fieis: ['⭐ Fiéis', st => st.visits >= LOYAL],
   sumidas: ['😴 Sumidas', st => st.last && !st.next && st.last.date < addDays(today(), -60)],
   link: ['🌐 Pelo link', st => st.online],
 };
@@ -1628,25 +1660,31 @@ function vClients(_, q) {
   const f = CLIENT_FILTERS[q.f] ? q.f : '';
   const order = q.o || 'nome';
   const all = db.clients.map(c => ({ c, st: clientStats(c) }));
-  const list = all.filter(x => CLIENT_FILTERS[f][1](x.st));
+  const list = all.filter(x => CLIENT_FILTERS[f][1](x.st, x.c));
   const sorters = {
+    aniver: (a, b) => bdayIn(a.c.birthday) - bdayIn(b.c.birthday),
     nome: (a, b) => byName(a.c, b.c),
     ultima: (a, b) => (b.st.last ? b.st.last.date + b.st.last.time : '').localeCompare(a.st.last ? a.st.last.date + a.st.last.time : '') || byName(a.c, b.c),
     visitas: (a, b) => b.st.visits - a.st.visits || byName(a.c, b.c),
   };
-  list.sort(sorters[order] || sorters.nome);
+  list.sort(f === 'aniver' ? sorters.aniver : sorters[order] || sorters.nome);
   const url = o => '#/clientes?' + Object.entries({ f, o: order, ...o }).filter(([, v]) => v && v !== 'nome').map(([k, v]) => `${k}=${v}`).join('&');
   const owing = all.filter(x => x.st.owes > 0);
+  const month = today().slice(0, 7);
+  const cameMonth = new Set(db.appts.filter(a => a.date.startsWith(month) && (a.status === 'feito' || (a.status === 'marcado' && isPast(a)))).map(a => a.clientId)).size;
+  const newMonth = all.filter(x => x.st.since?.startsWith(month)).length;
+  const bdToday = all.filter(x => bdayIn(x.c.birthday) === 0);
+  const hints = { sumidas: 'Não vêm há mais de 2 meses e não têm horário marcado. Toque em 💬 para chamar de volta.', aniver: 'Aniversários dos próximos 30 dias. Toque em 💬 no dia para mandar parabéns.', devendo: 'Toque em 💬 para mandar a cobrança pronta.', fieis: `Vieram ${LOYAL} vezes ou mais.`, novas: 'Primeira vez nos últimos 30 dias.' };
 
   // Letras separando a lista (quando está em ordem de nome)
   let letter = '';
   const rows = list.map(({ c, st }) => {
     let head = '';
-    if (order === 'nome') {
+    if (order === 'nome' && f !== 'aniver') {
       const L = norm(c.name)[0]?.toUpperCase() || '#';
       if (L !== letter) { letter = L; head = `<div class="letter" data-letter>${esc(L)}</div>`; }
     }
-    return head + clientRow(c, st);
+    return head + clientRow(c, st, f);
   }).join('');
 
   return {
@@ -1656,9 +1694,14 @@ function vClients(_, q) {
       <div class="row" style="margin-bottom:.8rem">
         <a class="btn main" href="#/cliente-editar">+ Nova cliente</a>
       </div>
-      ${all.length ? `<p class="muted" style="margin:.2rem 0 .6rem">${all.length} ${all.length === 1 ? 'cliente' : 'clientes'}${owing.length ? ` · <b style="color:var(--warn)">${owing.length} devendo ${brl(owing.reduce((t, x) => t + x.st.owes, 0))}</b>` : ''}</p>` : ''}
+      ${all.length ? `<div class="totals">
+        <div class="total"><span>Clientes</span><b>${all.length}</b><small class="muted">${newMonth ? `${newMonth} ${newMonth === 1 ? 'nova' : 'novas'} este mês` : 'nenhuma nova este mês'}</small></div>
+        <div class="total ok"><span>Vieram este mês</span><b>${cameMonth}</b><small class="muted">${owing.length ? `<b style="color:var(--warn)">${owing.length} devendo ${brl(owing.reduce((t, x) => t + x.st.owes, 0))}</b>` : 'ninguém devendo'}</small></div>
+      </div>` : ''}
+      ${bdToday.map(({ c }) => `<a class="card line bday-card" href="#/cliente/${c.id}">🎂<div class="grow"><b>Hoje é aniversário da ${esc(firstName(c))}!</b><span>${c.phone ? 'Toque para abrir e mandar parabéns' : esc(c.name)}</span></div></a>`).join('')}
       ${all.length ? `<div class="chips filters">${Object.entries(CLIENT_FILTERS).map(([k, [n, fn]]) =>
-        `<a class="chip ${f === k ? 'on' : ''}" href="${url({ f: k })}" data-f>${n} <small>${all.filter(x => fn(x.st)).length}</small></a>`).join('')}</div>
+        `<a class="chip ${f === k ? 'on' : ''}" href="${url({ f: k })}" data-f>${n} <small>${all.filter(x => fn(x.st, x.c)).length}</small></a>`).join('')}</div>
+      ${hints[f] ? `<p class="muted" style="margin:-.2rem 0 .6rem;font-size:.9rem">${hints[f]}</p>` : ''}
       <div class="sortrow"><label for="ord">Ordenar:</label>
         <select id="ord">${[['nome', 'Nome (A–Z)'], ['ultima', 'Última visita'], ['visitas', 'Quem mais vem']].map(([k, n]) => `<option value="${k}" ${order === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>` : ''}
       <div class="list" id="list">${rows || (all.length ? '<div class="empty">Nenhuma cliente neste filtro.</div>' : '<div class="empty">Nenhuma cliente ainda.<br>Elas aparecem aqui sozinhas quando você agenda.</div>')}</div>
@@ -1669,7 +1712,7 @@ function vClients(_, q) {
         const digits = $('#s', el).value.replace(/\D/g, '');
         clientsSearch = $('#s', el).value;
         let shown = 0;
-        $$('#list > a', el).forEach(a => { const ok = a.dataset.name.includes(n) || (digits.length > 2 && a.dataset.name.includes(digits)); a.hidden = !ok; shown += ok; });
+        $$('#list > .client-row', el).forEach(a => { const ok = a.dataset.name.includes(n) || (digits.length > 2 && a.dataset.name.includes(digits)); a.hidden = !ok; shown += ok; });
         $$('#list > .letter', el).forEach(h => (h.hidden = !!n));
         $('#none', el).hidden = !!shown || !list.length;
       };
@@ -1752,7 +1795,7 @@ function vClient(id, q) {
         <div class="grow">
           <p class="big">${esc(c.name)}</p>
           ${c.phone ? `<p>📞 ${esc(c.phone)}</p>` : '<p class="muted">Sem telefone · <a href="#/cliente-editar?id=' + c.id + '">colocar</a></p>'}
-          <div class="badges">${st.online ? '<span class="badge">🌐 Veio pelo link</span>' : ''}${appts.some(a => a.seriesId && !a.packageId && !isPast(a) && a.status !== 'cancelado') ? '<span class="badge">🔁 Cliente fixa</span>' : ''}${activePkgs.length ? '<span class="badge">📦 Pacote</span>' : ''}</div>
+          <div class="badges">${c.birthday ? `<span class="badge ${bdayIn(c.birthday) === 0 ? 'warn' : ''}">🎂 ${bdayIn(c.birthday) === 0 ? 'Aniversário hoje!' : bdayLabel(c.birthday)}</span>` : ''}${st.online ? '<span class="badge">🌐 Veio pelo link</span>' : ''}${appts.some(a => a.seriesId && !a.packageId && !isPast(a) && a.status !== 'cancelado') ? '<span class="badge">🔁 Cliente fixa</span>' : ''}${activePkgs.length ? '<span class="badge">📦 Pacote</span>' : ''}</div>
         </div>
       </div>
       <div class="actions3">
@@ -1762,6 +1805,7 @@ function vClient(id, q) {
         <a class="btn" href="#/venda?c=${c.id}">🛍️<small>Vender</small></a>
       </div>
 
+      ${c.phone && c.birthday && bdayIn(c.birthday) <= 0 ? `<a class="btn ok" style="margin-bottom:.8rem" target="_blank" rel="noopener" href="${waLink(c.phone, bdayText(c))}">🎂 Mandar parabéns</a>` : ''}
       <div class="note ${c.notes ? '' : 'empty-note'}" id="note">📝 ${c.notes ? `<b>Observação:</b> ${esc(c.notes)}` : '<span class="muted">Sem observação (alergias, preferências…)</span>'}
         <button type="button" class="btn small" id="edit-note">${c.notes ? '✏️' : '+ Escrever'}</button></div>
 
@@ -1989,6 +2033,11 @@ function vClientForm(_, q) {
           <input type="text" id="n" value="${esc(c?.name || '')}" autocapitalize="words"></div>
         <div class="field"><label for="p">Telefone / WhatsApp <span class="opt">(se quiser)</span></label>
           <input type="tel" id="p" value="${esc(c?.phone || '')}" placeholder="(11) 99999-9999"></div>
+        <div class="field"><span class="lbl">🎂 Aniversário <span class="opt">(se quiser — você recebe um aviso no dia)</span></span>
+          <div class="row">
+            <select id="bd-d" aria-label="Dia"><option value="">Dia</option>${Array.from({ length: 31 }, (_, i) => `<option value="${pad(i + 1)}" ${c?.birthday?.slice(3) === pad(i + 1) ? 'selected' : ''}>${i + 1}</option>`).join('')}</select>
+            <select id="bd-m" aria-label="Mês"><option value="">Mês</option>${MONTHS.map((m, i) => `<option value="${pad(i + 1)}" ${c?.birthday?.slice(0, 2) === pad(i + 1) ? 'selected' : ''}>${m}</option>`).join('')}</select>
+          </div></div>
         <div class="field"><label for="o">Observação <span class="opt">(se quiser)</span></label>
           <textarea id="o" placeholder="Alergias, preferências…">${esc(c?.notes || '')}</textarea></div>
         <button class="btn main" type="submit">✓ Salvar</button>
@@ -2004,7 +2053,9 @@ function vClientForm(_, q) {
         if (same && same !== c) {
           if (!confirm(`Já existe uma cliente chamada "${same.name}". Salvar mesmo assim?`)) return;
         }
-        const data = { name, phone: $('#p', el).value.trim(), notes: $('#o', el).value.trim() };
+        const bd = $('#bd-d', el).value, bm = $('#bd-m', el).value;
+        if (!!bd !== !!bm) { $('#err', el).innerHTML = '<div class="error">Escolha o dia e o mês do aniversário (ou deixe os dois vazios).</div>'; return; }
+        const data = { name, phone: $('#p', el).value.trim(), notes: $('#o', el).value.trim(), birthday: bd ? `${bm}-${bd}` : '' };
         if (c) { Object.assign(c, data); save(); toast('Salvo ✓'); back(); }
         else {
           const n = { id: uid(), createdAt: Date.now(), ...data };
@@ -2829,7 +2880,7 @@ function vMore() {
       bindToggle2($('#big', el), v => { db.settings.big = v; save(); applySettings(); });
       paintPushCard($('#push-card', el), true).then(() => {
         const ok = pushSupported() && Notification.permission === 'granted';
-        $('#push-sub', el).innerHTML = ok ? '<span style="color:var(--ok)">● Ligados</span>' : 'Receba um aviso quando uma cliente pedir horário';
+        $('#push-sub', el).innerHTML = ok ? '<span style="color:var(--ok)">● Ligados</span>' : 'Pedidos, horário chegando, resumo do dia…';
       });
       $('#qr-link', el) && ($('#qr-link', el).onclick = () => qrSheet(link, session.tenant.name));
       $('#csv', el).onclick = exportClientsCsv;
@@ -3616,6 +3667,27 @@ async function subscribePush() {
 }
 
 // Cartão "ativar avisos". Na agenda só aparece enquanto não estiver ativado.
+// Quais avisos a profissional quer receber (vale para todos os aparelhos do salão)
+const ALERT_OPTS = [
+  ['pending', '⏳ Pedido do link sem confirmar', 'Lembra depois de 30 min e de novo no dia'],
+  ['prereserve', '💳 Pré-reserva sem sinal', 'Um dia antes do horário'],
+  ['morning', '☀️ Bom dia com o resumo do dia', 'Quantos horários e aniversariantes'],
+  ['evening', '📝 Fim do dia', 'Quando algum atendimento ficou sem valor'],
+  ['whatsappDown', '⚠️ WhatsApp desconectado', 'Quando as mensagens automáticas param de sair'],
+];
+async function paintAlertOpts(box) {
+  let S;
+  try { S = await api('GET', '/api/settings'); } catch { box.innerHTML = '<span class="muted">Precisa de internet para mudar os avisos.</span>'; return; }
+  const A = S.alerts;
+  box.innerHTML = `
+    <div class="field"><label for="al-up">⏰ Horário chegando</label>
+      <select id="al-up">${[0, 5, 10, 15, 30, 60].map(m => `<option value="${m}" ${m === A.upcoming ? 'selected' : ''}>${m ? `${m} minutos antes` : 'Não avisar'}</option>`).join('')}</select></div>
+    ${ALERT_OPTS.map(([k, n, h]) => `<div class="field"><span class="lbl">${n} <span class="opt">${h}</span></span>${toggle2('al-' + k, A[k], '✓ Avisar', 'Não')}</div>`).join('')}`;
+  const put = async alerts => { try { await api('PUT', '/api/settings', { alerts }); toast('Avisos salvos ✓'); } catch (e) { toast(e.offline ? 'Sem internet' : e.message); } };
+  $('#al-up', box).onchange = e => put({ upcoming: +e.target.value });
+  for (const [k] of ALERT_OPTS) bindToggle2($('#al-' + k, box), v => put({ [k]: v }));
+}
+
 async function paintPushCard(el, full = false) {
   if (!el) return;
   if (!pushSupported()) {
@@ -3627,9 +3699,11 @@ async function paintPushCard(el, full = false) {
   if (perm === 'granted' && sub) {
     if (full) {
       el.innerHTML = `<div class="card"><b style="color:var(--ok)">✓ Avisos ligados neste aparelho</b>
-        <p class="muted" style="margin:.3rem 0 .6rem">Você recebe um aviso quando uma cliente pedir horário pelo link.</p>
-        <button class="btn small" id="push-test">🔔 Testar aviso</button></div>`;
+        <p class="muted" style="margin:.3rem 0 .6rem">Pedidos pelo link chegam sempre. Escolha os outros avisos:</p>
+        <div id="alert-opts" class="form"><span class="muted">Carregando…</span></div>
+        <button class="btn small" id="push-test" style="margin-top:.6rem">🔔 Testar aviso</button></div>`;
       $('#push-test', el).onclick = () => api('POST', '/api/push/test').then(() => toast('Aviso enviado ✓')).catch(e => alert(e.message));
+      paintAlertOpts($('#alert-opts', el));
     }
     return;
   }
@@ -3637,8 +3711,8 @@ async function paintPushCard(el, full = false) {
     if (full) el.innerHTML = '<p class="muted">Os avisos estão bloqueados neste aparelho. Libere nas configurações do navegador (Notificações) e volte aqui.</p>';
     return;
   }
-  el.innerHTML = `<div class="card push-card"><b>🔔 Receber avisos de pedidos</b>
-    <p class="muted" style="margin:.3rem 0 .6rem">Quando uma cliente pedir horário pelo link, chega um aviso neste aparelho para você confirmar.</p>
+  el.innerHTML = `<div class="card push-card"><b>🔔 Receber avisos no celular</b>
+    <p class="muted" style="margin:.3rem 0 .6rem">Pedidos pelo link, horário chegando, pedido sem confirmar, resumo do dia e mais — mesmo com o app fechado.</p>
     <button class="btn main" id="push-on">Ativar avisos</button></div>`;
   $('#push-on', el).onclick = async () => {
     try {

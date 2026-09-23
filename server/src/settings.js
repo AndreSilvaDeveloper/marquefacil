@@ -41,6 +41,15 @@ export const DEFAULTS = {
   finance: {
     goal: 0,                // meta de entradas do mês (R$; 0 = sem meta)
   },
+  // avisos no celular da profissional (push)
+  alerts: {
+    upcoming: 15,           // minutos antes do horário (0 = não avisa)
+    pending: true,          // pedido do link esperando confirmação
+    prereserve: true,       // pré-reserva sem sinal perto do horário
+    morning: true,          // bom dia com o resumo do dia e aniversariantes
+    evening: true,          // fim do dia: atendimentos sem valor
+    whatsappDown: true,     // WhatsApp automático desconectado
+  },
 };
 
 function merge(base, over) {
@@ -118,6 +127,12 @@ export function updateSettings(current, input) {
         if (w.templates[k] !== undefined) s.whatsapp.templates[k] = text(w.templates[k], 1000).trim() || DEFAULTS.whatsapp.templates[k];
       }
     }
+  }
+
+  const al = input.alerts;
+  if (isObj(al)) {
+    if (al.upcoming !== undefined) s.alerts.upcoming = int(al.upcoming, 0, 180, 'aviso antes do horário');
+    for (const k of ['pending', 'prereserve', 'morning', 'evening', 'whatsappDown']) if (al[k] !== undefined) s.alerts[k] = bool(al[k]);
   }
 
   const f = input.finance;

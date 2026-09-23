@@ -19,6 +19,7 @@ const app = buildApp({
 
 startBackups(app.db, path.join(dataDir, 'backups'));
 app.messenger.startScheduler(); // lembretes pelo WhatsApp
+app.alerts.start();             // avisos no celular da profissional
 
 const port = Number(env.PORT || 3000);
 app.listen({ port, host: '0.0.0.0' }).catch(err => { app.log.error(err); process.exit(1); });

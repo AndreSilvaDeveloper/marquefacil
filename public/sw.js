@@ -1,6 +1,6 @@
 // Guarda os arquivos do app para abrir mesmo sem internet.
 // Ao mudar qualquer arquivo, aumente a versão abaixo.
-const CACHE = 'agenda-v30';
+const CACHE = 'agenda-v32';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -31,8 +31,8 @@ self.addEventListener('push', e => {
     body: d.body || '',
     icon: 'icon-192.png',
     badge: 'icon-192.png',
-    tag: d.apptId || undefined,          // o mesmo pedido não aparece duas vezes
-    renotify: !!d.apptId,
+    tag: d.tag || d.apptId || undefined, // o mesmo pedido não aparece duas vezes
+    renotify: !!(d.tag || d.apptId),
     requireInteraction: !!d.pending,     // pedido fica na tela até ela responder
     data: { url: d.url || '/#/agenda', apptId: d.apptId, pending: !!d.pending },
     actions: d.pending ? [{ action: 'confirm', title: '✓ Confirmar' }, { action: 'open', title: 'Ver pedido' }] : [],

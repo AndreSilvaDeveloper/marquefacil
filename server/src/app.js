@@ -13,6 +13,7 @@ import { evolutionClient, createMessenger, registerWhatsapp } from './whatsapp.j
 import { registerBooking } from './booking.js';
 import { createPush, registerPush } from './push.js';
 import { registerPortal } from './portal.js';
+import { createAlerts } from './alerts.js';
 
 const YEAR = 365 * 24 * 60 * 60;
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
@@ -72,6 +73,7 @@ export function buildApp({
   app.decorate('messenger', messenger);
   const push = createPush({ db, sender: pushSender, log: app.log });
   app.decorate('push', push);
+  app.decorate('alerts', createAlerts({ db, push, evo, log: app.log }));
 
   const getSettings = tenantId => readSettings(db.prepare('SELECT settings FROM tenants WHERE id = ?').get(tenantId)?.settings);
   const saveSettings = (tenantId, s) => db.prepare('UPDATE tenants SET settings = ? WHERE id = ?').run(JSON.stringify(s), tenantId);

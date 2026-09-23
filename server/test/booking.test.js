@@ -632,3 +632,50 @@ test('WhatsApp fica "offline" para o celular continuar recebendo notificações'
   assert.equal(evo.calls.filter(c => c[0] === 'presence').length, before + 1);
   await app.close();
 });
+
+test('avisos no celular: horário chegando, pedido esperando, pré-reserva, bom dia, aniversário, fim do dia', async () => {
+  const pushed = [];
+  const app = buildApp({ pushSender: async (sub, body) => { pushed.push(JSON.parse(body)); } });
+  const call = await salon(app);
+  const { zonedEpoch } = await import('../src/time.js');
+  const tz = 'America/Sao_Paulo';
+  const D = addDays(nowIn(tz).date, 3), at = t => zonedEpoch(D, t, tz);
+  const now = at('09:00');
+
+  // sem aparelho inscrito: nada
+  assert.equal(await app.alerts.run(now), 0);
+  await call('POST', '/api/push/subscribe', { subscription: { endpoint: 'https://push.test/a', keys: { p256dh: 'a', auth: 'b' } } });
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'c1', data: { name: 'Joice Alves', birthday: D.slice(5) } },
+    { coll: 'clients', id: 'c2', data: { name: 'Bia Lima' } },
+    { coll: 'appts', id: 'a1', data: { clientId: 'c1', date: D, time: '09:10', status: 'marcado', service: 'Escova', createdAt: now - 86400e3 } },
+    { coll: 'appts', id: 'a2', data: { clientId: 'c2', date: D, time: '16:00', status: 'pendente', createdAt: now - 40 * 60e3 } },
+    { coll: 'appts', id: 'a3', data: { clientId: 'c2', date: addDays(D, 1), time: '08:00', status: 'prereserva', createdAt: now - 86400e3 } },
+  ] });
+  pushed.length = 0;
+  await app.alerts.run(now);
+  const titles = pushed.map(p => p.title);
+  assert.ok(titles.some(t => /^⏰ Em 10 min: Joice Alves/.test(t)), 'horário chegando');
+  assert.ok(pushed.some(p => /Pedido esperando/.test(p.title) && p.pending && p.apptId === 'a2'), 'pedido esperando, com botão confirmar');
+  assert.ok(titles.some(t => /Pré-reserva ainda sem sinal/.test(t)), 'pré-reserva');
+  assert.ok(titles.some(t => /Bom dia! Hoje você tem 2 horários/.test(t)), 'bom dia');
+  assert.ok(titles.some(t => /aniversário da Joice/.test(t)), 'aniversário');
+  const n = pushed.length;
+  await app.alerts.run(now + 60e3);
+  assert.equal(pushed.length, n, 'cada aviso sai uma vez só');
+
+  // pedido ainda sem resposta perto do horário
+  await app.alerts.run(at('13:30'));
+  assert.ok(pushed.slice(n).some(p => /é hoje/.test(p.title)));
+
+  // fim do dia: atendimento sem valor; e dá para desligar
+  await app.alerts.run(at('20:30'));
+  assert.ok(pushed.some(p => /sem valor/.test(p.title)));
+  await call('PUT', '/api/settings', { alerts: { upcoming: 0, morning: false } });
+  await call('POST', '/api/sync', { changes: [{ coll: 'appts', id: 'a4', data: { clientId: 'c2', date: addDays(D, 1), time: '09:05', status: 'marcado', createdAt: now } }] });
+  const n2 = pushed.length;
+  await app.alerts.run(zonedEpoch(addDays(D, 1), '09:00', tz));
+  assert.ok(!pushed.slice(n2).some(p => /⏰|Bom dia/.test(p.title)), 'desligados não chegam');
+  assert.equal((await call('PUT', '/api/settings', { alerts: { upcoming: 999 } })).status, 400);
+  await app.close();
+});
