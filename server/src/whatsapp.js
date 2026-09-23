@@ -43,6 +43,8 @@ export function renderTemplate(tpl, vars) {
   }).join('\n').replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k] ?? '') : m)).trim();
 }
 
+const brl = v => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
 /* ------------------------- envio das mensagens ------------------------- */
 export function createMessenger({ db, evo, publicUrl = '', log = console }) {
   const q = {
@@ -67,6 +69,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
       dia: dayLabel(appt.date),
       hora: appt.time,
       servico: appt.service || '',
+      valor: appt.price > 0 ? brl(appt.price) : appt.priceLater ? 'avaliado na hora do atendimento' : '',
       link: publicUrl ? `${publicUrl.replace(/\/+$/, '')}/${tenant.slug}` : '',
     };
   }

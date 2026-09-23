@@ -98,6 +98,7 @@ test('link público: serviços, dias, horários e agendar', async () => {
   const info = await pub('GET', '/api/public/studio-ana');
   assert.equal(info.body.name, 'Studio Ana');
   assert.deepEqual(info.body.services.map(s => s.name), ['Escova'], 'serviço fora do link não aparece');
+  assert.deepEqual(Object.keys(info.body.services[0]).sort(), ['description', 'id', 'name'], 'cliente não vê valor nem tempo');
   assert.equal((await pub('GET', '/api/public/nao-existe')).status, 404);
 
   const days = (await pub('GET', '/api/public/studio-ana/days?service=s1')).body.days;
@@ -124,7 +125,7 @@ test('link público: serviços, dias, horários e agendar', async () => {
   const cli = ch.find(c => c.coll === 'clients');
   assert.equal(appt.data.source, 'online');
   assert.equal(appt.data.duration, 60);
-  assert.equal(appt.data.price, 50);
+  assert.equal(appt.data.price, null, 'valor não vem do serviço: é por atendimento');
   assert.equal(cli.data.name, 'Joana Lima');
 
   // Mesma cliente (mesmo telefone) não é cadastrada de novo
@@ -176,12 +177,13 @@ test('WhatsApp: conectar, pedido pelo link, confirmar/recusar, agendamento no ap
 
   // 2) Confirma pelo botão da notificação → cliente recebe a confirmação
   const apptId = pushed[0].apptId;
-  const d = await call('POST', `/api/appts/${apptId}/decision`, { decision: 'confirm' });
+  const d = await call('POST', `/api/appts/${apptId}/decision`, { decision: 'confirm', price: 85 });
   assert.equal(d.body.status, 'marcado');
   await wait();
   const conf = evo.sent.find(m => m.number === '5511988887777');
   assert.match(conf.text, /Olá, Joana! ✅/);
   assert.match(conf.text, /Escova/);
+  assert.match(conf.text, /Valor: R\$\s?85,00/, 'valor colocado ao confirmar vai na mensagem');
   assert.equal((await call('POST', `/api/appts/${apptId}/decision`, { decision: 'confirm' })).body.already, true);
 
   // 3) Outro pedido, recusado pelo app (sincronização) → cliente recebe o aviso com o link
@@ -190,6 +192,7 @@ test('WhatsApp: conectar, pedido pelo link, confirmar/recusar, agendamento no ap
   const pend = (await call('GET', '/api/changes?since=0')).body.changes.find(x => x.coll === 'appts' && x.data.time === '14:00');
   assert.equal(pend.data.status, 'pendente');
   await call('POST', '/api/sync', { changes: [{ coll: 'appts', id: pend.id, data: { ...pend.data, status: 'cancelado' } }] });
+  assert.ok(!evo.sent.some(m => /Valor:/.test(m.text) && m.number === '5521977776666'));
   await wait();
   const dec = evo.sent.find(m => m.number === '5521977776666');
   assert.match(dec.text, /Infelizmente/);
@@ -343,5 +346,28 @@ test('link: cliente escreve um serviço que não está na lista', async () => {
   assert.equal(a.serviceCustom, true);
   assert.equal(a.duration, 60, 'usa o tempo padrão');
   assert.equal(a.price, null);
+  await app.close();
+});
+
+test('confirmar com "avaliar na hora": mensagem avisa; sem valor, linha some', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl } });
+  const call = await salon(app);
+  const pub = client(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  const date = nextWeekday(2);
+  const ids = [];
+  for (const [time, phone] of [['09:00', '11911111111'], ['11:00', '11922222222']]) {
+    const r = await pub('POST', '/api/public/studio-ana/book', { date, time, name: 'Cliente Teste', phone, serviceId: 's1' });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+  }
+  for (const c of (await call('GET', '/api/changes?since=0')).body.changes) if (c.coll === 'appts') ids.push(c);
+  const [a1, a2] = ids.sort((x, y) => x.data.time.localeCompare(y.data.time));
+  await call('POST', `/api/appts/${a1.id}/decision`, { decision: 'confirm', priceLater: true });
+  await call('POST', `/api/appts/${a2.id}/decision`, { decision: 'confirm' });
+  await new Promise(r => setTimeout(r, 50));
+  assert.match(evo.sent.find(m => m.number === '5511911111111').text, /Valor: avaliado na hora do atendimento/);
+  assert.doesNotMatch(evo.sent.find(m => m.number === '5511922222222').text, /Valor/, 'sem valor: linha some');
   await app.close();
 });

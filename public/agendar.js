@@ -14,8 +14,6 @@ const slug = location.pathname.split('/').filter(Boolean)[0] || '';
 const API = `/api/public/${encodeURIComponent(slug)}`;
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const brl = v => (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-const fmtDur = m => !m ? '' : m < 60 ? `${m} min` : `${Math.floor(m / 60)}h${m % 60 ? String(m % 60).padStart(2, '0') : ''}`;
 const pad = n => String(n).padStart(2, '0');
 const toDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
 const dstr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -90,7 +88,7 @@ function stepService() {
   return frame('Qual serviço você quer?', `
     <div class="pick" id="services">
       ${st.info.services.map(s => `<button type="button" data-id="${s.id}" class="${st.service?.id === s.id ? 'on' : ''}">${esc(s.name)}
-        <small>${[fmtDur(s.duration), s.price ? brl(s.price) : ''].filter(Boolean).join(' · ') || '&nbsp;'}</small></button>`).join('')}
+        ${s.description ? `<small>${esc(s.description)}</small>` : ''}</button>`).join('')}
       <button type="button" data-id="" class="${st.writing ? 'on' : ''}">✏️ Outro serviço (escrever)</button>
     </div>
     ${st.writing ? `
@@ -99,7 +97,8 @@ function stepService() {
         <input type="text" id="svc" maxlength="80" value="${esc(st.serviceText)}" placeholder="Ex.: Luzes, progressiva, unha em gel…" autocapitalize="sentences">
         <small class="hint">O salão confirma se faz esse serviço.</small></div>
       <button class="btn main" type="submit">Continuar ›</button>
-    </form>` : ''}`, { back: false });
+    </form>` : ''}
+    <p class="price-note">💬 O valor varia conforme o serviço e cada cliente. O salão informa o valor quando confirmar o seu horário.</p>`, { back: false });
 }
 
 function stepDay() {
@@ -255,7 +254,7 @@ function done(r) {
       ${r.service ? `<p>💇 ${esc(r.service)}</p>` : ''}
       <p class="muted">${esc(r.salon)}</p>
       ${r.pending
-        ? '<p><b>O salão vai confirmar o seu horário.</b><br>Você recebe a confirmação pelo WhatsApp. 💬</p>'
+        ? '<p><b>O salão vai confirmar o seu horário.</b><br>Você recebe a confirmação e o valor pelo WhatsApp. 💬</p>'
         : '<p class="muted">Se precisar remarcar ou cancelar, fale com o salão pelo WhatsApp.</p>'}
       <button class="btn" id="again" style="margin-top:1rem">Pedir outro horário</button>
     </div>`;

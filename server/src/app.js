@@ -210,7 +210,13 @@ export function buildApp({
     const to = req.body?.decision === 'decline' ? 'cancelado' : req.body?.decision === 'confirm' ? 'marcado' : null;
     if (!to) fail(400, 'Decisão inválida.');
     if (a.status !== 'pendente') return { ok: true, status: a.status, already: true };
-    applyChanges(db, tenantId, [{ coll: 'appts', id, data: { ...a, status: to } }]);
+    // valor deste atendimento (opcional) ou "avaliar na hora"
+    const price = Number(req.body?.price);
+    const extra = to === 'marcado' ? {
+      ...(price > 0 ? { price: Math.round(price * 100) / 100, priceLater: false } : {}),
+      ...(req.body?.priceLater === true ? { priceLater: true } : {}),
+    } : {};
+    applyChanges(db, tenantId, [{ coll: 'appts', id, data: { ...a, ...extra, status: to } }]);
     afterDecision(tenantId, id, 'pendente', to);
     return { ok: true, status: to };
   });

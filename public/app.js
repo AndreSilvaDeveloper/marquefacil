@@ -379,6 +379,7 @@ function badgesFor(a) {
   else if (a.status === 'feito') b.push('<span class="badge ok">✓ Feito</span>');
   if (a.status !== 'cancelado') {
     if (a.status !== 'pendente') b.push(payBadge(a, apptDue(a) ? 'Não pago' : 'A pagar'));
+    if (a.priceLater && !(a.price > 0) && a.status !== 'cancelado') b.push('<span class="badge">🔎 Valor na hora</span>');
     if (conflictsFor(a.date, a.time, a.duration, a.id).length) b.push('<span class="badge warn">⚠️ Horário junto</span>');
     if (a.source === 'online') b.push('<span class="badge">🌐 Pelo link</span>');
     if (a.seriesId) b.push('<span class="badge">🔁 Fixa</span>');
@@ -449,18 +450,51 @@ const nextInSeries = a => db.appts.filter(x => x.seriesId && x.seriesId === a.se
 const pendingAppts = () => db.appts.filter(a => a.status === 'pendente').sort(byWhen);
 
 // Aceitar ou recusar um pedido do link (o servidor manda a mensagem para a cliente)
-function decide(a, ok) {
+function decide(a, ok, value = {}) {
   if (!ok && !confirm(`Recusar o pedido de ${clientName(a.clientId)}? Ela recebe um aviso para escolher outro horário.`)) return false;
+  if (ok) {
+    if (value.price > 0) { a.price = value.price; a.priceLater = false; }
+    else if (value.later) a.priceLater = true;
+  }
   a.status = ok ? 'marcado' : 'cancelado';
   save();
   toast(ok ? `Confirmado ✓ ${clientName(a.clientId)} vai receber a confirmação` : 'Pedido recusado');
   return true;
 }
 
+// Janela "Confirmar pedido": valor deste atendimento (se quiser) ou avaliar na hora
+function confirmSheet(a, onDone) {
+  let later = !!a.priceLater;
+  const bg = document.createElement('div');
+  bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet form" role="dialog" aria-modal="true">
+    <h2>✓ Confirmar pedido</h2>
+    <p class="muted" style="margin-top:-.3rem">${esc(clientName(a.clientId))} — ${esc(a.service || 'Serviço')}<br>${esc(dayName(a.date))}, ${fmtShort(a.date)} às ${a.time}</p>
+    <div class="field"><label for="cs-v">Valor deste atendimento <span class="opt">(se quiser)</span></label>
+      <div class="money"><input type="text" id="cs-v" inputmode="decimal" placeholder="0,00" value="${moneyVal(a.price)}"></div></div>
+    <button type="button" class="chip ${later ? 'on' : ''}" id="cs-later" style="width:100%">🔎 Avaliar o valor na hora do atendimento</button>
+    <small class="hint">A cliente recebe a confirmação no WhatsApp com o valor (ou "avaliado na hora"). Pode deixar em branco e colocar depois.</small>
+    <div id="cs-err" style="margin-top:.6rem"></div>
+    <button class="btn ok" id="cs-ok" style="margin-top:.6rem">✓ Confirmar agendamento</button>
+    <button class="btn" id="cs-no" style="margin-top:.6rem">Cancelar</button>
+  </div>`;
+  document.body.appendChild(bg);
+  const close = () => bg.remove();
+  const inp = $('#cs-v', bg), lat = $('#cs-later', bg);
+  lat.onclick = () => { later = !later; lat.classList.toggle('on', later); if (later) inp.value = ''; };
+  inp.oninput = () => { if (inp.value.trim()) { later = false; lat.classList.remove('on'); } };
+  $('#cs-no', bg).onclick = close;
+  bg.onclick = e => { if (e.target === bg) close(); };
+  $('#cs-ok', bg).onclick = () => {
+    const v = inp.value.trim() ? parseMoney(inp.value) : null;
+    if (inp.value.trim() && v == null) { $('#cs-err', bg).innerHTML = '<div class="error">O valor não está certo. Exemplo: 80,00</div>'; return; }
+    close();
+    onDone({ price: v, later: !v && later });
+  };
+}
+
 const clientItems = () => [...db.clients].sort(byName).map(c => ({ id: c.id, label: c.name, sub: c.phone || '' }));
-const serviceItems = () => [...db.services].sort(byName).map(s => ({
-  id: s.id, label: s.name, sub: [fmtDur(s.duration), s.price ? brl(s.price) : ''].filter(Boolean).join(' · '),
-}));
+const serviceItems = () => [...db.services].sort(byName).map(s => ({ id: s.id, label: s.name, sub: s.description || '' }));
 const productItems = () => [...db.products].sort(byName).map(p => ({ id: p.id, label: p.name, sub: p.price ? brl(p.price) : '' }));
 
 function nameHint(el, list, name, newMsg, okMsg) {
@@ -665,8 +699,9 @@ function vApptForm(_, q) {
         </div>
 
         <div class="field">
-          <label for="f-price">Valor <span class="opt">(se quiser)</span></label>
+          <label for="f-price">Valor deste atendimento <span class="opt">(se quiser)</span></label>
           <div class="money"><input type="text" id="f-price" inputmode="decimal" placeholder="0,00" value="${moneyVal(a.price)}"></div>
+          <button type="button" class="chip ${a.priceLater && !(a.price > 0) ? 'on' : ''}" id="f-later" style="margin-top:.5rem">🔎 Avaliar na hora</button>
         </div>
 
         <div class="field">
@@ -732,7 +767,6 @@ function vApptForm(_, q) {
       // Serviço já conhecido: completa tempo e valor (sem apagar o que ela já escreveu)
       const fillFromService = s => {
         if (s?.duration && !dur) { dur = s.duration; paintDur(); checkConflict(); }
-        if (s?.price && !iPrice.value) iPrice.value = moneyVal(s.price);
       };
       const onService = () => {
         nameHint($('#h-service', el), db.services, iService.value, '✨ Serviço novo — vai ficar salvo na lista', '✓ Serviço da sua lista');
@@ -764,6 +798,8 @@ function vApptForm(_, q) {
         method = b.dataset.m;
         el.querySelectorAll('#f-method button').forEach(x => x.classList.toggle('on', x === b));
       };
+      $('#f-later', el).onclick = e => { const on = !e.currentTarget.classList.contains('on'); e.currentTarget.classList.toggle('on', on); if (on) iPrice.value = ''; };
+      iPrice.addEventListener('input', () => { if (iPrice.value.trim()) $('#f-later', el).classList.remove('on'); });
 
       paintDur(); checkConflict();
       if (cName) iClient.dispatchEvent(new Event('change'));
@@ -787,14 +823,14 @@ function vApptForm(_, q) {
         if (phone) c.phone = phone;
         const svcName = iService.value.trim();
         if (svcName) {
-          const s = findOrCreate(db.services, svcName, { duration: dur, price });
+          const s = findOrCreate(db.services, svcName, { duration: dur, description: '' });
           if (!s.duration && dur) s.duration = dur;
-          if (!s.price && price) s.price = price;
         }
         const data = {
           clientId: c.id, date: iDate.value, time,
           service: svcName ? findByName(db.services, svcName).name : '',
           duration: dur, price, notes: $('#f-notes', el).value.trim(),
+          priceLater: !(price > 0) && $('#f-later', el).classList.contains('on'),
         };
         // pagamento: "Já pagou" lança o que falta; "Ainda não" desfaz
         const setPay = x => {
@@ -861,9 +897,10 @@ function vAppt(id) {
       ${a.status !== 'cancelado' && a.status !== 'pendente' ? `
       <div class="stack">
         <div class="form">
-          <label for="price">Valor do serviço</label>
-          <div class="quickprice"><div class="money"><input type="text" id="price" inputmode="decimal" placeholder="0,00" value="${moneyVal(a.price)}"></div>
+          <label for="price">Valor deste atendimento</label>
+          <div class="quickprice"><div class="money"><input type="text" id="price" inputmode="decimal" placeholder="${a.priceLater ? 'Avaliar na hora' : '0,00'}" value="${moneyVal(a.price)}"></div>
           <button class="btn small main" id="save-price">Salvar</button></div>
+          ${!(a.price > 0) ? `<button type="button" class="chip ${a.priceLater ? 'on' : ''}" id="later" style="margin-top:.5rem">🔎 Avaliar na hora</button>` : ''}
         </div>
         <div class="card">
           <span class="lbl" style="font-weight:700;display:block;margin-bottom:.35rem">Pagamento</span>
@@ -894,12 +931,13 @@ function vAppt(id) {
         const v = $('#price', el).value;
         const p = parseMoney(v);
         if (v.trim() && p == null) { alert('O valor não está certo. Exemplo: 50,00'); return; }
-        upd(() => { a.price = p; refreshPaid(a); }, 'Valor salvo ✓');
+        upd(() => { a.price = p; if (p > 0) a.priceLater = false; refreshPaid(a); }, 'Valor salvo ✓');
       });
+      $('#later', el) && ($('#later', el).onclick = () => upd(() => (a.priceLater = !a.priceLater), a.priceLater ? 'Pronto' : 'Valor fica para avaliar na hora'));
       $('#receive', el) && ($('#receive', el).onclick = () => paySheet(a, `${clientName(a.clientId)} — ${a.service || 'Serviço'}`, (v, m) =>
         upd(() => addPayment(a, v, m), isPaid(a) ? `Pago ✓ (${PAY[m]})` : `Recebido ${brl(v)} ✓`)));
       $('#unpay', el) && ($('#unpay', el).onclick = () => confirm('Apagar os pagamentos lançados neste horário?') && upd(() => clearPayments(a), 'Pagamento desfeito'));
-      $('#accept', el) && ($('#accept', el).onclick = () => { decide(a, true); render(); });
+      $('#accept', el) && ($('#accept', el).onclick = () => confirmSheet(a, v => { decide(a, true, v); render(); }));
       $('#decline', el) && ($('#decline', el).onclick = () => { if (decide(a, false)) render(); });
       $('#done', el) && ($('#done', el).onclick = () => upd(() => (a.status = 'feito'), 'Atendimento feito ✓'));
       $('#undo-done', el) && ($('#undo-done', el).onclick = () => upd(() => (a.status = 'marcado'), 'Pronto'));
@@ -982,7 +1020,9 @@ function vPedidos() {
         const b = e.target.closest('[data-ok],[data-no]');
         if (!b) return;
         const a = db.appts.find(x => x.id === (b.dataset.ok || b.dataset.no));
-        if (a && decide(a, !!b.dataset.ok)) render();
+        if (!a) return;
+        if (b.dataset.ok) confirmSheet(a, v => { decide(a, true, v); render(); });
+        else if (decide(a, false)) render();
       });
     },
   };
@@ -1547,7 +1587,9 @@ function vItems(kind) {
       <p class="muted">Eles também são salvos sozinhos quando você escreve um ${K.one} novo ${kind === 'services' ? 'ao agendar' : 'ao vender'}.</p>
       <div class="list">${list.length ? list.map(it => `
         <a class="card line" href="#/item/${kind}?id=${it.id}">
-          <div class="grow"><b>${esc(it.name)}</b><span>${[K.withDur ? fmtDur(it.duration) : '', it.price ? brl(it.price) : ''].filter(Boolean).join(' · ') || 'Sem valor definido'}</span></div>
+          <div class="grow"><b>${esc(it.name)}</b>${K.withDur
+            ? (it.description ? `<span>${esc(it.description)}</span>` : '')
+            : `<span>${it.price ? brl(it.price) : 'Sem valor definido'}</span>`}</div>
           ${!K.withDur && hasStock(it) ? `<span class="badge ${lowStock(it) ? 'bad' : ''}">${stockLabel(it)}</span>` : ''}
           <span class="muted">›</span></a>`).join('') : `<div class="empty">Nenhum ${K.one} ainda.</div>`}</div>`,
   };
@@ -1562,12 +1604,15 @@ function vItemForm(kind, q) {
       <form class="form" id="f" autocomplete="off" novalidate>
         <div id="err"></div>
         <div class="field"><label for="n">Nome <em>*</em></label><input type="text" id="n" value="${esc(it?.name || '')}"></div>
-        ${K.withDur ? `<div class="field"><label for="d">Duração em minutos <span class="opt">(se quiser)</span></label>
+        ${K.withDur ? `<div class="field"><label for="ds">Descrição <span class="opt">(se quiser — a cliente vê no link)</span></label>
+          <textarea id="ds" placeholder="Ex.: Lavagem, hidratação e escova modelada">${esc(it?.description || '')}</textarea></div>
+        <div class="field"><label for="d">Quanto tempo costuma levar? <span class="opt">(minutos — só para reservar a agenda, a cliente não vê)</span></label>
           <input type="number" id="d" inputmode="numeric" min="5" step="5" value="${it?.duration || ''}" placeholder="Ex.: 60"></div>` : ''}
         ${K.withDur ? `<div class="field"><span class="lbl">Aparece no link de agendamento?</span>
           ${toggle2('online', it?.online !== false, '✓ Sim', 'Não')}</div>` : ''}
-        <div class="field"><label for="p">Valor <span class="opt">(se quiser)</span></label>
-          <div class="money"><input type="text" id="p" inputmode="decimal" placeholder="0,00" value="${moneyVal(it?.price)}"></div></div>
+        ${!K.withDur ? `<div class="field"><label for="p">Valor <span class="opt">(se quiser)</span></label>
+          <div class="money"><input type="text" id="p" inputmode="decimal" placeholder="0,00" value="${moneyVal(it?.price)}"></div></div>` : `
+        <p class="muted">💰 O valor é colocado em cada atendimento (muda conforme o serviço e a cliente).</p>`}
         ${!K.withDur ? `
         <div class="field"><label for="st">Quantos tem em estoque? <span class="opt">(se quiser controlar)</span></label>
           <input type="number" id="st" inputmode="numeric" min="0" step="1" value="${hasStock(it) ? it.stock : ''}" placeholder="Deixe vazio para não controlar">
@@ -1591,14 +1636,17 @@ function vItemForm(kind, q) {
         if (!name) { $('#err', el).innerHTML = '<div class="error">Escreva o nome.</div>'; return; }
         const same = findByName(K.list(), name);
         if (same && same !== it) { $('#err', el).innerHTML = `<div class="error">Já existe "${esc(same.name)}".</div>`; return; }
-        const pv = $('#p', el).value, price = parseMoney(pv);
-        if (pv.trim() && price == null) { $('#err', el).innerHTML = '<div class="error">O valor não está certo. Exemplo: 50,00</div>'; return; }
-        const data = { name, price };
+        const data = { name };
         if (K.withDur) {
           const d = parseInt($('#d', el).value, 10);
           data.duration = d > 0 ? d : null;
           data.online = $('#online .yes', el).classList.contains('on');
+          data.description = $('#ds', el).value.trim();
+          data.price = null; // valor é por atendimento
         } else {
+          const pv = $('#p', el).value, price = parseMoney(pv);
+          if (pv.trim() && price == null) { $('#err', el).innerHTML = '<div class="error">O valor não está certo. Exemplo: 50,00</div>'; return; }
+          data.price = price;
           const st = $('#st', el).value.trim();
           data.stock = st === '' ? null : Math.max(0, parseInt(st, 10) || 0);
           data.minStock = Math.max(0, parseInt($('#ms', el).value, 10) || 0);

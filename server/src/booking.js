@@ -45,7 +45,8 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
   const onlineServices = tenantId => all(tenantId, 'services')
     .filter(s => s.online !== false && s.name)
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
-    .map(s => ({ id: s.id, name: s.name, duration: s.duration || null, price: s.price || null }));
+    // a cliente vê só nome e descrição; o tempo fica aqui dentro para reservar a agenda
+    .map(s => ({ id: s.id, name: s.name, description: s.description || '', duration: s.duration || null }));
   function durationFor(tenantId, s, serviceId) {
     if (!serviceId) return { service: null, duration: s.booking.defaultDuration };
     const service = onlineServices(tenantId).find(x => x.id === serviceId);
@@ -58,7 +59,8 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
     const { t, s, now } = load(req.params.slug);
     return {
       name: t.name, slug: t.slug, enabled: s.booking.enabled, message: s.booking.message, approval: s.booking.requireApproval,
-      services: s.booking.enabled ? onlineServices(t.id) : [], today: now.date,
+      services: s.booking.enabled ? onlineServices(t.id).map(({ id, name, description }) => ({ id, name, description })) : [],
+      today: now.date,
     };
   });
 
@@ -122,7 +124,7 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
       }
       const appt = {
         id: uid(), clientId: client.id, date, time, duration,
-        service: service?.name || serviceText, price: service?.price ?? null, paid: false,
+        service: service?.name || serviceText, price: null, paid: false, // valor é por atendimento: a profissional coloca ao confirmar
         ...(serviceText ? { serviceCustom: true } : {}),
         status: s.booking.requireApproval ? 'pendente' : 'marcado',
         notes: String(b.notes || '').trim().slice(0, 300), source: 'online', createdAt: Date.now(),

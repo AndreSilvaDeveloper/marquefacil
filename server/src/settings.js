@@ -27,7 +27,7 @@ export const DEFAULTS = {
     notifyOwner: true,      // avisar a profissional de agendamento pelo link
     ownerPhone: '',         // número que recebe o aviso (vazio = o próprio número conectado)
     templates: {
-      confirm: 'Olá, {nome}! ✅\nSeu horário no *{salao}* está marcado:\n📅 {dia} às {hora}\n💇 {servico}\n\nSe precisar remarcar, é só responder esta mensagem.',
+      confirm: 'Olá, {nome}! ✅\nSeu horário no *{salao}* está marcado:\n📅 {dia} às {hora}\n💇 {servico}\n💰 Valor: {valor}\n\nSe precisar remarcar, é só responder esta mensagem.',
       reminder: 'Olá, {nome}! Passando para lembrar do seu horário no *{salao}*:\n📅 {dia} às {hora}\n💇 {servico}\n\nTe esperamos! 💖',
       owner: '📅 Novo pedido de agendamento pelo link!\n👩 {nome_completo} — {telefone}\n📅 {dia} às {hora}\n💇 {servico}\n\nAbra o app para confirmar.',
       decline: 'Olá, {nome}. Infelizmente não conseguimos atender {dia} às {hora} no *{salao}*. 😕\nEscolha outro horário aqui: {link}',
