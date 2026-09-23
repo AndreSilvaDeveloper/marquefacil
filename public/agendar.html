@@ -20,15 +20,29 @@
     }
     .pick button small { display: block; font-weight: 400; color: var(--muted); }
     .pick button.on { border-color: var(--brand); background: var(--brand-soft); }
-    .days { display: flex; gap: .45rem; overflow-x: auto; padding-bottom: .4rem; scroll-snap-type: x mandatory; }
-    .days button {
-      flex: 0 0 4.4rem; scroll-snap-align: start; border: 2px solid var(--line); background: #fff; border-radius: 12px;
-      padding: .45rem 0; text-align: center; font-size: .8rem; color: var(--muted); cursor: pointer;
+    /* calendário do mês */
+    .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .6rem; }
+    .cal-head b { font-size: 1.15rem; }
+    .cal-nav { width: 3rem; height: 3rem; border-radius: 50%; border: 2px solid var(--line); background: #fff; font-size: 1.5rem; font-weight: 700; color: var(--brand); cursor: pointer; }
+    .cal-nav:disabled { opacity: .3; cursor: default; }
+    .cal { margin: 0 -.7rem; }
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: .2rem; }
+    .cal-week span { text-align: center; font-size: .8rem; font-weight: 700; color: var(--muted); padding-bottom: .2rem; }
+    .cal-grid > * { min-width: 0; }
+    #cal button {
+      width: 100%; aspect-ratio: 1; padding: 0; border-radius: 12px; border: 2px solid var(--brand); background: var(--brand-soft);
+      color: var(--ink); font-size: 1.1rem; font-weight: 800; cursor: pointer;
     }
-    .days button b { display: block; font-size: 1.3rem; color: var(--ink); }
-    .days button:disabled { opacity: .35; cursor: default; }
-    .days button.on { background: var(--brand); border-color: var(--brand); color: #fff; }
-    .days button.on b { color: #fff; }
+    #cal button:disabled { border-color: transparent; background: none; color: #c9c0c4; font-weight: 400; cursor: default; }
+    #cal button.today:not(:disabled) { box-shadow: inset 0 0 0 2px #fff; }
+    #cal button.on { background: var(--brand); color: #fff; }
+    /* progresso e o que já foi escolhido */
+    .progress { display: flex; gap: .35rem; margin-bottom: .8rem; }
+    .progress i { flex: 1; height: 6px; border-radius: 3px; background: var(--line); }
+    .progress i.on { background: var(--brand); }
+    .picked { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .8rem; }
+    .picked button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: .45rem .8rem; font-weight: 600; cursor: pointer; }
+    .picked button span { color: var(--brand); font-size: .8rem; margin-left: .3rem; text-decoration: underline; }
     .times { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.2rem, 1fr)); gap: .45rem; }
     .times button { border: 2px solid var(--line); background: #fff; border-radius: 12px; min-height: 3rem; font-weight: 800; font-size: 1.05rem; cursor: pointer; }
     .times button.on { background: var(--brand); border-color: var(--brand); color: #fff; }

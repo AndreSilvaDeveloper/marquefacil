@@ -100,6 +100,8 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
     if (!waNumber(phone)) fail(400, 'Escreva o seu WhatsApp com DDD. Exemplo: (11) 99999-9999');
     if (!DATE_RE.test(date) || !TIME_RE.test(time)) fail(400, 'Escolha o dia e o horário.');
     const { service, duration } = durationFor(t.id, s, b.serviceId || null);
+    // Serviço que não está na lista, escrito pela cliente (a profissional decide ao confirmar)
+    const serviceText = service ? '' : String(b.serviceText || '').trim().replace(/\s+/g, ' ').slice(0, 80);
 
     // Confere de novo e grava junto, para duas pessoas não pegarem o mesmo horário
     const result = db.transaction(() => {
@@ -120,7 +122,8 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
       }
       const appt = {
         id: uid(), clientId: client.id, date, time, duration,
-        service: service?.name || '', price: service?.price ?? null, paid: false,
+        service: service?.name || serviceText, price: service?.price ?? null, paid: false,
+        ...(serviceText ? { serviceCustom: true } : {}),
         status: s.booking.requireApproval ? 'pendente' : 'marcado',
         notes: String(b.notes || '').trim().slice(0, 300), source: 'online', createdAt: Date.now(),
       };

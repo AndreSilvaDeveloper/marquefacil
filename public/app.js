@@ -375,6 +375,7 @@ $('#btn-back').addEventListener('click', () => back());
 function badgesFor(a) {
   const b = [];
   if (a.status === 'pendente') b.push('<span class="badge warn">⏳ Aguardando você confirmar</span>');
+  if (a.serviceCustom && a.status === 'pendente') b.push('<span class="badge">✏️ Serviço escrito pela cliente</span>');
   if (a.status === 'cancelado') b.push('<span class="badge bad">Cancelado</span>');
   else if (a.status === 'feito') b.push('<span class="badge ok">✓ Feito</span>');
   if (a.status !== 'cancelado') {

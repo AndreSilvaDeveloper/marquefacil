@@ -329,3 +329,19 @@ test('cliente fixa: só a 1ª data recebe confirmação; despesas sincronizam', 
   assert.ok((await call('GET', '/api/changes?since=0')).body.changes.some(c => c.coll === 'expenses'));
   await app.close();
 });
+
+test('link: cliente escreve um serviço que não está na lista', async () => {
+  const app = buildApp();
+  const call = await salon(app);
+  const pub = client(app);
+  const date = nextWeekday(5);
+  const r = await pub('POST', '/api/public/studio-ana/book', { date, time: '11:00', name: 'Rita', phone: '11933332222', serviceText: '  Luzes   e corte  ' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.service, 'Luzes e corte');
+  const a = (await call('GET', '/api/changes?since=0')).body.changes.find(c => c.coll === 'appts').data;
+  assert.equal(a.service, 'Luzes e corte');
+  assert.equal(a.serviceCustom, true);
+  assert.equal(a.duration, 60, 'usa o tempo padrão');
+  assert.equal(a.price, null);
+  await app.close();
+});
