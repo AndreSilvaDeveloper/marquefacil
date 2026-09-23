@@ -548,3 +548,17 @@ a.rank-row { color: inherit; text-decoration: none; }
 .tile i { position: absolute; top: .3rem; right: .35rem; min-width: 1.4rem; height: 1.4rem; padding: 0 .3rem; border-radius: 999px; background: var(--brand); color: #fff; font-style: normal; font-weight: 800; font-size: .75rem; display: grid; place-items: center; }
 .tile.alert { border: 2px solid var(--warn); background: var(--warn-soft); }
 .tile.alert i { background: var(--warn); }
+
+/* ---------- Dinheiro: atalhos e últimos 6 meses ---------- */
+.finactions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; margin-bottom: .8rem; }
+.finactions .btn.small { width: 100%; }
+.mchart { margin-top: .8rem; }
+.mbars { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .4rem; align-items: end; margin-top: .6rem; }
+.mbar { display: flex; flex-direction: column; align-items: center; gap: .2rem; text-decoration: none; color: inherit; }
+.mbar span { position: relative; width: 100%; height: 7rem; display: flex; align-items: flex-end; }
+.mbar i { display: block; width: 100%; background: var(--ok); opacity: .45; border-radius: 6px 6px 0 0; }
+.mbar.on i { opacity: 1; }
+.mbar small { font-size: .7rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+.mbar em { font-style: normal; font-size: .8rem; font-weight: 700; text-transform: capitalize; }
+.mbar.on em { color: var(--ok); }
+.finactions .btn.small { flex-direction: row; white-space: nowrap; font-size: .88rem; padding: .35rem .3rem; }

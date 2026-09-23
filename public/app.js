@@ -2567,6 +2567,40 @@ function vFin(_, q) {
   const group = (list, key) => Object.entries(list.reduce((acc, p) => { const k = key(p); acc[k] = (acc[k] || 0) + p.v; return acc; }, {}))
     .sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => [k, round2(v)]);
 
+  // Entradas dos últimos 6 meses (até o mês aberto): toque numa barra abre aquele mês
+  const monthsChart = () => {
+    const ms = Array.from({ length: 6 }, (_, i) => shift(i - 5));
+    const vals = ms.map(receivedIn);
+    const max = Math.max(...vals);
+    if (!max || vals.filter(Boolean).length < 2) return '';
+    return `<div class="card mchart">
+      <div class="chart-head"><b>Últimos 6 meses</b><span class="muted">entradas</span></div>
+      <div class="mbars" role="img" aria-label="Entradas dos últimos 6 meses">${ms.map((mm, i) => `
+        <a class="mbar ${mm === m ? 'on' : ''}" href="${url({ m: mm, f: '', pm: '', dia: '' })}" data-f aria-label="${mm}: ${brl(vals[i])}">
+          <small>${vals[i] ? brl(vals[i]).replace(/,\d\d$/, '').replace('R$', '').trim() : ''}</small>
+          <span><i style="height:${vals[i] ? Math.max(3, vals[i] / max * 100) : 0}%"></i></span>
+          <em>${new Date(+mm.slice(0, 4), +mm.slice(5) - 1, 1).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')}</em></a>`).join('')}
+      </div></div>`;
+  };
+
+  // Planilha do mês: cada entrada e saída (para a contadora ou para guardar)
+  const exportCsv = () => {
+    const cell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const rows = [['Data', 'Tipo', 'Descrição', 'Cliente', 'Forma', 'Valor (R$)']];
+    const all = [
+      ...received.map(p => [p.d, 'Entrada', p.k === 'a' ? (p.it.service || 'Serviço') : `${p.it.product}${p.it.qty > 1 ? ` (${p.it.qty}x)` : ''}`, clientName(p.it.clientId), PAY[p.m] || '', moneyVal(p.v)]),
+      ...expenses.map(e => [e.date, 'Saída', [e.desc, e.cat].filter(Boolean).join(' · ') || 'Despesa', '', '', '-' + moneyVal(e.amount)]),
+    ].sort((a, b) => a[0].localeCompare(b[0])).map(r => [fmtShort(r[0]), ...r.slice(1)]);
+    rows.push(...all, [], ['', 'Entrou', '', '', '', moneyVal(recTotal)], ['', 'Saiu', '', '', '', '-' + moneyVal(spent)], ['', 'Lucro', '', '', '', moneyVal(profit)]);
+    const csv = '\ufeff' + rows.map(r => r.map(cell).join(';')).join('\r\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    a.download = `dinheiro-${m}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast(`Planilha de ${monthLabel} baixada ✓`);
+  };
+
   // Resumo em texto para mandar no WhatsApp (para a contadora, sócia ou para guardar)
   const shareText = (diff, prev) => [
     `💰 *Resumo de ${monthLabel}* — ${session.tenant.name}`,
@@ -2593,12 +2627,7 @@ function vFin(_, q) {
     if (dueMonth.length + dueOld.length) tips.push(`<a class="card line" href="${url({ f: 'falta' })}" data-f><div class="grow"><b>💸 ${plural(dueMonth.length + dueOld.length, 'conta para receber', 'contas para receber')}</b><span>${brl(owed + owedOld)} no total</span></div><span class="muted">›</span></a>`);
     if (fixedTodo.length) tips.push(`<a class="card line" href="${url({ f: 'saiu' })}" data-f><div class="grow"><b>📌 ${plural(fixedTodo.length, 'despesa fixa para lançar', 'despesas fixas para lançar')}</b><span>${fixedTodo.map(e => esc(e.desc || e.cat)).join(', ')} · ${brl(sumBy(fixedTodo, e => e.amount))}</span></div><span class="muted">›</span></a>`);
     if (noPrice.length) tips.push(`<a class="card line" href="${url({ f: 'semvalor' })}" data-f><div class="grow"><b>✏️ ${plural(noPrice.length, 'atendimento sem valor', 'atendimentos sem valor')}</b><span>Coloque quanto foi cobrado</span></div><span class="muted">›</span></a>`);
-    // Caixa de hoje: o que entrou hoje, separado por forma (o "Dinheiro" é o que tem na gaveta)
-    const t = today(), todayPays = received.filter(p => p.d === t);
-    const cashBox = !isNow ? '' : `<a class="card cashbox" href="${url({ f: 'entrou', pm: '', dia: t })}" data-f>
-      <div class="line"><b class="grow">🧾 Caixa de hoje</b><b style="color:var(--ok)">${brl(sumBy(todayPays, p => p.v))}</b></div>
-      ${todayPays.length ? `<div class="paysplit">${Object.entries(PAY).map(([k, n]) => `<span><small>${n}</small><b>${brl(sumBy(todayPays.filter(p => p.m === k), p => p.v))}</b></span>`).join('')}</div>
-      <small class="muted">${plural(todayPays.length, 'pagamento', 'pagamentos')} hoje · 💵 em dinheiro é o que deve ter na gaveta</small>` : '<small class="muted">Nenhum pagamento recebido hoje ainda.</small>'}</a>`;
+    const t = today();
     // Meta do mês
     const pct = goal ? Math.min(100, Math.round(recTotal / goal * 100)) : 0;
     const lastDay = new Date(y, mo, 0).getDate(), daysLeft = isNow ? lastDay - +t.slice(8, 10) + 1 : 0;
@@ -2607,13 +2636,13 @@ function vFin(_, q) {
         <div class="pbar" role="img" aria-label="${pct}% da meta"><i style="width:${pct}%"></i></div>
         <span>${recTotal >= goal ? `<b style="color:var(--ok)">🎉 Meta batida!</b> Entrou ${brl(recTotal)}.`
           : `<b>${pct}%</b> · faltam <b>${brl(goal - recTotal)}</b>${daysLeft ? ` em ${plural(daysLeft, 'dia', 'dias')}${expected ? ` · marcados ainda: ${brl(expected)}` : ''}` : ''}`}</span></div>`
-      : `<button class="btn" data-goal style="margin-bottom:.8rem">🎯 Definir uma meta para o mês</button>`;
+      : '';
     // Formas de pagamento do mês
     const methods = Object.entries(PAY).map(([k, n]) => [k, n, sumBy(received.filter(p => p.m === k), p => p.v)]).filter(r => r[2] > 0);
     const methodBox = methods.length ? `<h2>💳 Como você recebeu</h2><div class="card rank">${methods.sort((a, b) => b[2] - a[2]).map(([k, n, v]) => `
       <a class="rank-row" href="${url({ f: 'entrou', pm: k })}" data-f><span class="rank-name">${n}</span><span class="rank-bar"><i style="width:${Math.max(4, v / methods[0][2] * 100)}%"></i></span><b>${brl(v)} <small class="muted">${Math.round(v / recTotal * 100)}%</small></b></a>`).join('')}</div>` : '';
-    return `${cashBox}${goalBox}
-      <p class="muted" style="text-align:center;margin:.2rem 0 .8rem">👆 Toque em um quadro para ver os detalhes.</p>
+    const people = new Set(doneAppts.map(a => a.clientId)).size;
+    return `${goalBox}
       ${tips.length ? `<h2>Precisa de atenção</h2><div class="list">${tips.join('')}</div>` : ''}
       <h2>Resumo de ${monthLabel}</h2>
       <div class="stats">
@@ -2621,15 +2650,26 @@ function vFin(_, q) {
           <small class="muted">${prev ? `${brl(prev)} em ${new Date(y, mo - 2, 1).toLocaleDateString('pt-BR', { month: 'long' })}` : 'sem dados'}</small></div>
         <div class="stat"><span>Atendimentos feitos</span><b>${doneAppts.length}</b></div>
         <div class="stat"><span>Média por atendimento</span><b>${ticket ? brl(ticket) : '—'}</b></div>
-        <div class="stat"><span>Despesas</span><b>${plural(expenses.length, 'lançada', 'lançadas')}</b></div>
+        <div class="stat"><span>Clientes atendidas</span><b>${people}</b></div>
       </div>
       ${dailyChart()}
+      ${monthsChart()}
       ${methodBox}
       ${ranking('💇 Serviços que mais renderam', svcRank)}
       ${ranking('👩 Clientes que mais gastaram', cliRank)}
       ${!tips.length && !received.length ? '<div class="empty">Nenhum dinheiro lançado neste mês ainda.</div>' : ''}
-      ${received.length || expenses.length ? `<a class="btn" style="margin-top:1rem" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(shareText(diff, prev))}">📤 Enviar resumo do mês pelo WhatsApp</a>` : ''}`;
+      ${received.length || expenses.length ? `<h2>📤 Levar os números</h2>
+        <a class="btn" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(shareText(diff, prev))}">💬 Enviar resumo pelo WhatsApp</a>
+        <button type="button" class="btn" id="fin-csv" style="margin-top:.6rem">📊 Baixar planilha do mês</button>` : ''}
+      ${goal ? '' : `<button type="button" class="btn small" data-goal style="margin:1rem auto 0">🎯 Definir uma meta para o mês</button>`}`;
   };
+
+  // Caixa de hoje: o que entrou hoje, separado por forma (o "Dinheiro" é o que tem na gaveta)
+  const todayPays = received.filter(p => p.d === today());
+  const cashBox = !isNow || f ? '' : `<a class="card cashbox" href="${url({ f: 'entrou', pm: '', dia: today() })}" data-f>
+    <div class="line"><b class="grow">🧾 Caixa de hoje</b><b style="color:var(--ok)">${brl(sumBy(todayPays, p => p.v))}</b><span class="muted">›</span></div>
+    ${todayPays.length ? `<div class="paysplit">${Object.entries(PAY).map(([k, n]) => `<span><small>${n}</small><b>${brl(sumBy(todayPays.filter(p => p.m === k), p => p.v))}</b></span>`).join('')}</div>
+    <small class="muted">${plural(todayPays.length, 'pagamento', 'pagamentos')} hoje · 💵 em dinheiro é o que deve ter na gaveta</small>` : '<small class="muted">Nenhum pagamento recebido hoje ainda.</small>'}</a>`;
 
   return {
     title: 'Dinheiro', tab: 'financeiro',
@@ -2639,6 +2679,12 @@ function vFin(_, q) {
         <b>${monthLabel}</b>
         <a class="btn small" href="${url({ m: shift(1) })}" data-f aria-label="Próximo mês">›</a>
       </div>
+      <div class="finactions">
+        <a class="btn small ok" href="${url({ f: 'falta', pm: '', dia: '' })}" data-f>💰 Receber</a>
+        <a class="btn small" href="#/despesa">➖ Despesa</a>
+        <a class="btn small" href="#/venda">🛍️ Venda</a>
+      </div>
+      ${cashBox}
       <div class="totals">
         ${card('entrou', 'ok', 'Entrou no mês', `<span class="bignum">${brl(recTotal)}</span>`,
           received.length ? `${plural(received.length, 'pagamento', 'pagamentos')} · Serviços ${brl(recServ)} · Produtos ${brl(recProd)}` : 'Nenhum pagamento ainda', true)}
@@ -2654,6 +2700,7 @@ function vFin(_, q) {
       // Filtros trocam a tela sem encher o histórico do "voltar"
       el.addEventListener('click', e => {
         if (e.target.closest('[data-goal]')) { goalSheet(goal); return; }
+        if (e.target.closest('#fin-csv')) { exportCsv(); return; }
         const fx = e.target.closest('[data-fixed]');
         if (fx) {
           const list = fx.dataset.fixed === 'all' ? fixedTodo : fixedTodo.filter(x => x.id === fx.dataset.fixed);
