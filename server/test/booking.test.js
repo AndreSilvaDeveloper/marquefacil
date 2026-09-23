@@ -139,59 +139,118 @@ test('link público: serviços, dias, horários e agendar', async () => {
   await app.close();
 });
 
-test('WhatsApp: conectar, confirmação, aviso, lembrete sem repetir', async () => {
+test('WhatsApp: conectar, pedido pelo link, confirmar/recusar, agendamento no app, lembrete', async () => {
   const evo = fakeEvolution();
-  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl } });
+  const pushed = [];
+  const app = buildApp({
+    evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl },
+    publicUrl: 'https://maquefacil.com.br',
+    pushSender: async (sub, body) => { pushed.push({ sub, ...JSON.parse(body) }); },
+  });
   const call = await salon(app);
   const pub = client(app);
+  const wait = () => new Promise(r => setTimeout(r, 50));
 
   assert.equal((await call('GET', '/api/whatsapp/status')).body.state, 'off');
   const c = await call('POST', '/api/whatsapp/connect');
   assert.equal(c.body.qr, 'data:image/png;base64,QR');
   const pc = await call('POST', '/api/whatsapp/connect', { phone: '(11) 90000-0000' });
   assert.equal(pc.body.pairingCode, 'ABCD1234', 'código para conectar pelo número');
-  const inst = Object.keys(evo.instances)[0];
-  evo.instances[inst] = 'open'; // escaneou o QR
+  evo.instances[Object.keys(evo.instances)[0]] = 'open'; // conectou
   const st = await call('GET', '/api/whatsapp/status');
   assert.deepEqual([st.body.state, st.body.number], ['open', '5511900000000']);
+  await call('POST', '/api/push/subscribe', { subscription: { endpoint: 'https://push.test/1', keys: { p256dh: 'a', auth: 'b' } } });
 
-  // Agendou pelo link: confirmação para a cliente + aviso para a profissional
+  // 1) Pedido pelo link: fica pendente, profissional é avisada (push + WhatsApp), cliente ainda não recebe nada
   const date = nextWeekday(3);
-  await pub('POST', '/api/public/studio-ana/book', { date, time: '10:00', serviceId: 's1', name: 'Joana Lima', phone: '(11) 98888-7777' });
-  await new Promise(r => setTimeout(r, 50));
-  assert.equal(evo.sent.length, 2);
-  const toClient = evo.sent.find(m => m.number === '5511988887777');
-  const toOwner = evo.sent.find(m => m.number === '5511900000000');
-  assert.match(toClient.text, /Olá, Joana! ✅/);
-  assert.match(toClient.text, /Escova/);
-  assert.match(toOwner.text, /Novo agendamento pelo link/);
+  const b = await pub('POST', '/api/public/studio-ana/book', { date, time: '10:00', serviceId: 's1', name: 'Joana Lima', phone: '(11) 98888-7777' });
+  assert.equal(b.body.pending, true);
+  await wait();
+  assert.equal(pushed.length, 1);
+  assert.match(pushed[0].title, /Novo pedido/);
+  assert.match(pushed[0].body, /Joana Lima/);
+  assert.ok(!evo.sent.some(m => m.number === '5511988887777'), 'cliente só recebe depois de confirmar');
+  assert.ok(evo.sent.some(m => m.number === '5511900000000' && /Novo pedido/.test(m.text)), 'aviso para a profissional');
+  const busy = (await pub('GET', `/api/public/studio-ana/slots?date=${date}&service=s1`)).body.slots;
+  assert.ok(!busy.includes('10:00'), 'pedido pendente já segura o horário');
 
-  // Lembrete: horário marcado no app com antecedência, 24h antes
-  const cid = (await call('GET', '/api/changes?since=0')).body.changes.find(x => x.coll === 'clients').id;
-  const start = Date.parse(`${date}T15:00:00-03:00`); // 15:00 em São Paulo
-  await call('POST', '/api/sync', { changes: [{ coll: 'appts', id: 'm1', data: { clientId: cid, date, time: '15:00', status: 'marcado', createdAt: start - 5 * 86400e3 } }] });
-  assert.equal(evo.sent.length, 2, 'confirmação de agendamento manual vem desligada');
+  // 2) Confirma pelo botão da notificação → cliente recebe a confirmação
+  const apptId = pushed[0].apptId;
+  const d = await call('POST', `/api/appts/${apptId}/decision`, { decision: 'confirm' });
+  assert.equal(d.body.status, 'marcado');
+  await wait();
+  const conf = evo.sent.find(m => m.number === '5511988887777');
+  assert.match(conf.text, /Olá, Joana! ✅/);
+  assert.match(conf.text, /Escova/);
+  assert.equal((await call('POST', `/api/appts/${apptId}/decision`, { decision: 'confirm' })).body.already, true);
+
+  // 3) Outro pedido, recusado pelo app (sincronização) → cliente recebe o aviso com o link
+  await pub('POST', '/api/public/studio-ana/book', { date, time: '14:00', name: 'Bia', phone: '21977776666' });
+  await wait();
+  const pend = (await call('GET', '/api/changes?since=0')).body.changes.find(x => x.coll === 'appts' && x.data.time === '14:00');
+  assert.equal(pend.data.status, 'pendente');
+  await call('POST', '/api/sync', { changes: [{ coll: 'appts', id: pend.id, data: { ...pend.data, status: 'cancelado' } }] });
+  await wait();
+  const dec = evo.sent.find(m => m.number === '5521977776666');
+  assert.match(dec.text, /Infelizmente/);
+  assert.match(dec.text, /https:\/\/maquefacil\.com\.br\/studio-ana/);
+
+  // 4) Profissional agenda no app com telefone → confirmação sai sozinha (ligada por padrão)
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'cm', data: { name: 'Carla Dias', phone: '(31) 95555-4444' } },
+    { coll: 'appts', id: 'm1', data: { clientId: 'cm', date, time: '16:00', status: 'marcado', service: 'Corte', createdAt: Date.now() } },
+  ] });
+  await wait();
+  assert.ok(evo.sent.some(m => m.number === '5531955554444' && /✅/.test(m.text) && /16:00/.test(m.text)));
+  // sem telefone: não manda nada (fica registrado como "sem telefone")
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'cx', data: { name: 'Sem Fone' } },
+    { coll: 'appts', id: 'm2', data: { clientId: 'cx', date, time: '17:00', status: 'marcado', createdAt: Date.now() } },
+  ] });
+  await wait();
+  const msgs = (await call('GET', '/api/messages')).body;
+  assert.ok(msgs.some(x => x.apptId === 'm2' && x.status === 'skipped'));
+
+  // 5) Lembrete 24h antes, uma vez só; pedido pendente não ganha lembrete
+  const start = Date.parse(`${date}T15:00:00-03:00`);
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'appts', id: 'r1', data: { clientId: 'cm', date, time: '15:00', status: 'marcado', createdAt: start - 5 * 86400e3 } },
+  ] });
+  await pub('POST', '/api/public/studio-ana/book', { date, time: '09:00', name: 'Pendente', phone: '11966665555' });
   const m = app.messenger;
   assert.equal(await m.runReminders(start - 30 * 3600e3), 0, 'ainda cedo');
-  const n = await m.runReminders(start - 23 * 3600e3);
-  assert.ok(n >= 1);
-  assert.ok(evo.sent.some(x => /Passando para lembrar/.test(x.text)));
   const before = evo.sent.length;
+  await m.runReminders(start - 23 * 3600e3);
+  const reminders = evo.sent.slice(before).filter(x => /Passando para lembrar/.test(x.text));
+  assert.ok(reminders.some(x => x.number === '5531955554444'));
+  assert.ok(!reminders.some(x => x.number === '5511966665555'), 'pendente não recebe lembrete');
+  const n2 = evo.sent.length;
   await m.runReminders(start - 22 * 3600e3);
-  assert.equal(evo.sent.length, before, 'não repete o lembrete');
-
-  // Histórico
-  const msgs = (await call('GET', '/api/messages')).body;
-  assert.ok(msgs.some(x => x.kind === 'reminder' && x.status === 'sent'));
-
-  // Confirmação de agendamento manual, quando ligada
-  await call('PUT', '/api/settings', { whatsapp: { confirmManual: true } });
-  await call('POST', '/api/sync', { changes: [{ coll: 'appts', id: 'm2', data: { clientId: cid, date, time: '17:00', status: 'marcado', createdAt: Date.now() } }] });
-  await new Promise(r => setTimeout(r, 50));
-  assert.ok(evo.sent.some(x => /17:00/.test(x.text) && /✅/.test(x.text)));
+  assert.equal(evo.sent.length, n2, 'não repete o lembrete');
 
   await call('POST', '/api/whatsapp/disconnect');
   assert.equal((await call('GET', '/api/whatsapp/status')).body.state, 'off');
+  await app.close();
+});
+
+test('push: inscrever, testar, aparelho que sumiu é removido', async () => {
+  const sent = [];
+  const app = buildApp({
+    pushSender: async sub => {
+      if (sub.endpoint.endsWith('/sumiu')) { const e = new Error('gone'); e.statusCode = 410; throw e; }
+      sent.push(sub.endpoint);
+    },
+  });
+  const call = await salon(app);
+  assert.ok((await call('GET', '/api/push/key')).body.key.length > 40);
+  assert.equal((await call('POST', '/api/push/test')).status, 400, 'sem aparelho');
+  assert.equal((await call('POST', '/api/push/subscribe', { subscription: { endpoint: 'http://inseguro', keys: {} } })).status, 400);
+  await call('POST', '/api/push/subscribe', { subscription: { endpoint: 'https://push.test/ok', keys: { p256dh: 'a', auth: 'b' } } });
+  await call('POST', '/api/push/subscribe', { subscription: { endpoint: 'https://push.test/sumiu', keys: { p256dh: 'a', auth: 'b' } } });
+  assert.equal((await call('POST', '/api/push/test')).body.devices, 1);
+  assert.equal(app.db.prepare('SELECT COUNT(*) n FROM push_subs').get().n, 1, 'aparelho que sumiu foi removido');
+  const k1 = (await call('GET', '/api/push/key')).body.key;
+  assert.equal(k1, app.push.publicKey, 'chave fica a mesma');
   await app.close();
 });
 

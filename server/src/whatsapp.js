@@ -44,7 +44,7 @@ export function renderTemplate(tpl, vars) {
 }
 
 /* ------------------------- envio das mensagens ------------------------- */
-export function createMessenger({ db, evo, log = console }) {
+export function createMessenger({ db, evo, publicUrl = '', log = console }) {
   const q = {
     tenant: db.prepare('SELECT id, name, slug, settings FROM tenants WHERE id = ?'),
     record: db.prepare('SELECT data FROM records WHERE tenant_id = ? AND coll = ? AND id = ? AND deleted = 0'),
@@ -67,21 +67,22 @@ export function createMessenger({ db, evo, log = console }) {
       dia: dayLabel(appt.date),
       hora: appt.time,
       servico: appt.service || '',
+      link: publicUrl ? `${publicUrl.replace(/\/+$/, '')}/${tenant.slug}` : '',
     };
   }
 
-  // kind: 'confirm' | 'reminder' | 'owner'. Cada combinação horário+tipo só é enviada uma vez.
+  // kind: 'confirm' | 'reminder' | 'owner' | 'decline'. Cada combinação horário+tipo só é enviada uma vez.
   async function sendForAppt(tenantId, apptId, kind) {
     const tenant = q.tenant.get(tenantId);
     if (!tenant || !evo.enabled) return 'off';
     const s = readSettings(tenant.settings);
     if (!s.whatsapp.instance) return 'off';
     const appt = getRecord(tenantId, 'appts', apptId);
-    if (!appt || appt.status === 'cancelado') return 'skip';
+    if (!appt || (appt.status === 'cancelado' && kind !== 'decline')) return 'skip';
     const client = appt.clientId ? getRecord(tenantId, 'clients', appt.clientId) : null;
 
     const phone = kind === 'owner' ? waNumber(s.whatsapp.ownerPhone || s.whatsapp.number) : waNumber(client?.phone);
-    const tpl = s.whatsapp.templates[kind === 'owner' ? 'owner' : kind] || DEFAULTS.whatsapp.templates[kind];
+    const tpl = s.whatsapp.templates[kind] || DEFAULTS.whatsapp.templates[kind];
     const body = renderTemplate(tpl, varsFor(tenant, appt, client));
     const row = { tenantId, apptId, kind, phone, name: client?.name || '', body, now: Date.now() };
 
@@ -131,7 +132,7 @@ export function createMessenger({ db, evo, log = console }) {
       const today = nowIn(s.timezone, now).date;
       for (const r of apptsBetween.all(t.id, today, addDays(today, Math.ceil(H / 24) + 1))) {
         const a = JSON.parse(r.data);
-        if (a.status === 'cancelado' || !a.time) continue;
+        if ((a.status && a.status !== 'marcado') || !a.time) continue; // só horário confirmado ganha lembrete
         const start = zonedEpoch(a.date, a.time, s.timezone);
         const left = start - now;
         if (left > H * 3600e3 || left < 20 * 60e3) continue;         // fora da janela

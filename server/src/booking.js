@@ -27,7 +27,7 @@ export function computeSlots({ booking, appts, date, duration, now }) {
   return out;
 }
 
-export function registerBooking(app, { db, messenger, limitBook }) {
+export function registerBooking(app, { db, messenger, push, limitBook }) {
   const q = {
     tenant: db.prepare('SELECT id, name, slug, settings FROM tenants WHERE slug = ?'),
     coll: db.prepare('SELECT data FROM records WHERE tenant_id = ? AND coll = ? AND deleted = 0'),
@@ -57,7 +57,7 @@ export function registerBooking(app, { db, messenger, limitBook }) {
   app.get('/api/public/:slug', async req => {
     const { t, s, now } = load(req.params.slug);
     return {
-      name: t.name, slug: t.slug, enabled: s.booking.enabled, message: s.booking.message,
+      name: t.name, slug: t.slug, enabled: s.booking.enabled, message: s.booking.message, approval: s.booking.requireApproval,
       services: s.booking.enabled ? onlineServices(t.id) : [], today: now.date,
     };
   });
@@ -120,16 +120,25 @@ export function registerBooking(app, { db, messenger, limitBook }) {
       }
       const appt = {
         id: uid(), clientId: client.id, date, time, duration,
-        service: service?.name || '', price: service?.price ?? null, paid: false, status: 'marcado',
+        service: service?.name || '', price: service?.price ?? null, paid: false,
+        status: s.booking.requireApproval ? 'pendente' : 'marcado',
         notes: String(b.notes || '').trim().slice(0, 300), source: 'online', createdAt: Date.now(),
       };
       changes.push({ coll: 'appts', id: appt.id, data: appt });
       applyChanges(db, t.id, changes);
-      return appt;
+      return { appt, client };
     })();
+    const { appt, client } = result;
+    const pending = appt.status === 'pendente';
 
-    if (s.whatsapp.confirmOnline) messenger.fire(t.id, result.id, 'confirm');
-    if (s.whatsapp.notifyOwner) messenger.fire(t.id, result.id, 'owner');
-    return { ok: true, salon: t.name, date, label: dayLabel(date), time, service: result.service };
+    // Avisa a profissional em todos os aparelhos com avisos ligados
+    push.notifyTenant(t.id, {
+      title: pending ? '⏳ Novo pedido de agendamento' : '📅 Novo agendamento pelo link',
+      body: `${client.name} — ${dayLabel(date)} às ${time}${appt.service ? ' · ' + appt.service : ''}`,
+      url: `/#/agendamento/${appt.id}`, apptId: appt.id, pending,
+    }).catch(() => {});
+    if (s.whatsapp.notifyOwner) messenger.fire(t.id, appt.id, 'owner');
+    if (!pending && s.whatsapp.confirmOnline) messenger.fire(t.id, appt.id, 'confirm');
+    return { ok: true, pending, salon: t.name, date, label: dayLabel(date), time, service: appt.service };
   });
 }

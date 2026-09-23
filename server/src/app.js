@@ -9,6 +9,7 @@ import { readSettings, updateSettings } from './settings.js';
 import { nowIn, zonedEpoch } from './time.js';
 import { evolutionClient, createMessenger, registerWhatsapp } from './whatsapp.js';
 import { registerBooking } from './booking.js';
+import { createPush, registerPush } from './push.js';
 
 const YEAR = 365 * 24 * 60 * 60;
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
@@ -52,6 +53,8 @@ export function buildApp({
   secureCookies = false,
   handoffOrigins = '*',
   evolution = {},        // { url, apikey, fetchImpl }
+  publicUrl = '',        // endereço do sistema, para links nas mensagens
+  pushSender = null,     // para testes
   logger = false,
 } = {}) {
   const db = openDb(dbFile);
@@ -64,8 +67,10 @@ export function buildApp({
   const limitBook = rateLimiter({ max: 10, windowMs: 60 * 60 * 1000 });
 
   const evo = evolutionClient(evolution);
-  const messenger = createMessenger({ db, evo, log: app.log });
+  const messenger = createMessenger({ db, evo, publicUrl, log: app.log });
   app.decorate('messenger', messenger);
+  const push = createPush({ db, sender: pushSender, log: app.log });
+  app.decorate('push', push);
 
   const getSettings = tenantId => readSettings(db.prepare('SELECT settings FROM tenants WHERE id = ?').get(tenantId)?.settings);
   const saveSettings = (tenantId, s) => db.prepare('UPDATE tenants SET settings = ? WHERE id = ?').run(JSON.stringify(s), tenantId);
@@ -164,24 +169,49 @@ export function buildApp({
     return changesSince(db, req.s.tenant_id, since);
   });
 
-  const apptExists = db.prepare("SELECT 1 FROM records WHERE tenant_id = ? AND coll = 'appts' AND id = ?");
+  const apptNow = db.prepare("SELECT data FROM records WHERE tenant_id = ? AND coll = 'appts' AND id = ? AND deleted = 0");
+  const statusOf = (tenantId, id) => { const r = apptNow.get(tenantId, id); return r ? JSON.parse(r.data).status || 'marcado' : null; };
+
+  // Pedido do link aceito ou recusado: avisa a cliente pelo WhatsApp
+  function afterDecision(tenantId, apptId, from, to) {
+    if (from !== 'pendente' || to === 'pendente') return;
+    const s = getSettings(tenantId);
+    if (to === 'cancelado') { if (s.whatsapp.declineMessage) messenger.fire(tenantId, apptId, 'decline'); }
+    else if (s.whatsapp.confirmOnline) messenger.fire(tenantId, apptId, 'confirm');
+  }
+
   app.post('/api/sync', { preHandler: auth }, async req => {
     const tenantId = req.s.tenant_id;
     const changes = cleanChanges(req.body?.changes);
-    const fresh = changes.filter(c => c.coll === 'appts' && !c.deleted && !apptExists.get(tenantId, c.id));
+    const before = new Map(changes.filter(c => c.coll === 'appts').map(c => [c.id, statusOf(tenantId, c.id)]));
     const seq = changes.length ? applyChanges(db, tenantId, changes)
       : db.prepare('SELECT seq FROM tenants WHERE id = ?').get(tenantId).seq;
 
-    // Horário novo marcado no app: manda confirmação, se ela ligou essa opção
-    const s = fresh.length ? getSettings(tenantId) : null;
-    if (s?.whatsapp.confirmManual && s.whatsapp.instance) {
-      for (const c of fresh) {
-        const a = c.data;
-        if (a.status === 'cancelado' || !a.date || !a.time) continue;
-        if (zonedEpoch(a.date, a.time, s.timezone) > Date.now()) messenger.fire(tenantId, c.id, 'confirm');
-      }
+    let s = null;
+    for (const c of changes) {
+      if (c.coll !== 'appts' || c.deleted) continue;
+      const from = before.get(c.id), to = c.data.status || 'marcado';
+      if (from) { afterDecision(tenantId, c.id, from, to); continue; }
+      // Horário novo marcado no app: manda confirmação, se a opção estiver ligada
+      s ||= getSettings(tenantId);
+      if (s.whatsapp.confirmManual && to === 'marcado' && c.data.date && c.data.time &&
+          zonedEpoch(c.data.date, c.data.time, s.timezone) > Date.now()) messenger.fire(tenantId, c.id, 'confirm');
     }
     return { seq };
+  });
+
+  // Confirmar/recusar um pedido direto (usado pelo botão da notificação)
+  app.post('/api/appts/:id/decision', { preHandler: auth }, async req => {
+    const tenantId = req.s.tenant_id, id = req.params.id;
+    const r = apptNow.get(tenantId, id);
+    if (!r) fail(404, 'Esse agendamento não existe mais.');
+    const a = JSON.parse(r.data);
+    const to = req.body?.decision === 'decline' ? 'cancelado' : req.body?.decision === 'confirm' ? 'marcado' : null;
+    if (!to) fail(400, 'Decisão inválida.');
+    if (a.status !== 'pendente') return { ok: true, status: a.status, already: true };
+    applyChanges(db, tenantId, [{ coll: 'appts', id, data: { ...a, status: to } }]);
+    afterDecision(tenantId, id, 'pendente', to);
+    return { ok: true, status: to };
   });
 
   /* ------------------------------ configurações ------------------------------ */
@@ -196,7 +226,8 @@ export function buildApp({
   });
 
   registerWhatsapp(app, { db, evo, messenger, auth, getSettings, saveSettings });
-  registerBooking(app, { db, messenger, limitBook });
+  registerBooking(app, { db, messenger, push, limitBook });
+  registerPush(app, { db, auth, push });
 
   // Recupera uma cópia de segurança. replace=true apaga o que tem antes.
   app.post('/api/import', { preHandler: auth }, async req => {

@@ -14,6 +14,7 @@ const app = buildApp({
   secureCookies: env.NODE_ENV === 'production',
   handoffOrigins: env.HANDOFF_ORIGINS || '*',
   evolution: { url: env.EVOLUTION_URL, apikey: env.EVOLUTION_APIKEY },
+  publicUrl: env.PUBLIC_URL || (env.DOMAIN ? `https://${env.DOMAIN}` : ''),
   logger: { level: env.LOG_LEVEL || 'info' },
 });
 

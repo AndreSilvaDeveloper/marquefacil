@@ -254,3 +254,8 @@ details summary::-webkit-details-marker { display: none; }
 .steps { padding-left: 1.3rem; }
 .steps li { margin: .35rem 0; }
 .summary { background: var(--brand-soft); border-radius: 12px; padding: .8rem 1rem; margin-bottom: 1rem; }
+
+/* ---------- Pedidos e avisos ---------- */
+.appt.pendente { border: 2px dashed var(--warn); }
+.pending-banner { display: block; background: var(--warn-soft); border: 2px solid var(--warn); color: var(--warn); margin-bottom: 1rem; text-decoration: none; }
+.push-card { margin-bottom: 1rem; }

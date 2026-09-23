@@ -15,19 +15,22 @@ export const DEFAULTS = {
     defaultDuration: 60,    // duração quando o serviço não tem tempo definido
     message: '',            // recado que aparece no topo do link
     closedDates: [],        // folgas e feriados: ['2026-12-25', …]
+    requireApproval: true,  // pedido pelo link espera a profissional confirmar
   },
   whatsapp: {
     instance: null,         // nome da instância na Evolution (preenchido ao conectar)
     number: '',             // número conectado (preenchido ao conectar)
-    confirmOnline: true,    // confirmar quando a cliente agenda pelo link
-    confirmManual: false,   // confirmar quando a profissional agenda no app
+    confirmOnline: true,    // confirmar para a cliente quando o pedido do link é aceito
+    confirmManual: true,    // confirmar quando a profissional agenda no app (e a cliente tem telefone)
+    declineMessage: true,   // avisar a cliente quando o pedido é recusado
     reminderHours: 24,      // lembrete X horas antes (0 = não manda)
     notifyOwner: true,      // avisar a profissional de agendamento pelo link
     ownerPhone: '',         // número que recebe o aviso (vazio = o próprio número conectado)
     templates: {
       confirm: 'Olá, {nome}! ✅\nSeu horário no *{salao}* está marcado:\n📅 {dia} às {hora}\n💇 {servico}\n\nSe precisar remarcar, é só responder esta mensagem.',
       reminder: 'Olá, {nome}! Passando para lembrar do seu horário no *{salao}*:\n📅 {dia} às {hora}\n💇 {servico}\n\nTe esperamos! 💖',
-      owner: '📅 Novo agendamento pelo link!\n👩 {nome} — {telefone}\n📅 {dia} às {hora}\n💇 {servico}',
+      owner: '📅 Novo pedido de agendamento pelo link!\n👩 {nome_completo} — {telefone}\n📅 {dia} às {hora}\n💇 {servico}\n\nAbra o app para confirmar.',
+      decline: 'Olá, {nome}. Infelizmente não conseguimos atender {dia} às {hora} no *{salao}*. 😕\nEscolha outro horário aqui: {link}',
     },
   },
 };
@@ -83,6 +86,7 @@ export function updateSettings(current, input) {
     if (b.maxDays !== undefined) s.booking.maxDays = int(b.maxDays, 1, 180, 'dias para frente');
     if (b.defaultDuration !== undefined) s.booking.defaultDuration = int(b.defaultDuration, 5, 600, 'duração');
     if (b.message !== undefined) s.booking.message = text(b.message, 500);
+    if (b.requireApproval !== undefined) s.booking.requireApproval = bool(b.requireApproval);
     if (b.closedDates !== undefined) {
       if (!Array.isArray(b.closedDates) || b.closedDates.some(d => !DATE_RE.test(d))) fail(400, 'Datas de folga inválidas.');
       s.booking.closedDates = [...new Set(b.closedDates)].sort().slice(-200);
@@ -91,11 +95,11 @@ export function updateSettings(current, input) {
 
   const w = input.whatsapp;
   if (isObj(w)) {
-    for (const k of ['confirmOnline', 'confirmManual', 'notifyOwner']) if (w[k] !== undefined) s.whatsapp[k] = bool(w[k]);
+    for (const k of ['confirmOnline', 'confirmManual', 'notifyOwner', 'declineMessage']) if (w[k] !== undefined) s.whatsapp[k] = bool(w[k]);
     if (w.reminderHours !== undefined) s.whatsapp.reminderHours = int(w.reminderHours, 0, 72, 'lembrete');
     if (w.ownerPhone !== undefined) s.whatsapp.ownerPhone = text(w.ownerPhone, 30);
     if (isObj(w.templates)) {
-      for (const k of ['confirm', 'reminder', 'owner']) {
+      for (const k of ['confirm', 'reminder', 'owner', 'decline']) {
         if (w.templates[k] !== undefined) s.whatsapp.templates[k] = text(w.templates[k], 1000).trim() || DEFAULTS.whatsapp.templates[k];
       }
     }

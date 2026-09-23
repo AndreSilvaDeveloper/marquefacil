@@ -64,6 +64,17 @@ export function openDb(file) {
       UNIQUE (tenant_id, appt_id, kind)
     );
     CREATE INDEX IF NOT EXISTS messages_recent ON messages (tenant_id, created_at);
+    CREATE TABLE IF NOT EXISTS kv (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS push_subs (
+      endpoint TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      user_id TEXT,
+      data TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS handoffs (
       code TEXT PRIMARY KEY,
       data TEXT NOT NULL,

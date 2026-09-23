@@ -76,13 +76,15 @@ function paint() {
         <div class="field"><label for="notes">Observação <span class="opt">(se quiser)</span></label>
           <textarea id="notes" placeholder="Algo que a profissional precisa saber?"></textarea></div>
         <input class="hp" type="text" id="website" tabindex="-1" autocomplete="off" aria-hidden="true">
-        <button class="btn main" type="submit">✓ Confirmar agendamento</button>
+        <button class="btn main" type="submit">${submitLabel()}</button>
       </form>`);
   }
 
   $('#app').innerHTML = html;
   bind();
 }
+
+const submitLabel = () => (st.info.approval ? '✓ Pedir este horário' : '✓ Confirmar agendamento');
 
 function scrollToStep(id) { setTimeout(() => $(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); }
 
@@ -134,7 +136,7 @@ function bind() {
       date: st.date, time: st.time, serviceId: st.service?.id || null,
     };
     btn.disabled = true;
-    btn.textContent = 'Agendando…';
+    btn.textContent = 'Enviando…';
     try {
       const r = await api('/book', data);
       try { localStorage.setItem('mf.cliente', JSON.stringify({ name: data.name.trim(), phone: data.phone.trim() })); } catch { /* ok */ }
@@ -142,7 +144,7 @@ function bind() {
     } catch (err) {
       $('#err').innerHTML = `<div class="error">${esc(err.message)}</div>`;
       btn.disabled = false;
-      btn.textContent = '✓ Confirmar agendamento';
+      btn.textContent = submitLabel();
       if (err.status === 409) {
         await loadSlots(); // mostra os horários que sobraram, com o aviso em cima
         $('#times, #step3 p, #step2 p')?.insertAdjacentHTML('beforebegin', `<div class="error">${esc(err.message)}</div>`);
@@ -155,12 +157,14 @@ function done(r) {
   window.scrollTo(0, 0);
   $('#app').innerHTML = `
     <div class="step ok-box">
-      <div class="big">✅</div>
-      <h2 style="justify-content:center">Horário agendado!</h2>
+      <div class="big">${r.pending ? '⏳' : '✅'}</div>
+      <h2 style="justify-content:center">${r.pending ? 'Pedido enviado!' : 'Horário agendado!'}</h2>
       <p style="font-size:1.15rem"><b>${esc(dayName(r.date))}</b> às <b>${esc(r.time)}</b></p>
       ${r.service ? `<p>💇 ${esc(r.service)}</p>` : ''}
       <p class="muted">${esc(r.salon)}</p>
-      <p class="muted">Se precisar remarcar ou cancelar, fale com o salão pelo WhatsApp.</p>
+      ${r.pending
+        ? '<p><b>O salão vai confirmar o seu horário.</b><br>Você recebe a confirmação pelo WhatsApp. 💬</p>'
+        : '<p class="muted">Se precisar remarcar ou cancelar, fale com o salão pelo WhatsApp.</p>'}
       <button class="btn" id="again" style="margin-top:1rem">Agendar outro horário</button>
     </div>`;
   $('#again').onclick = () => { Object.assign(st, { service: undefined, date: null, time: null }); start(); };

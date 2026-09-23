@@ -161,7 +161,8 @@ async function syncNow() {
       if (changed && !$('#app form')) render();
       if (fromLink.length) {
         const a = fromLink[fromLink.length - 1];
-        toast(fromLink.length > 1 ? `🌐 ${fromLink.length} agendamentos novos pelo link` : `🌐 Novo pelo link: ${clientName(a.clientId)}, ${dayName(a.date).toLowerCase()} ${a.time}`);
+        const what = a.status === 'pendente' ? 'pedido' : 'agendamento';
+        toast(fromLink.length > 1 ? `🌐 ${fromLink.length} ${what}s novos pelo link` : `🌐 Novo ${what} pelo link: ${clientName(a.clientId)}, ${dayName(a.date).toLowerCase()} ${a.time}`);
       }
     } catch (e) {
       if (e.status === 401) { logoutLocal(); return; }
@@ -222,7 +223,7 @@ function conflictsFor(date, time, duration, exceptId) {
 }
 
 // Um valor "está devendo" quando tem preço, não foi pago e o serviço já passou/foi feito.
-const apptDue = a => a.status !== 'cancelado' && !a.paid && a.price > 0 && (a.status === 'feito' || isPast(a));
+const apptDue = a => a.status !== 'cancelado' && a.status !== 'pendente' && !a.paid && a.price > 0 && (a.status === 'feito' || isPast(a));
 const saleDue = s => !s.paid && s.total > 0;
 function clientOwes(id) {
   return db.appts.filter(a => a.clientId === id && apptDue(a)).reduce((t, a) => t + a.price, 0) +
@@ -257,7 +258,7 @@ function parseHash() {
 
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
-  agendar: vApptForm, agendamento: vAppt, venda: vSaleForm, financeiro: vFin, mais: vMore,
+  agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, venda: vSaleForm, financeiro: vFin, mais: vMore,
   itens: vItems, item: vItemForm, link: vLink, whatsapp: vWhats,
 };
 
@@ -291,10 +292,12 @@ $('#btn-back').addEventListener('click', () => back());
 /* ---------------------------- componentes ---------------------------- */
 function badgesFor(a) {
   const b = [];
+  if (a.status === 'pendente') b.push('<span class="badge warn">⏳ Aguardando você confirmar</span>');
   if (a.status === 'cancelado') b.push('<span class="badge bad">Cancelado</span>');
   else if (a.status === 'feito') b.push('<span class="badge ok">✓ Feito</span>');
   if (a.status !== 'cancelado') {
-    if (a.price > 0) b.push(a.paid ? `<span class="badge ok">Pago ${brl(a.price)}</span>`
+    if (a.status === 'pendente') { /* valor só depois de confirmado */ }
+    else if (a.price > 0) b.push(a.paid ? `<span class="badge ok">Pago ${brl(a.price)}</span>`
       : `<span class="badge warn">${apptDue(a) ? 'Não pago' : 'A pagar'} ${brl(a.price)}</span>`);
     else if (a.paid) b.push('<span class="badge ok">Pago</span>');
     if (conflictsFor(a.date, a.time, a.duration, a.id).length) b.push('<span class="badge warn">⚠️ Horário junto</span>');
@@ -351,6 +354,17 @@ function suggest(input, getItems, onPick, { showOnEmpty = false } = {}) {
   input.addEventListener('blur', () => setTimeout(() => (box.hidden = true), 250));
 }
 
+const pendingAppts = () => db.appts.filter(a => a.status === 'pendente').sort(byWhen);
+
+// Aceitar ou recusar um pedido do link (o servidor manda a mensagem para a cliente)
+function decide(a, ok) {
+  if (!ok && !confirm(`Recusar o pedido de ${clientName(a.clientId)}? Ela recebe um aviso para escolher outro horário.`)) return false;
+  a.status = ok ? 'marcado' : 'cancelado';
+  save();
+  toast(ok ? `Confirmado ✓ ${clientName(a.clientId)} vai receber a confirmação` : 'Pedido recusado');
+  return true;
+}
+
 const clientItems = () => [...db.clients].sort(byName).map(c => ({ id: c.id, label: c.name, sub: c.phone || '' }));
 const serviceItems = () => [...db.services].sort(byName).map(s => ({
   id: s.id, label: s.name, sub: [fmtDur(s.duration), s.price ? brl(s.price) : ''].filter(Boolean).join(' · '),
@@ -399,6 +413,7 @@ function vAgenda(_, q) {
   const t = today();
   const list = db.appts.filter(a => a.date === d).sort(byWhen);
   const active = list.filter(a => a.status !== 'cancelado');
+  const pend = pendingAppts();
 
   const week = [];
   for (let i = -3; i <= 3; i++) {
@@ -422,6 +437,8 @@ function vAgenda(_, q) {
         <label class="btn small" style="position:relative">📆 Escolher dia
           <input type="date" id="pick" value="${d}" style="position:absolute;inset:0;opacity:0;min-height:0"></label>
       </div>
+      ${pend.length ? `<a class="card pending-banner" href="#/pedidos">⏳ <b>${pend.length} ${pend.length === 1 ? 'pedido esperando' : 'pedidos esperando'}</b> você confirmar ›</a>` : ''}
+      <div id="push-card"></div>
       <h2>${active.length ? `${active.length} ${active.length === 1 ? 'horário' : 'horários'}` : ''}</h2>
       <div class="list">
         ${list.length ? list.map(a => apptCard(a)).join('') : '<div class="empty">Nenhum horário marcado neste dia.<br>Toque em <b>Agendar</b> para marcar.</div>'}
@@ -434,6 +451,7 @@ function vAgenda(_, q) {
       $('#prev', el).onclick = () => replaceTo(`#/agenda?d=${addDays(d, -1)}`);
       $('#next', el).onclick = () => replaceTo(`#/agenda?d=${addDays(d, 1)}`);
       $('#pick', el).onchange = e => e.target.value && replaceTo(`#/agenda?d=${e.target.value}`);
+      paintPushCard($('#push-card', el));
     },
   };
 }
@@ -654,7 +672,14 @@ function vAppt(id) {
         ${conflicts.length ? `<div class="conflict-box">⚠️ Junto com: ${conflicts.map(x => `<b>${esc(clientName(x.clientId))}</b> ${x.time}`).join(', ')}</div>` : ''}
       </div>
 
-      ${a.status !== 'cancelado' ? `
+      ${a.status === 'pendente' ? `
+      <div class="stack">
+        <p style="margin:0">Esta cliente pediu o horário pelo link. ${c?.phone ? 'Ao confirmar, ela recebe a confirmação no WhatsApp.' : ''}</p>
+        <button class="btn ok" id="accept">✓ Confirmar agendamento</button>
+        <button class="btn danger" id="decline">✗ Recusar</button>
+      </div>` : ''}
+
+      ${a.status !== 'cancelado' && a.status !== 'pendente' ? `
       <div class="stack">
         <div class="form">
           <label for="price">Valor do serviço</label>
@@ -686,6 +711,8 @@ function vAppt(id) {
         upd(() => (a.price = p), 'Valor salvo ✓');
       });
       $('#paid', el) && bindToggle2($('#paid', el), v => upd(() => (a.paid = v), v ? 'Marcado como pago ✓' : 'Marcado como não pago'));
+      $('#accept', el) && ($('#accept', el).onclick = () => { decide(a, true); render(); });
+      $('#decline', el) && ($('#decline', el).onclick = () => { if (decide(a, false)) render(); });
       $('#done', el) && ($('#done', el).onclick = () => upd(() => (a.status = 'feito'), 'Atendimento feito ✓'));
       $('#undo-done', el) && ($('#undo-done', el).onclick = () => upd(() => (a.status = 'marcado'), 'Pronto'));
       $('#cancel', el) && ($('#cancel', el).onclick = () => confirm('Marcar este horário como cancelado?') && upd(() => (a.status = 'cancelado'), 'Horário cancelado'));
@@ -695,6 +722,31 @@ function vAppt(id) {
         db.appts = db.appts.filter(x => x.id !== a.id);
         save(); toast('Horário apagado'); back();
       };
+    },
+  };
+}
+
+/* =====================================================================
+   PEDIDOS DO LINK (esperando confirmação)
+   ===================================================================== */
+function vPedidos() {
+  const list = pendingAppts();
+  return {
+    title: 'Pedidos', tab: 'agenda', back: true,
+    html: list.length ? `<p class="muted" style="margin-top:0">Clientes que pediram horário pelo link. Confirme ou recuse:</p>
+      <div class="list">${list.map(a => `<div>${apptCard(a, { showDate: true })}
+        <div class="row" style="margin-top:.4rem">
+          <button class="btn small ok" data-ok="${a.id}">✓ Confirmar</button>
+          <button class="btn small danger" data-no="${a.id}">✗ Recusar</button>
+        </div></div>`).join('')}</div>`
+      : '<div class="empty">Nenhum pedido esperando. 🎉</div>',
+    bind(el) {
+      el.addEventListener('click', e => {
+        const b = e.target.closest('[data-ok],[data-no]');
+        if (!b) return;
+        const a = db.appts.find(x => x.id === (b.dataset.ok || b.dataset.no));
+        if (a && decide(a, !!b.dataset.ok)) render();
+      });
     },
   };
 }
@@ -1096,6 +1148,9 @@ function vMore() {
         <a class="btn" href="#/whatsapp">💬 WhatsApp automático</a>
       </div>
 
+      <h2>Avisos neste aparelho</h2>
+      <div id="push-card"></div>
+
       <h2>Tamanho da letra</h2>
       ${toggle2('big', !!db.settings.big, 'A+ Grande', 'A Normal', true)}
 
@@ -1120,6 +1175,7 @@ function vMore() {
         ${db.clients.length} clientes · ${db.appts.length} horários · ${db.sales.length} vendas</p>`,
     bind(el) {
       bindToggle2($('#big', el), v => { db.settings.big = v; save(); applySettings(); });
+      paintPushCard($('#push-card', el), true);
       $('#exp', el).onclick = exportBackup;
       $('#imp', el).onchange = e => importBackup(e.target.files[0]);
       $('#logout', el).onclick = async () => {
@@ -1229,6 +1285,10 @@ function vLink() {
         <span class="lbl">Clientes podem agendar pelo link?</span>
         ${toggle2('enabled', b.enabled, '✓ Sim, ligado', 'Desligado')}
 
+        <div class="field" style="margin-top:1rem"><span class="lbl">Quando uma cliente pede um horário</span>
+          ${toggle2('approval', b.requireApproval, '✓ Eu confirmo cada pedido', 'Confirma sozinho', true)}
+          <small class="hint">Com "Eu confirmo", você recebe um aviso no celular e a cliente só recebe a confirmação depois que você aceitar.</small></div>
+
         <div class="card" style="margin-top:1rem">
           <div class="muted" style="font-size:.85rem">Seu link:</div>
           <b style="word-break:break-all">${esc(url)}</b>
@@ -1284,6 +1344,8 @@ function vLink() {
       </div>`;
 
     let enabled = b.enabled;
+    let requireApproval = b.requireApproval;
+    bindToggle2($('#approval', box), v => (requireApproval = v));
     let closed = [...b.closedDates];
     const paintClosed = () => {
       $('#closed', box).innerHTML = closed.length
@@ -1324,7 +1386,7 @@ function vLink() {
         const days = {};
         box.querySelectorAll('#days .daysrow').forEach(row => { days[row.dataset.d] = readRange(row); });
         const booking = {
-          enabled, days, lunch: readRange($('#lunch', box)),
+          enabled, requireApproval, days, lunch: readRange($('#lunch', box)),
           interval: +$('#interval', box).value, minAdvanceHours: +$('#adv', box).value,
           maxDays: +$('#max', box).value, defaultDuration: +$('#dur', box).value,
           closedDates: closed, message: $('#msg', box).value.trim(),
@@ -1357,7 +1419,7 @@ function vWhats() {
       }
       const w = S.whatsapp;
       const connected = st.state === 'open';
-      const kinds = { confirm: 'Confirmação', reminder: 'Lembrete', owner: 'Aviso para você', test: 'Teste' };
+      const kinds = { confirm: 'Confirmação', reminder: 'Lembrete', owner: 'Aviso para você', decline: 'Pedido recusado', test: 'Teste' };
       const status = { sent: '<span class="badge ok">Enviada</span>', error: '<span class="badge bad">Falhou</span>', skipped: '<span class="badge warn">Sem telefone</span>', sending: '<span class="badge">Enviando</span>' };
       box.innerHTML = `
         <div class="card">
@@ -1375,18 +1437,20 @@ function vWhats() {
 
         <div class="form">
           <h2>O que mandar</h2>
-          <div class="field"><span class="lbl">Confirmação quando a cliente agenda pelo link</span>${toggle2('confirmOnline', w.confirmOnline, '✓ Mandar', 'Não')}</div>
+          <div class="field"><span class="lbl">Confirmação quando eu aceito um pedido do link</span>${toggle2('confirmOnline', w.confirmOnline, '✓ Mandar', 'Não')}</div>
+          <div class="field"><span class="lbl">Aviso para a cliente quando eu recuso um pedido</span>${toggle2('declineMessage', w.declineMessage, '✓ Mandar', 'Não')}</div>
           <div class="field"><span class="lbl">Confirmação quando eu agendo no app</span>${toggle2('confirmManual', w.confirmManual, '✓ Mandar', 'Não')}</div>
           <div class="field"><label for="rem">Lembrete antes do horário</label>
             <select id="rem">${opts([0, 2, 3, 6, 12, 24, 48], w.reminderHours, v => +v ? (+v === 24 ? '1 dia antes' : +v === 48 ? '2 dias antes' : `${v} horas antes`) : 'Não mandar lembrete')}</select></div>
-          <div class="field"><span class="lbl">Me avisar quando alguém agendar pelo link</span>${toggle2('notifyOwner', w.notifyOwner, '✓ Avisar', 'Não')}</div>
+          <div class="field"><span class="lbl">Também me avisar pelo WhatsApp quando chegar pedido</span>${toggle2('notifyOwner', w.notifyOwner, '✓ Avisar', 'Não')}</div>
           <div class="field"><label for="own">Número que recebe o aviso <span class="opt">(vazio = o próprio WhatsApp conectado)</span></label>
             <input type="tel" id="own" placeholder="(11) 99999-9999" value="${esc(w.ownerPhone || '')}"></div>
 
           <details><summary class="btn">✏️ Mudar o texto das mensagens</summary>
-            <p class="muted">Pode usar: {nome}, {dia}, {hora}, {servico}, {salao}, {telefone}. Linha com campo vazio (ex.: sem serviço) some sozinha.</p>
+            <p class="muted">Pode usar: {nome}, {dia}, {hora}, {servico}, {salao}, {telefone}, {link}. Linha com campo vazio (ex.: sem serviço) some sozinha.</p>
             <div class="field"><label for="t-confirm">Confirmação</label><textarea id="t-confirm" rows="6">${esc(w.templates.confirm)}</textarea></div>
             <div class="field"><label for="t-reminder">Lembrete</label><textarea id="t-reminder" rows="6">${esc(w.templates.reminder)}</textarea></div>
+            <div class="field"><label for="t-decline">Pedido recusado</label><textarea id="t-decline" rows="4">${esc(w.templates.decline)}</textarea></div>
             <div class="field"><label for="t-owner">Aviso para você</label><textarea id="t-owner" rows="5">${esc(w.templates.owner)}</textarea></div>
           </details>
           <div id="err" style="margin-top:1rem"></div>
@@ -1399,7 +1463,7 @@ function vWhats() {
           <span>${new Date(m.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${m.error ? ' · ' + esc(m.error) : ''}</span></div>
           ${status[m.status] || ''}</div></div>`).join('') : '<div class="muted">Nenhuma mensagem ainda.</div>'}</div>`;
 
-      const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner };
+      const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner, declineMessage: w.declineMessage };
       for (const k of Object.keys(flags)) bindToggle2($('#' + k, box), v => (flags[k] = v));
 
       const err = e => { $('#err', box).innerHTML = `<div class="error">${esc(e.offline ? 'Precisa de internet.' : e.message)}</div>`; };
@@ -1407,7 +1471,7 @@ function vWhats() {
         try {
           await api('PUT', '/api/settings', { whatsapp: {
             ...flags, reminderHours: +$('#rem', box).value, ownerPhone: $('#own', box).value.trim(),
-            templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value },
+            templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value, decline: $('#t-decline', box).value },
           } });
           toast('Salvo ✓');
           $('#err', box).innerHTML = '';
@@ -1458,6 +1522,58 @@ function vWhats() {
         try { await api('POST', '/api/whatsapp/disconnect'); render(); } catch (e) { err(e); }
       });
     });
+}
+
+/* =====================================================================
+   AVISOS NO APARELHO (notificação push)
+   ===================================================================== */
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const b64ToBytes = b64 => {
+  const s = atob((b64 + '='.repeat((4 - b64.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(s, c => c.charCodeAt(0));
+};
+
+async function subscribePush() {
+  const reg = await navigator.serviceWorker.ready;
+  const { key } = await api('GET', '/api/push/key');
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
+  await api('POST', '/api/push/subscribe', { subscription: sub.toJSON() });
+}
+
+// Cartão "ativar avisos". Na agenda só aparece enquanto não estiver ativado.
+async function paintPushCard(el, full = false) {
+  if (!el) return;
+  if (!pushSupported()) {
+    if (full) el.innerHTML = `<p class="muted">Este aparelho não recebe avisos pelo navegador.${/iPhone|iPad/.test(navigator.userAgent) ? ' No iPhone, primeiro adicione o app à Tela de Início (Compartilhar → Adicionar à Tela de Início) e abra por lá.' : ''}</p>`;
+    return;
+  }
+  const perm = Notification.permission;
+  const sub = await navigator.serviceWorker.ready.then(r => r.pushManager.getSubscription()).catch(() => null);
+  if (perm === 'granted' && sub) {
+    if (full) {
+      el.innerHTML = `<div class="card"><b style="color:var(--ok)">✓ Avisos ligados neste aparelho</b>
+        <p class="muted" style="margin:.3rem 0 .6rem">Você recebe um aviso quando uma cliente pedir horário pelo link.</p>
+        <button class="btn small" id="push-test">🔔 Testar aviso</button></div>`;
+      $('#push-test', el).onclick = () => api('POST', '/api/push/test').then(() => toast('Aviso enviado ✓')).catch(e => alert(e.message));
+    }
+    return;
+  }
+  if (perm === 'denied') {
+    if (full) el.innerHTML = '<p class="muted">Os avisos estão bloqueados neste aparelho. Libere nas configurações do navegador (Notificações) e volte aqui.</p>';
+    return;
+  }
+  el.innerHTML = `<div class="card push-card"><b>🔔 Receber avisos de pedidos</b>
+    <p class="muted" style="margin:.3rem 0 .6rem">Quando uma cliente pedir horário pelo link, chega um aviso neste aparelho para você confirmar.</p>
+    <button class="btn main" id="push-on">Ativar avisos</button></div>`;
+  $('#push-on', el).onclick = async () => {
+    try {
+      if (await Notification.requestPermission() !== 'granted') { toast('Avisos não liberados'); paintPushCard(el, full); return; }
+      await subscribePush();
+      toast('Avisos ligados ✓');
+      paintPushCard(el, full);
+    } catch (e) { alert(e.offline ? 'Precisa de internet para ligar os avisos.' : 'Não foi possível ligar os avisos: ' + e.message); }
+  };
 }
 
 async function exportBackup() {
@@ -1555,6 +1671,10 @@ function showLogin(mode = 'entrar') {
   });
 }
 
+function refreshPush() {
+  if (pushSupported() && Notification.permission === 'granted') subscribePush().catch(() => {});
+}
+
 async function startSession(me) {
   session = me;
   writeLS('mf.session', me);
@@ -1562,6 +1682,7 @@ async function startSession(me) {
   loadCache();
   applySettings();
   render();
+  refreshPush();
   await syncNow();
   await offerOldData();
 }
@@ -1609,7 +1730,7 @@ if (session) {
   applySettings();
   render();
   // confere se a sessão ainda vale (sem internet, segue com a cópia do celular)
-  api('GET', '/api/me').then(me => { session = me; writeLS('mf.session', me); return syncNow(); })
+  api('GET', '/api/me').then(me => { session = me; writeLS('mf.session', me); refreshPush(); return syncNow(); })
     .then(offerOldData)
     .catch(e => { if (e.status === 401) logoutLocal(); else { syncState = 'offline'; paintSync(); } });
 } else showLogin();
@@ -1625,4 +1746,8 @@ document.addEventListener('visibilitychange', () => {
   if (!$('#app form')) render();
 });
 window.addEventListener('online', () => syncNow());
+navigator.serviceWorker?.addEventListener('message', e => {
+  if (e.data?.type === 'open' && e.data.url) { syncNow().then(() => { location.hash = e.data.url.replace(/^\/?/, '').replace(/^#?/, '#'); }); }
+  if (e.data?.type === 'changed') syncNow();
+});
 setInterval(() => { if (!document.hidden && session) syncNow(); }, 30_000);
