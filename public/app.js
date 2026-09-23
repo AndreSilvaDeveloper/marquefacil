@@ -57,6 +57,7 @@ function dayName(s) {
 }
 const mins = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
 const hhmm = m => `${pad(Math.floor(m / 60) % 24)}:${pad(m % 60)}`;
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const nowMins = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
 const fmtDur = m => !m ? '' : m < 60 ? `${m} min` : `${Math.floor(m / 60)}h${m % 60 ? pad(m % 60) : ''}`;
 
@@ -542,50 +543,152 @@ function bindToggle2(el, onChange) {
 /* =====================================================================
    AGENDA DO DIA
    ===================================================================== */
+// Linha do tempo de um dia: horários + espaços livres + "agora"
+function dayTimeline(d, active) {
+  const hours = salonHours();
+  const open = hours?.days?.[toDate(d).getDay()];
+  const closedDay = hours && hours.days && open === null;
+  const isToday = d === today(), now = nowMins();
+  const busy = active.map(a => [mins(a.time), apptEnd(a)]);
+  if (open && hours.lunch) busy.push([mins(hours.lunch[0]), mins(hours.lunch[1])]);
+
+  // espaços livres (dentro do horário de atendimento; sem ele, só entre um horário e outro)
+  const gaps = [];
+  let cursor = open ? mins(open[0]) : (active.length ? apptEnd(active[0]) : null);
+  const limit = open ? mins(open[1]) : (active.length ? mins(active.at(-1).time) : null);
+  if (cursor !== null) {
+    for (const [st, en] of [...busy].sort((a, b) => a[0] - b[0])) {
+      if (st > cursor) gaps.push([cursor, Math.min(st, limit)]);
+      cursor = Math.max(cursor, en);
+    }
+    if (limit > cursor) gaps.push([cursor, limit]);
+  }
+  const freeGaps = gaps
+    .map(([a, b]) => [isToday ? Math.max(a, Math.ceil(now / 5) * 5) : a, b])
+    .filter(([a, b]) => b - a >= 30 && (!isToday || b > now) && (d >= today()));
+
+  const items = [
+    ...active.map(a => ({ t: mins(a.time), html: apptRow(a) })),
+    ...freeGaps.map(([a, b]) => ({ t: a, html: `<a class="gap" href="#/agendar?d=${d}&t=${hhmm(a)}">
+      <span>🟢 Livre das <b>${hhmm(a)}</b> às <b>${hhmm(b)}</b> · ${fmtDur(b - a)}</span><em>+ Agendar</em></a>` })),
+  ];
+  if (open && hours.lunch && !(isToday && mins(hours.lunch[1]) <= now)) items.push({ t: mins(hours.lunch[0]), html: `<div class="lunch">🍽️ Almoço ${hours.lunch[0]}–${hours.lunch[1]}</div>` });
+  if (isToday && active.length) items.push({ t: now + 0.5, html: `<div class="nowline"><span>agora ${hhmm(now)}</span></div>` });
+  items.sort((a, b) => a.t - b.t);
+  return { html: items.map(x => x.html).join(''), closedDay, open };
+}
+
+// Cartão do horário + botão rápido "Feito" quando já passou
+function apptRow(a) {
+  const quick = a.status === 'marcado' && isPast(a) ? `<button class="quick-done" data-done="${a.id}">✓ Feito</button>` : '';
+  return quick ? `<div class="appt-wrap">${apptCard(a)}${quick}</div>` : apptCard(a);
+}
+
+function weekStart(d) { const x = toDate(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return dstr(x); } // segunda-feira
+
 function vAgenda(_, q) {
   const d = q.d || today();
   const t = today();
-  const list = db.appts.filter(a => a.date === d).sort(byWhen);
-  const active = list.filter(a => a.status !== 'cancelado');
+  const view = q.v === 'semana' ? 'semana' : 'dia';
   const pend = pendingAppts();
+  const url = o => `#/agenda?${Object.entries({ d, v: view === 'semana' ? 'semana' : '', ...o }).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join('&')}`;
+  const step = view === 'semana' ? 7 : 1;
 
   const week = [];
   for (let i = -3; i <= 3; i++) {
     const day = addDays(d, i);
     const n = db.appts.filter(a => a.date === day && a.status !== 'cancelado').length;
-    week.push(`<a href="#/agenda?d=${day}" class="${day === d ? 'on' : ''} ${day === t ? 'today' : ''}">
+    week.push(`<a href="${url({ d: day })}" data-nav class="${day === d ? 'on' : ''} ${day === t ? 'today' : ''}">
       ${fmtDate(day, { weekday: 'short' }).replace('.', '')}<b>${toDate(day).getDate()}</b><i>${n || ''}</i></a>`);
+  }
+
+  let body = '', title = '';
+  if (view === 'dia') {
+    const list = db.appts.filter(a => a.date === d).sort(byWhen);
+    const active = list.filter(a => a.status !== 'cancelado');
+    const cancelled = list.filter(a => a.status === 'cancelado');
+    const done = active.filter(a => a.status === 'feito').length;
+    const expectedDay = round2(active.filter(a => a.status !== 'pendente').reduce((s, a) => s + valueOf(a), 0));
+    const tl = dayTimeline(d, active);
+    title = `<div class="label"><b>${dayName(d)}</b><span>${fmtDate(d, { day: 'numeric', month: 'long', year: 'numeric' })}</span></div>`;
+    body = `
+      ${active.length ? `<div class="daysum">
+        <span><b>${active.length}</b> ${active.length === 1 ? 'horário' : 'horários'}</span>
+        ${done ? `<span><b>${done}</b> ${done === 1 ? 'feito' : 'feitos'}</span>` : ''}
+        ${expectedDay ? `<span>💰 <b>${brl(expectedDay)}</b></span>` : ''}
+      </div>` : ''}
+      ${tl.closedDay ? '<div class="muted" style="text-align:center;margin:.5rem 0">🔒 Dia fechado no seu horário de atendimento.</div>' : ''}
+      <div class="list timeline">
+        ${tl.html || `<div class="empty">Nenhum horário marcado neste dia.${d >= t ? `<br><a class="btn main" href="#/agendar?d=${d}" style="margin-top:1rem">📅 Agendar neste dia</a>` : ''}</div>`}
+      </div>
+      ${!salonHours() && active.length ? '<p class="muted" style="font-size:.85rem">Dica: configure seus dias e horários em Mais → Link para ver aqui os horários livres do dia todo.</p>' : ''}
+      ${cancelled.length ? `<details class="cancelled"><summary>Cancelados (${cancelled.length})</summary><div class="list">${cancelled.map(a => apptCard(a)).join('')}</div></details>` : ''}`;
+  } else {
+    const ws = weekStart(d);
+    const hours = salonHours();
+    const days = Array.from({ length: 7 }, (_, i) => addDays(ws, i));
+    title = `<div class="label"><b>Semana</b><span>${fmtDate(ws, { day: 'numeric', month: 'short' }).replace('.', '')} a ${fmtDate(days[6], { day: 'numeric', month: 'short' }).replace('.', '')}</span></div>`;
+    body = `<div class="weeklist">${days.map(day => {
+      const list = db.appts.filter(a => a.date === day && a.status !== 'cancelado').sort(byWhen);
+      const closed = hours?.days && hours.days[toDate(day).getDay()] === null;
+      return `<div class="wday ${day === t ? 'today' : ''}">
+        <a class="wday-head" href="${url({ d: day, v: '' })}" data-nav>
+          <b>${cap(fmtDate(day, { weekday: 'long' }))}</b> <span>${fmtShort(day).slice(0, 5)}</span>
+          <em>${list.length ? `${list.length} ${list.length === 1 ? 'horário' : 'horários'}` : closed ? 'Fechado' : 'Livre'} ›</em></a>
+        ${list.map(a => `<a class="wrow ${a.status}" href="#/agendamento/${a.id}"><b>${a.time}</b> ${esc(clientName(a.clientId))}${a.service ? ` <span>· ${esc(a.service)}</span>` : ''}${a.status === 'pendente' ? ' <span class="badge warn">⏳</span>' : ''}</a>`).join('')}
+      </div>`;
+    }).join('')}</div>`;
   }
 
   return {
     title: 'Agenda', tab: 'agenda',
     html: `
-      <div class="daynav">
-        <button class="arrow" id="prev" aria-label="Dia anterior">‹</button>
-        <div class="label"><b>${dayName(d)}</b><span>${fmtDate(d, { day: 'numeric', month: 'long', year: 'numeric' })}</span></div>
-        <button class="arrow" id="next" aria-label="Próximo dia">›</button>
+      <div class="viewtoggle">
+        <a href="${url({ v: '' })}" data-nav class="${view === 'dia' ? 'on' : ''}">Dia</a>
+        <a href="${url({ v: 'semana' })}" data-nav class="${view === 'semana' ? 'on' : ''}">Semana</a>
       </div>
-      <div class="week">${week.join('')}</div>
+      <div class="daynav">
+        <button class="arrow" id="prev" aria-label="Anterior">‹</button>
+        ${title}
+        <button class="arrow" id="next" aria-label="Próximo">›</button>
+      </div>
+      ${view === 'dia' ? `<div class="week">${week.join('')}</div>` : ''}
       <div class="row" style="margin-bottom:1rem">
-        ${d !== t ? '<a class="btn small" href="#/agenda">Voltar para hoje</a>' : ''}
+        ${(view === 'dia' ? d !== t : weekStart(d) !== weekStart(t)) ? `<a class="btn small" href="${url({ d: t })}" data-nav>Voltar para hoje</a>` : ''}
         <label class="btn small" style="position:relative">📆 Escolher dia
           <input type="date" id="pick" value="${d}" style="position:absolute;inset:0;opacity:0;min-height:0"></label>
       </div>
       ${pend.length ? `<a class="card pending-banner" href="#/pedidos">⏳ <b>${pend.length} ${pend.length === 1 ? 'pedido esperando' : 'pedidos esperando'}</b> você confirmar ›</a>` : ''}
-      ${d === t && tomorrowList().length ? `<a class="btn" href="#/lembretes" style="margin-bottom:1rem">💬 Lembrar clientes de amanhã (${tomorrowList().filter(x => !x.remindedAt).length} de ${tomorrowList().length})</a>` : ''}
+      ${d === t && view === 'dia' && tomorrowList().length ? `<a class="btn" href="#/lembretes" style="margin-bottom:1rem">💬 Lembrar clientes de amanhã (${tomorrowList().filter(x => !x.remindedAt).length} de ${tomorrowList().length})</a>` : ''}
       <div id="push-card"></div>
-      <h2>${active.length ? `${active.length} ${active.length === 1 ? 'horário' : 'horários'}` : ''}</h2>
-      <div class="list">
-        ${list.length ? list.map(a => apptCard(a)).join('') : '<div class="empty">Nenhum horário marcado neste dia.<br>Toque em <b>Agendar</b> para marcar.</div>'}
-      </div>
+      ${body}
       <div class="fabs">
         <a class="fab sell" href="#/venda">🛍️ Vender</a>
         <a class="fab" href="#/agendar?d=${d}">📅 Agendar</a>
       </div>`,
     bind(el) {
-      $('#prev', el).onclick = () => replaceTo(`#/agenda?d=${addDays(d, -1)}`);
-      $('#next', el).onclick = () => replaceTo(`#/agenda?d=${addDays(d, 1)}`);
-      $('#pick', el).onchange = e => e.target.value && replaceTo(`#/agenda?d=${e.target.value}`);
+      const goDay = n => replaceTo(url({ d: addDays(d, n * step) }));
+      $('#prev', el).onclick = () => goDay(-1);
+      $('#next', el).onclick = () => goDay(1);
+      $('#pick', el).onchange = e => e.target.value && replaceTo(url({ d: e.target.value }));
+      el.addEventListener('click', e => {
+        const nav = e.target.closest('a[data-nav]');
+        if (nav) { e.preventDefault(); replaceTo(nav.getAttribute('href')); return; }
+        const done = e.target.closest('[data-done]');
+        if (done) {
+          const a = db.appts.find(x => x.id === done.dataset.done);
+          if (a) { a.status = 'feito'; save(); toast(`${clientName(a.clientId)}: atendimento feito ✓`); render(); }
+        }
+      });
+      // arrastar para o lado troca de dia (ou de semana)
+      let x0 = null, y0 = null;
+      el.addEventListener('touchstart', e => { if (e.target.closest('.week, input, .sheet')) return; x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+      el.addEventListener('touchend', e => {
+        if (x0 === null) return;
+        const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
+        x0 = null;
+        if (Math.abs(dx) > 70 && Math.abs(dy) < 50) goDay(dx < 0 ? 1 : -1);
+      }, { passive: true });
       paintPushCard($('#push-card', el));
     },
   };
@@ -637,7 +740,7 @@ const seriesLabel = e => ({ 7: 'toda semana', 14: 'a cada 15 dias', m: 'todo mê
 
 function vApptForm(_, q) {
   const edit = q.id ? db.appts.find(a => a.id === q.id) : null;
-  const a = edit || { date: q.d || today(), time: '', clientId: q.c || '', service: '', duration: null, price: null, paid: false, notes: '' };
+  const a = edit || { date: q.d || today(), time: TIME_RE.test(q.t || '') ? q.t : '', clientId: q.c || '', service: '', duration: null, price: null, paid: false, notes: '' };
   const cName = a.clientId ? clientName(a.clientId) : '';
   const durs = [30, 60, 90, 120, 180];
   let dur = a.duration || null;
@@ -1901,6 +2004,7 @@ function onlineView(title, load, paint) {
 
 function vLink() {
   return onlineView('Link de agendamento', () => api('GET', '/api/settings'), (box, S) => {
+    cacheSalon(S);
     const b = S.booking;
     const url = `${location.origin}/${S.slug}`;
     const share = `Agende seu horário no ${session.tenant.name} por aqui: ${url}`;
@@ -2016,7 +2120,7 @@ function vLink() {
           closedDates: closed, message: $('#msg', box).value.trim(),
         };
         btn.disabled = true;
-        await api('PUT', '/api/settings', { booking });
+        cacheSalon(await api('PUT', '/api/settings', { booking }));
         toast(enabled ? 'Salvo ✓ O link está ligado' : 'Salvo ✓');
         $('#err', box).innerHTML = '';
       } catch (e) {
@@ -2297,6 +2401,12 @@ function showLogin(mode = 'entrar') {
   });
 }
 
+// Horário de atendimento (dias, almoço) guardado no celular: a agenda usa para mostrar os horários livres
+const salonKey = () => `mf.salon.${session.tenant.id}`;
+const salonHours = () => readLS(salonKey());
+function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch }); } catch { /* ok */ } }
+function refreshSalon() { api('GET', '/api/settings').then(S => { cacheSalon(S); if (!$('#app form') && parseHash().parts[0] === 'agenda') render(); }).catch(() => {}); }
+
 function refreshPush() {
   if (pushSupported() && Notification.permission === 'granted') subscribePush().catch(() => {});
 }
@@ -2309,6 +2419,7 @@ async function startSession(me) {
   applySettings();
   render();
   refreshPush();
+  refreshSalon();
   await syncNow();
 }
 
@@ -2321,7 +2432,7 @@ if (session) {
   applySettings();
   render();
   // confere se a sessão ainda vale (sem internet, segue com a cópia do celular)
-  api('GET', '/api/me').then(me => { session = me; writeLS('mf.session', me); refreshPush(); return syncNow(); })
+  api('GET', '/api/me').then(me => { session = me; writeLS('mf.session', me); refreshPush(); refreshSalon(); return syncNow(); })
     .catch(e => { if (e.status === 401) logoutLocal(); else { syncState = 'offline'; paintSync(); } });
 } else showLogin();
 
