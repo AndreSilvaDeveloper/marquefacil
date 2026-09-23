@@ -72,6 +72,12 @@ docker exec caddy caddy validate --config /etc/caddy/Caddyfile
 docker exec caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 
+### Mais domínios apontando para o mesmo sistema
+Com o DNS do domínio novo já apontando para `77.37.40.221` (registro A `@` e `www`):
+```bash
+ssh root@100.85.80.113 bash -s -- studiokadosh.com < deploy/caddy-add-domain.sh
+```
+
 ## 7. Primeiro deploy
 GitHub → Actions → **Deploy dev** → Run workflow (branch `dev`). O workflow:
 testa → constrói a imagem → gera `/opt/marquefacil/.env` → `docker compose up -d` → confere `/api/health`.
