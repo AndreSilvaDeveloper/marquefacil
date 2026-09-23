@@ -361,7 +361,8 @@ details.cancelled summary { cursor: pointer; color: var(--muted); font-weight: 7
 .menu-sub .toggle2 { flex: 1; }
 .menu-sub .card { width: 100%; }
 .menu-sub .btn.small { flex: 1 1 0; width: auto; white-space: nowrap; }
-.menu-sub.wide { padding-left: 1rem; flex-wrap: nowrap; }
+.menu-sub.wide { padding-left: 1rem; flex-wrap: wrap; }
+.menu-sub.wide .btn.small { flex: 1 1 6.5rem; }
 
 /* ---------- Buscar ---------- */
 .shortcuts { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
@@ -450,3 +451,17 @@ details.more summary small { display: block; font-weight: 400; color: var(--mute
 .rank-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rank-bar { height: 10px; background: var(--bg); border-radius: 5px; overflow: hidden; }
 .rank-bar i { display: block; height: 100%; background: var(--brand); border-radius: 5px; }
+
+/* ---------- Mais: pronto?, ajuda ---------- */
+.ready ul { list-style: none; padding: 0; margin: .4rem 0 0; }
+.ready li { padding: .3rem 0; }
+.ready li a { font-weight: 700; color: var(--brand); text-decoration: none; }
+.ready li.ok { color: var(--muted); }
+.ready .pkg .bar { margin: .5rem 0 .2rem; }
+.ready-ok { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); margin-bottom: .5rem; }
+.help details.faq { display: block; cursor: pointer; }
+.help details.faq summary { list-style: none; display: flex; align-items: center; }
+.help details.faq summary::-webkit-details-marker { display: none; }
+.help details.faq summary::after { content: '＋'; margin-left: auto; color: var(--muted); font-weight: 700; }
+.help details.faq[open] summary::after { content: '－'; }
+.help details.faq p { margin: .5rem 0 .2rem; color: var(--ink); font-size: .95rem; line-height: 1.45; }

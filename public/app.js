@@ -2661,6 +2661,8 @@ function vMore() {
         </div>
       </div>
 
+      <div id="ready"></div>
+
       <h2>Meu salão</h2>
       <div class="menu">
         ${pend ? item('#/pedidos', '⏳', 'Pedidos esperando', `<span style="color:var(--warn);font-weight:700">${pend} para confirmar</span>`) : ''}
@@ -2668,10 +2670,16 @@ function vMore() {
         ${item('#/itens/products', '🛍️', 'Produtos', `${db.products.length} ${db.products.length === 1 ? 'produto' : 'produtos'}${low ? ` · <span style="color:var(--bad)">⚠️ ${low} acabando</span>` : ''}`)}
         ${item('#/link', '🔗', 'Link para as clientes', salon ? (salon.enabled ? '<span style="color:var(--ok)">● Ligado</span> · clientes pedem horário por ele' : '○ Desligado') : 'Clientes pedem horário pela internet')}
         ${link && salon.enabled ? `<div class="menu-sub wide">
-          <button type="button" class="btn small" id="copy-link">📋 Copiar link</button>
+          <button type="button" class="btn small" id="copy-link">📋 Copiar</button>
+          <button type="button" class="btn small" id="qr-link">📱 QR code</button>
           <a class="btn small" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`Agende seu horário no ${session.tenant.name} por aqui: ${link}`)}">💬 Mandar</a></div>` : ''}
         ${item('#/link', '🕐', 'Dias e horários de atendimento', salon?.days ? esc(hoursSummary(salon.days)) + (salon.lunch ? ` · almoço ${salon.lunch[0]}–${salon.lunch[1]}` : '') : 'Configure para ver os horários livres na agenda')}
         ${item('#/whatsapp', '💬', 'WhatsApp automático', '<span id="wa-status">…</span>')}
+        ${item('#/whatsapp?textos=1', '✏️', 'Textos das mensagens', 'Confirmação, lembrete, pré-reserva…')}
+        ${item('#/itens/services', '📦', 'Pacotes (cronogramas)', (() => {
+          const presets = db.services.filter(sv => sv.package?.total).length, active = db.packages.filter(pkgActive).length;
+          return `${presets} ${presets === 1 ? 'serviço é pacote' : 'serviços são pacotes'} · ${active} ${active === 1 ? 'cronograma em andamento' : 'cronogramas em andamento'}`;
+        })())}
       </div>
 
       <h2>Neste aparelho</h2>
@@ -2689,9 +2697,23 @@ function vMore() {
       <div class="menu">
         <button type="button" class="menu-item" id="exp"><span class="mi-icon">📤</span>
           <span class="mi-text"><b>Fazer cópia de segurança</b><small>${lastBk ? `Última cópia: ${lastBk}` : 'Nunca fez · os dados já ficam guardados na internet'}</small></span><span class="mi-go">›</span></button>
+        <button type="button" class="menu-item" id="csv"><span class="mi-icon">📇</span>
+          <span class="mi-text"><b>Baixar lista de clientes</b><small>Planilha com nome, telefone, visitas e última vez (${db.clients.length})</small></span><span class="mi-go">›</span></button>
         <label class="menu-item"><span class="mi-icon">📥</span>
           <span class="mi-text"><b>Recuperar de uma cópia</b><small>Troca tudo pelo que está no arquivo</small></span><span class="mi-go">›</span>
           <input type="file" id="imp" accept=".json,application/json" hidden></label>
+      </div>
+
+      <h2>❓ Ajuda</h2>
+      <div class="menu help">
+        ${[
+          ['Como a cliente agenda sozinha?', 'Ligue o <b>Link para as clientes</b> e mande o link (ou o QR code) para elas. Elas escolhem o serviço, o dia e o horário livre. Você recebe um aviso e confirma — aí ela recebe a confirmação no WhatsApp.'],
+          ['O que é pré-reserva?', 'Ao agendar, escolha <b>💳 Pré-reserva</b>: o horário fica segurado e a cliente recebe a mensagem pedindo o sinal. Quando ela pagar, abra o horário e toque em <b>Recebi o sinal — confirmar</b>.'],
+          ['Como funcionam os pacotes (cronogramas)?', 'Em <b>Serviços</b>, marque que o serviço é um pacote (ex.: 4 sessões, toda semana). Ao agendar esse serviço, as sessões já vêm prontas e a cliente sempre sabe em qual está ("2ª sessão de 4").'],
+          ['A cliente quer remarcar ou cancelar', 'Ela mesma pode, pelo link "Ver ou remarcar" que vai nas mensagens. Remarcação vira pedido para você confirmar; o horário antigo vale até você aceitar.'],
+          ['Troquei de celular. Perco tudo?', 'Não. Tudo fica guardado na sua conta. É só entrar com o mesmo e-mail e senha no celular novo.'],
+          ['O WhatsApp parou de mandar mensagens', 'Abra <b>WhatsApp automático</b> e veja se está "Conectado". Se não estiver, conecte de novo com o código. As últimas mensagens e erros aparecem no fim daquela tela.'],
+        ].map(([q, a]) => `<details class="menu-item faq"><summary><span class="mi-text"><b>${q}</b></span></summary><p>${a}</p></details>`).join('')}
       </div>
 
       <h2>Conta</h2>
@@ -2709,6 +2731,9 @@ function vMore() {
         const ok = pushSupported() && Notification.permission === 'granted';
         $('#push-sub', el).innerHTML = ok ? '<span style="color:var(--ok)">● Ligados</span>' : 'Receba um aviso quando uma cliente pedir horário';
       });
+      $('#qr-link', el) && ($('#qr-link', el).onclick = () => qrSheet(link, session.tenant.name));
+      $('#csv', el).onclick = exportClientsCsv;
+      paintReady($('#ready', el));
       $('#copy-link', el) && ($('#copy-link', el).onclick = async () => {
         try { await navigator.clipboard.writeText(link); toast('Link copiado ✓'); } catch { prompt('Copie o link:', link); }
       });
@@ -2745,6 +2770,107 @@ function vMore() {
       paintSync();
     },
   };
+}
+
+// "Seu salão está pronto?": o que falta configurar, cada item leva direto para onde se resolve
+async function paintReady(box) {
+  if (!box) return;
+  const salon = salonHours();
+  const items = [
+    ['Serviços cadastrados', db.services.length > 0, '#/itens/services'],
+    ['Dias e horários de atendimento', !!salon?.days, '#/link'],
+    ['Link para as clientes ligado', !!salon?.enabled, '#/link'],
+    ['WhatsApp conectado', null, '#/whatsapp'],
+    ['Avisos de pedidos neste aparelho', pushSupported() && Notification.permission === 'granted', '#push-card'],
+    ['Cópia de segurança nos últimos 30 dias', !!db.settings.lastBackup && Date.now() - db.settings.lastBackup < 30 * 86400000, '#exp'],
+  ];
+  const draw = () => {
+    const done = items.filter(i => i[1]).length;
+    if (done === items.length) { box.innerHTML = '<div class="card ready-ok">✅ <b>Seu salão está todo configurado.</b></div>'; return; }
+    box.innerHTML = `<div class="card ready">
+      <div class="line"><b class="grow">🚀 Seu salão está pronto?</b><span class="muted">${done} de ${items.length}</span></div>
+      <div class="pkg"><div class="bar"><i style="width:${Math.round(done / items.length * 100)}%"></i></div></div>
+      <ul>${items.map(([t, ok, href]) => `<li class="${ok ? 'ok' : ''}">${ok ? '✅' : ok === null ? '⏳' : '⬜'} ${href && !ok ? `<a href="${href}">${t} ›</a>` : t}</li>`).join('')}</ul>
+    </div>`;
+  };
+  draw();
+  // itens que ficam nesta mesma página: rola até lá (a cópia já começa a ser feita)
+  box.onclick = e => {
+    const a = e.target.closest('a[href="#push-card"], a[href="#exp"]');
+    if (!a) return;
+    e.preventDefault();
+    if (a.getAttribute('href') === '#exp') { exportBackup(); return; }
+    $('#push-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+  try {
+    const st = await api('GET', '/api/whatsapp/status');
+    items[3][1] = st.state === 'open';
+    if (st.available === false) items.splice(3, 1); // sem WhatsApp no servidor: não cobra este item
+  } catch { items[3][1] = false; }
+  draw();
+}
+
+// QR code do link (para imprimir no balcão ou postar)
+function loadQr() {
+  if (window.qrcode) return Promise.resolve(window.qrcode);
+  return new Promise((ok, no) => { const sc = document.createElement('script'); sc.src = '/vendor/qrcode.js'; sc.onload = () => ok(window.qrcode); sc.onerror = no; document.head.appendChild(sc); });
+}
+async function qrSheet(link, salonName) {
+  let qr;
+  try { qr = (await loadQr())(0, 'M'); qr.addData(link); qr.make(); }
+  catch { alert('Precisa de internet para gerar o QR code na primeira vez.'); return; }
+  const n = qr.getModuleCount(), cell = 10, margin = 4 * cell, size = n * cell + margin * 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size + 90;
+  const g = canvas.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, canvas.width, canvas.height);
+  g.fillStyle = '#000';
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) g.fillRect(margin + c * cell, margin + r * cell, cell, cell);
+  g.textAlign = 'center'; g.font = 'bold 26px system-ui, sans-serif';
+  g.fillText('Agende seu horário', size / 2, size + 20);
+  g.font = '20px system-ui, sans-serif';
+  g.fillText(salonName, size / 2, size + 55);
+  const png = canvas.toDataURL('image/png');
+  const bg = document.createElement('div');
+  bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet" style="text-align:center">
+    <h2 style="margin-top:0">📱 QR code do seu link</h2>
+    <img src="${png}" alt="QR code do link de agendamento" style="width:100%;max-width:300px;border:1px solid var(--line);border-radius:12px">
+    <p class="muted" style="word-break:break-all;font-size:.85rem">${esc(link)}</p>
+    <p style="font-size:.95rem">Imprima e deixe no balcão, ou poste no Instagram: a cliente aponta a câmera e já cai na página de agendar.</p>
+    <a class="btn main" href="${png}" download="qrcode-agendar.png">⬇️ Baixar imagem</a>
+    <button class="btn" id="qr-share" style="margin-top:.6rem">📤 Compartilhar</button>
+    <button class="btn" id="qr-close" style="margin-top:.6rem">Fechar</button>
+  </div>`;
+  document.body.appendChild(bg);
+  const close = () => bg.remove();
+  bg.onclick = e => { if (e.target === bg) close(); };
+  $('#qr-close', bg).onclick = close;
+  $('#qr-share', bg).onclick = async () => {
+    try {
+      const file = new File([await (await fetch(png)).blob()], 'qrcode-agendar.png', { type: 'image/png' });
+      if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], text: `Agende seu horário: ${link}` });
+      else { await navigator.clipboard.writeText(link); toast('Link copiado ✓'); }
+    } catch { /* cancelou */ }
+  };
+}
+
+// Planilha de clientes (abre no Excel/Google Planilhas)
+function exportClientsCsv() {
+  const cell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const rows = [['Nome', 'Telefone', 'Visitas', 'Última vez', 'Próximo horário', 'Deve (R$)', 'Observação']];
+  for (const c of [...db.clients].sort(byName)) {
+    const st = clientStats(c);
+    rows.push([c.name, c.phone || '', st.visits, st.last ? fmtShort(st.last.date) : '', st.next ? `${fmtShort(st.next.date)} ${st.next.time}` : '',
+      st.owes ? moneyVal(st.owes) : '', c.notes || '']);
+  }
+  const csv = '\ufeff' + rows.map(r => r.map(cell).join(';')).join('\r\n'); // ; e BOM: abre certinho no Excel em português
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `clientes-${today()}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast(`Lista com ${db.clients.length} clientes baixada ✓`);
 }
 
 // Minha conta: nome do salão, seu nome, senha
@@ -3051,8 +3177,10 @@ function reminderLabel(m) {
 }
 
 let waPoll = null;
-function vWhats() {
+function vWhats(_, q = {}) {
   clearInterval(waPoll);
+  const openTexts = q.textos === '1';
+  if (openTexts) setTimeout(() => $('#textos')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 900);
   return onlineView('WhatsApp automático',
     async () => {
       const S = await api('GET', '/api/settings');
@@ -3109,7 +3237,7 @@ function vWhats() {
           <div class="field"><label for="own">Número que recebe o aviso <span class="opt">(vazio = o próprio WhatsApp conectado)</span></label>
             <input type="tel" id="own" placeholder="(11) 99999-9999" value="${esc(w.ownerPhone || '')}"></div>
 
-          <details><summary class="btn">✏️ Mudar o texto das mensagens</summary>
+          <details id="textos" ${openTexts ? 'open' : ''}><summary class="btn">✏️ Mudar o texto das mensagens</summary>
             <p class="muted">Pode usar: {nome} (só o primeiro nome), {dia}, {hora}, {servico}, {valor}, {sinal}, {pacote}, {salao}, {telefone}, {meus_horarios}. Linha com campo vazio (ex.: sem serviço) some sozinha.</p>
             <div class="field"><label for="t-confirm">Confirmação</label><textarea id="t-confirm" rows="6">${esc(w.templates.confirm)}</textarea></div>
             <div class="field"><label for="t-reminder">Lembrete</label><textarea id="t-reminder" rows="6">${esc(w.templates.reminder)}</textarea></div>
