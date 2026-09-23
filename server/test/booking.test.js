@@ -541,13 +541,13 @@ test('pacote: "2ª de 4" nas mensagens e na página da cliente; cancelar renumer
     ap('a1', 0), ap('a2', 1), ap('a3', 2),
   ] });
   await new Promise(r => setTimeout(r, 60));
-  assert.match(evo.sent.find(m => m.number === '5511955554444').text, /📦 Cronograma capilar — 1ª de 4/);
-  assert.equal(app.messenger.packageLabel((await call('GET', '/api/me')).body.tenant.id, { id: 'a3', packageId: 'k1' }), 'Cronograma capilar — 3ª de 4');
+  assert.match(evo.sent.find(m => m.number === '5511955554444').text, /📦 Cronograma capilar — 1ª sessão de 4/);
+  assert.equal(app.messenger.packageLabel((await call('GET', '/api/me')).body.tenant.id, { id: 'a3', packageId: 'k1' }), 'Cronograma capilar — 3ª sessão de 4');
 
   // cancela a 1ª: a antiga 2ª passa a ser a 1ª
   await call('POST', '/api/sync', { changes: [ap('a1', 0, { status: 'cancelado' })] });
   const tid = (await call('GET', '/api/me')).body.tenant.id;
-  assert.equal(app.messenger.packageLabel(tid, { id: 'a2', packageId: 'k1' }), 'Cronograma capilar — 1ª de 4');
+  assert.equal(app.messenger.packageLabel(tid, { id: 'a2', packageId: 'k1' }), 'Cronograma capilar — 1ª sessão de 4');
 
   // página da cliente mostra o pacote
   const b = await pub('POST', '/api/public/studio-ana/access', { phone: '11955554444' });
@@ -555,7 +555,31 @@ test('pacote: "2ª de 4" nas mensagens e na página da cliente; cancelar renumer
   await new Promise(r => setTimeout(r, 60));
   const token = evo.sent.at(-1).text.match(/#meus=([\w-]+)/)[1];
   const me = (await pub('GET', `/api/public/studio-ana/me?t=${token}`)).body;
-  assert.equal(me.upcoming[0].pacote, 'Cronograma capilar — 1ª de 4');
+  assert.equal(me.upcoming[0].pacote, 'Cronograma capilar — 1ª sessão de 4');
   assert.deepEqual(me.packages.map(p => [p.name, p.total, p.scheduled]), [['Cronograma capilar', 4, 2]]);
+  await app.close();
+});
+
+test('cronograma que já começou: "3ª sessão de 4" e a sessão vai sempre na mensagem', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl } });
+  const call = await salon(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  // texto editado SEM {pacote}: a sessão entra mesmo assim
+  await call('PUT', '/api/settings', { whatsapp: { templates: { confirm: 'Oi {nome}, marcado {dia} {hora}.', reminder: 'Oi {nome}, amanhã tem.' }, reminderMinutes: 1440 } });
+  const date = nextWeekday(3);
+  const start = Date.parse(`${date}T11:00:00-03:00`);
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'c1', data: { name: 'Rita Alves', phone: '11933332222' } },
+    { coll: 'packages', id: 'k1', data: { clientId: 'c1', name: 'Cronograma capilar', total: 4, doneBefore: 2 } },
+    { coll: 'appts', id: 'a1', data: { clientId: 'c1', date, time: '11:00', status: 'marcado', packageId: 'k1', createdAt: start - 4 * 86400e3 } },
+  ] });
+  await new Promise(r => setTimeout(r, 60));
+  const conf = evo.sent.find(m => m.number === '5511933332222').text;
+  assert.match(conf, /^Oi Rita, marcado/);
+  assert.match(conf, /📦 Cronograma capilar — 3ª sessão de 4/);
+  await app.messenger.runReminders(start - 20 * 3600e3);
+  assert.match(evo.sent.at(-1).text, /Oi Rita, amanhã tem\.\n📦 Cronograma capilar — 3ª sessão de 4/);
   await app.close();
 });

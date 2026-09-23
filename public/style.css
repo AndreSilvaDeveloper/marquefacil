@@ -429,3 +429,24 @@ details.more summary small { display: block; font-weight: 400; color: var(--mute
 
 #update-bar { position: fixed; left: 1rem; right: 1rem; top: calc(4rem + env(safe-area-inset-top)); z-index: 70; border: 0; border-radius: 14px;
   background: var(--ok); color: #fff; font: inherit; font-weight: 800; padding: .9rem; box-shadow: 0 6px 18px rgba(0,0,0,.2); cursor: pointer; }
+.newpkg { border: 2px dashed var(--brand); margin-top: .5rem; }
+.newpkg .lbl { display: block; font-weight: 700; margin-bottom: .35rem; }
+
+/* ---------- Dinheiro: gráfico e rankings ---------- */
+.stat small { display: block; font-size: .78rem; margin-top: .15rem; }
+.chart { margin: .8rem 0; padding: .8rem .8rem .5rem; }
+.chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; margin-bottom: .5rem; }
+.chart-head .muted { font-size: .85rem; font-weight: 700; text-align: right; }
+.chart-body { display: flex; gap: .4rem; height: 130px; }
+.chart-y { display: flex; flex-direction: column; justify-content: space-between; font-size: .7rem; color: var(--muted); text-align: right; min-width: 3.2rem; padding-bottom: 1px; }
+.chart-bars { flex: 1; display: flex; align-items: flex-end; gap: 2px; border-bottom: 1px solid var(--line);
+  background: linear-gradient(to bottom, var(--line) 1px, transparent 1px) 0 0 / 100% 50%; }
+.cbar { flex: 1; height: 100%; display: flex; align-items: flex-end; min-width: 0; text-decoration: none; }
+.cbar i { display: block; width: 100%; background: var(--ok); border-radius: 4px 4px 0 0; min-height: 0; }
+.cbar:hover i, .cbar.on i, .cbar:focus i { background: #145a31; }
+.chart-x { display: flex; justify-content: space-between; font-size: .7rem; color: var(--muted); margin: .25rem 0 0 3.6rem; }
+.rank { padding: .5rem .8rem; }
+.rank-row { display: grid; grid-template-columns: minmax(0, 7.5rem) 1fr auto; gap: .5rem; align-items: center; padding: .35rem 0; font-size: .92rem; }
+.rank-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank-bar { height: 10px; background: var(--bg); border-radius: 5px; overflow: hidden; }
+.rank-bar i { display: block; height: 100%; background: var(--brand); border-radius: 5px; }

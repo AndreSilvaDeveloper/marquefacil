@@ -472,14 +472,15 @@ const preAppts = () => db.appts.filter(a => a.status === PRE && !isPast(a)).sort
 /* Pacotes (cronogramas): várias sessões; a posição de cada horário vem da ordem das datas */
 const pkgOf = id => db.packages.find(p => p.id === id);
 const pkgAppts = p => db.appts.filter(a => a.packageId === p.id && a.status !== 'cancelado').sort(byWhen);
-const pkgDone = p => pkgAppts(p).filter(a => a.status === 'feito' || (a.status === 'marcado' && isPast(a))).length;
-const pkgLeftToBook = p => Math.max(0, p.total - pkgAppts(p).length);
+const pkgBefore = p => p.doneBefore || 0; // sessões feitas antes de entrar no app
+const pkgDone = p => pkgBefore(p) + pkgAppts(p).filter(a => a.status === 'feito' || (a.status === 'marcado' && isPast(a))).length;
+const pkgLeftToBook = p => Math.max(0, p.total - pkgBefore(p) - pkgAppts(p).length);
 const pkgActive = p => pkgDone(p) < p.total;
 function pkgPos(a) {
   const p = a.packageId && pkgOf(a.packageId);
   if (!p) return null;
-  const n = pkgAppts(p).findIndex(x => x.id === a.id) + 1;
-  return n ? { p, n, total: p.total } : null;
+  const i = pkgAppts(p).findIndex(x => x.id === a.id);
+  return i >= 0 ? { p, n: pkgBefore(p) + i + 1, total: p.total } : null;
 }
 const clientPackages = cid => db.packages.filter(p => p.clientId === cid).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
@@ -981,10 +982,14 @@ function vApptForm(_, q) {
       // Repetição: datas que vão ser marcadas
       let every = '';
       // pacote escolhido: "repetir" marca exatamente as sessões que faltam
-      const pkgLeft = () => { const p = pkgId && pkgOf(pkgId); return p ? pkgLeftToBook(p) : 0; };
+      const pkgLeft = () => {
+        if (newPkg) return newPkg.total - newPkg.seq + 1;
+        const p = pkgId && pkgOf(pkgId);
+        return p ? pkgLeftToBook(p) : 0;
+      };
       const repDates = () => {
         if (!every) return [iDate.value];
-        if (pkgId && pkgLeft() > 0) return seriesByCount(iDate.value, every, pkgLeft());
+        if ((pkgId || newPkg) && pkgLeft() > 0) return seriesByCount(iDate.value, every, pkgLeft());
         return seriesDates(iDate.value, every, +($('#rep-months', el)?.value || 3));
       };
       const paintRep = () => {
@@ -1092,19 +1097,51 @@ function vApptForm(_, q) {
         const c = findByName(db.clients, iClient.value);
         const list = c ? clientPackages(c.id).filter(p => pkgActive(p) || p.id === pkgId) : [];
         if (pkgId && !list.some(p => p.id === pkgId)) pkgId = '';
-        if (!list.length) { $('#pkgbox', el).innerHTML = c ? `<p class="muted" style="margin:-.4rem 0 1rem;font-size:.9rem">📦 Faz cronograma? <a href="#/pacote?c=${c.id}">Criar um pacote</a></p>` : ''; return; }
-        const nextN = p => (edit?.packageId === p.id ? (pkgPos(edit)?.n || 1) : pkgAppts(p).length + 1);
+        if (!list.length) { paintNewPkg(); return; }
+        const nextN = p => (edit?.packageId === p.id ? (pkgPos(edit)?.n || 1) : pkgBefore(p) + pkgAppts(p).length + 1);
         $('#pkgbox', el).innerHTML = `<div class="field"><span class="lbl">📦 Faz parte de um pacote?</span>
           <div class="pick" id="pkgs">${list.map(p => `<button type="button" data-pk="${p.id}" class="${p.id === pkgId ? 'on' : ''}">${esc(p.name)}
             <small>Esta será a <b>${Math.min(nextN(p), p.total)}ª de ${p.total}</b> · ${pkgDone(p)} ${pkgDone(p) === 1 ? 'feita' : 'feitas'}</small></button>`).join('')}
-            <button type="button" data-pk="" class="${!pkgId ? 'on' : ''}">Não, horário avulso</button></div>
+            <button type="button" data-pk="" class="${!pkgId && !newPkg ? 'on' : ''}">Não, horário avulso</button>
+            ${!edit ? `<button type="button" data-newpkg class="${newPkg ? 'on' : ''}">➕ Outro cronograma</button>` : ''}</div>
+          ${newPkg ? newPkgHtml() : ''}
           ${pkgId && !edit && pkgLeft() > 1 ? `<div class="chips mini" id="pkg-rep" style="margin-top:.6rem"><span class="muted">Marcar as ${pkgLeft()} sessões que faltam:</span>
             ${[['', 'Só esta'], ['7', 'Toda semana'], ['14', 'A cada 15 dias'], ['m', 'Todo mês']].map(([r, n]) => `<button type="button" class="chip ${every === r ? 'on' : ''}" data-r="${r}">${n}</button>`).join('')}</div>
             ${every ? `<small class="hint">Vai marcar ${repDates().length} horários, de ${fmtShort(repDates()[0])} até ${fmtShort(repDates().at(-1))}.</small>` : ''}` : ''}</div>`;
       };
+      // Cronograma novo, criado aqui mesmo: quantas sessões e em qual ela está
+      let newPkg = null; // { total, seq }
+      function newPkgHtml() {
+        const n = newPkg;
+        return `<div class="card newpkg">
+          <span class="lbl">📦 Cronograma de quantas sessões?</span>
+          <div class="chips mini" id="np-total">${[2, 3, 4, 5, 6, 8, 10].map(t => `<button type="button" class="chip ${t === n.total ? 'on' : ''}" data-t="${t}">${t}</button>`).join('')}</div>
+          <span class="lbl" style="margin-top:.7rem">Este horário é a…</span>
+          <div class="chips mini" id="np-seq">${Array.from({ length: n.total }, (_, i) => `<button type="button" class="chip ${i + 1 === n.seq ? 'on' : ''}" data-s="${i + 1}">${i + 1}ª</button>`).join('')}</div>
+          <small class="hint">${n.seq > 1 ? `Ela já fez ${n.seq - 1} ${n.seq - 1 === 1 ? 'sessão' : 'sessões'} antes. ` : ''}A cliente vai ver "<b>${n.seq}ª sessão de ${n.total}</b>" na confirmação e no lembrete.</small>
+          ${n.total - n.seq > 0 ? `<div class="chips mini" id="pkg-rep" style="margin-top:.6rem"><span class="muted">Marcar também as ${n.total - n.seq + 1} sessões:</span>
+            ${[['', 'Só esta'], ['7', 'Toda semana'], ['14', 'A cada 15 dias'], ['m', 'Todo mês']].map(([r, t]) => `<button type="button" class="chip ${every === r ? 'on' : ''}" data-r="${r}">${t}</button>`).join('')}</div>
+            ${every ? `<small class="hint">Vai marcar ${repDates().length} horários, de ${fmtShort(repDates()[0])} até ${fmtShort(repDates().at(-1))}.</small>` : ''}` : ''}
+        </div>`;
+      }
+      function paintNewPkg() {
+        const c = findByName(db.clients, iClient.value);
+        if (edit || !iClient.value.trim()) { $('#pkgbox', el).innerHTML = ''; return; }
+        $('#pkgbox', el).innerHTML = `<div class="field">
+          ${newPkg ? '' : `<button type="button" class="btn small" data-newpkg>📦 É de um cronograma (pacote de sessões)?</button>`}
+          ${newPkg ? `<span class="lbl">📦 Cronograma</span>${newPkgHtml()}<button type="button" class="btn small" data-nopkg style="margin-top:.5rem">Não é cronograma</button>` : ''}
+          ${c && !newPkg ? `<small class="hint"><a href="#/pacote?c=${c.id}">ou cadastrar o pacote com valor</a></small>` : ''}</div>`;
+      }
       $('#pkgbox', el).addEventListener('click', e => {
+        if (e.target.closest('[data-newpkg]')) { pkgId = ''; newPkg = newPkg || { total: 4, seq: 1 }; paintPkg(); return; }
+        if (e.target.closest('[data-nopkg]')) { newPkg = null; every = ''; paintPkg(); return; }
+        const t = e.target.closest('#np-total [data-t]');
+        if (t) { newPkg.total = +t.dataset.t; newPkg.seq = Math.min(newPkg.seq, newPkg.total); paintPkg(); return; }
+        const sq = e.target.closest('#np-seq [data-s]');
+        if (sq) { newPkg.seq = +sq.dataset.s; paintPkg(); return; }
         const b = e.target.closest('[data-pk]');
         if (b) {
+          newPkg = null;
           pkgId = b.dataset.pk;
           const p = pkgOf(pkgId);
           if (p && !iService.value.trim()) { iService.value = p.service || p.name; iService.dispatchEvent(new Event('change')); }
@@ -1148,6 +1185,12 @@ function vApptForm(_, q) {
         if (svcName) {
           const s = findOrCreate(db.services, svcName, { duration: dur, description: '' });
           if (!s.duration && dur) s.duration = dur;
+        }
+        if (newPkg) {
+          const pk = { id: uid(), clientId: c.id, name: svcName ? findByName(db.services, svcName).name : 'Cronograma', total: newPkg.total,
+            doneBefore: newPkg.seq - 1, service: svcName ? findByName(db.services, svcName).name : '', notes: '', createdAt: Date.now() };
+          db.packages.push(pk);
+          pkgId = pk.id;
         }
         const data = {
           clientId: c.id, date: iDate.value, time,
@@ -1640,8 +1683,10 @@ function vClients(_, q) {
 function packageCard(p) {
   const list = pkgAppts(p);
   const done = pkgDone(p);
-  const rows = Array.from({ length: Math.max(p.total, list.length) }, (_, i) => {
-    const a = list[i];
+  const before = pkgBefore(p);
+  const rows = Array.from({ length: Math.max(p.total, before + list.length) }, (_, i) => {
+    if (i < before) return `<li class="ok"><b>${i + 1}ª</b> ✓ <span>antes</span></li>`;
+    const a = list[i - before];
     if (!a) return `<li class="todo"><b>${i + 1}ª</b> <span>a marcar</span></li>`;
     const ok = a.status === 'feito' || (a.status === 'marcado' && isPast(a));
     return `<li class="${ok ? 'ok' : ''}"><a href="#/agendamento/${a.id}"><b>${i + 1}ª</b> ${ok ? '✓' : a.status === PRE ? '💳' : '📅'} ${fmtShort(a.date).slice(0, 5)} ${a.time}</a></li>`;
@@ -1651,7 +1696,7 @@ function packageCard(p) {
       <a class="btn small" href="#/pacote?id=${p.id}">✏️</a></div>
     <div class="bar"><i style="width:${Math.round(done / p.total * 100)}%"></i></div>
     <ol class="sessions">${rows}</ol>
-    ${pkgLeftToBook(p) ? `<a class="btn main" href="#/agendar?c=${p.clientId}&pk=${p.id}">📅 Marcar a ${list.length + 1}ª sessão</a>` : ''}
+    ${pkgLeftToBook(p) ? `<a class="btn main" href="#/agendar?c=${p.clientId}&pk=${p.id}">📅 Marcar a ${before + list.length + 1}ª sessão</a>` : ''}
   </div>`;
 }
 
@@ -1785,6 +1830,7 @@ function vPackageForm(_, q) {
   const c = client(cid);
   if (!c) return { title: 'Pacote', back: true, html: '<div class="empty">Cliente não encontrada.</div>' };
   let total = p?.total || 4;
+  let before = p?.doneBefore || 0;
   let paid = true, method = '';
   const counts = [2, 3, 4, 5, 6, 8, 10, 12];
   return {
@@ -1799,7 +1845,9 @@ function vPackageForm(_, q) {
         <div class="field"><span class="lbl">Quantas sessões?</span>
           <div class="chips" id="counts">${counts.map(n => `<button type="button" class="chip ${n === total ? 'on' : ''}" data-n="${n}">${n}</button>`).join('')}
             <span class="chip ${counts.includes(total) ? '' : 'on'}">Outro: <input type="number" id="pt" min="1" max="60" style="width:4rem" value="${counts.includes(total) ? '' : total}"></span></div>
-          ${p ? `<small class="hint">Já tem ${pkgAppts(p).length} marcadas.</small>` : ''}</div>
+          ${p ? `<small class="hint">Já tem ${pkgAppts(p).length} marcadas no app.</small>` : ''}</div>
+        <div class="field"><span class="lbl">Já fez quantas sessões antes? <span class="opt">(cronograma que já começou)</span></span>
+          <div class="chips" id="befores"></div></div>
         ${p ? '' : `
         <div class="field"><label for="pv">Valor do pacote <span class="opt">(se quiser — entra como venda)</span></label>
           <div class="money"><input type="text" id="pv" inputmode="decimal" placeholder="0,00"></div></div>
@@ -1808,19 +1856,28 @@ function vPackageForm(_, q) {
           <div class="paygrid" id="pm" style="margin-top:.5rem">${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}">${n}</button>`).join('')}</div></div>`}
         <div class="field"><label for="pnote">Observação <span class="opt">(se quiser)</span></label>
           <textarea id="pnote" placeholder="Ex.: 1 hidratação, 2 nutrições e 1 reconstrução">${esc(p?.notes || '')}</textarea></div>
-        <button class="btn main" type="submit">${p ? '✓ Salvar' : '✓ Criar pacote e marcar a 1ª sessão'}</button>
+        <button class="btn main" type="submit">${p ? '✓ Salvar' : '✓ Criar pacote e marcar a próxima sessão'}</button>
         ${p ? '<button class="btn danger" type="button" id="del" style="margin-top:2rem">🗑️ Apagar pacote</button>' : ''}
       </form>`,
     bind(el) {
+      const paintBefore = () => {
+        before = Math.min(before, Math.max(0, total - 1));
+        $('#befores', el).innerHTML = Array.from({ length: Math.min(total, 12) }, (_, n) =>
+          `<button type="button" class="chip ${n === before ? 'on' : ''}" data-b="${n}">${n === 0 ? 'Nenhuma (começa agora)' : n}</button>`).join('')
+          + (before ? `<small class="hint" style="width:100%">A próxima a marcar será a <b>${before + 1}ª de ${total}</b>.</small>` : '');
+      };
+      $('#befores', el).addEventListener('click', e => { const b = e.target.closest('[data-b]'); if (b) { before = +b.dataset.b; paintBefore(); } });
+      paintBefore();
       $('#counts', el).addEventListener('click', e => {
         const b = e.target.closest('[data-n]');
         if (!b) return;
         total = +b.dataset.n; $('#pt', el).value = '';
         el.querySelectorAll('#counts .chip').forEach(x => x.classList.toggle('on', x === b));
+        paintBefore();
       });
       $('#pt', el).addEventListener('input', e => {
         const n = parseInt(e.target.value, 10);
-        if (n > 0) { total = n; el.querySelectorAll('#counts .chip').forEach(x => x.classList.toggle('on', !x.dataset.n)); }
+        if (n > 0) { total = n; el.querySelectorAll('#counts .chip').forEach(x => x.classList.toggle('on', !x.dataset.n)); paintBefore(); }
       });
       $('#svc-chips', el)?.addEventListener('click', e => { const b = e.target.closest('[data-svc]'); if (b) $('#pn', el).value = b.dataset.svc; });
       $('#pv', el)?.addEventListener('input', () => { $('#pay-f', el).hidden = !(parseMoney($('#pv', el).value) > 0); });
@@ -1832,13 +1889,13 @@ function vPackageForm(_, q) {
         const name = niceName($('#pn', el).value);
         if (!name) return err('Escreva o nome do pacote. Exemplo: Cronograma capilar');
         if (!(total > 0)) return err('Escolha quantas sessões.');
-        if (p && total < pkgAppts(p).length) return err(`Já tem ${pkgAppts(p).length} sessões marcadas: o total não pode ser menor.`);
+        if (p && total < before + pkgAppts(p).length) return err(`Já tem ${before + pkgAppts(p).length} sessões (feitas antes + marcadas): o total não pode ser menor.`);
         const notes = $('#pnote', el).value.trim();
-        if (p) { Object.assign(p, { name, total, notes }); save(); toast('Pacote salvo ✓'); back(); return; }
+        if (p) { Object.assign(p, { name, total, notes, doneBefore: before }); save(); toast('Pacote salvo ✓'); back(); return; }
         const price = $('#pv', el) ? parseMoney($('#pv', el).value) : null;
         if (price > 0 && paid && !method) return err('Toque em como pagou o pacote (Pix, Dinheiro ou Cartão).');
         const svc = findByName(db.services, name);
-        const pkg = { id: uid(), clientId: c.id, name, total, notes, service: svc?.name || '', createdAt: Date.now() };
+        const pkg = { id: uid(), clientId: c.id, name, total, doneBefore: before, notes, service: svc?.name || '', createdAt: Date.now() };
         db.packages.push(pkg);
         if (price > 0) {
           const sale = { id: uid(), createdAt: Date.now(), clientId: c.id, product: `📦 ${name} (${total} sessões)`, qty: 1, unitPrice: price, total: price, date: today(), paid: false, payments: [], packageId: pkg.id };
@@ -1846,7 +1903,7 @@ function vPackageForm(_, q) {
           db.sales.push(sale);
         }
         save();
-        toast('Pacote criado ✓ Agora marque a 1ª sessão');
+        toast(`Pacote criado ✓ Agora marque a ${before + 1}ª sessão`);
         replaceTo(`#/agendar?c=${c.id}&pk=${pkg.id}`);
       });
       $('#del', el) && ($('#del', el).onclick = () => {
@@ -2278,13 +2335,14 @@ function vFin(_, q) {
   const m = q.m || today().slice(0, 7);
   const f = q.f || '';          // quadro escolhido (filtro)
   const pm = q.pm || '';        // filtro dentro de "Entrou": pix, dinheiro, cartao, a (serviços), s (produtos)
+  const dia = /^\d{4}-\d{2}-\d{2}$/.test(q.dia || '') ? q.dia : ''; // um dia do gráfico
   const [y, mo] = m.split('-').map(Number);
   const shift = n => { const d = new Date(y, mo - 1 + n, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
   const monthLabel = new Date(y, mo - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
   const sumBy = (xs, fn) => round2(xs.reduce((t, x) => t + (fn(x) || 0), 0));
   const link = (k, it) => (k === 'a' ? '#/agendamento/' + it.id : '#/venda?id=' + it.id);
   const what = (k, it) => (k === 'a' ? (it.service || 'Serviço') : `🛍️ ${it.product}${it.qty > 1 ? ` (${it.qty}x)` : ''}`);
-  const url = (o = {}) => { const p = { m, f, pm, ...o }; return '#/financeiro?' + Object.entries(p).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join('&'); };
+  const url = (o = {}) => { const p = { m, f, pm, dia, ...o }; return '#/financeiro?' + Object.entries(p).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join('&'); };
   const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
 
   // ENTROU: cada pagamento recebido no mês (pelo dia do pagamento)
@@ -2339,8 +2397,9 @@ function vFin(_, q) {
   const views = {
     entrou: () => {
       const chips = [['', 'Tudo'], ...Object.entries(PAY), ['a', 'Serviços'], ['s', 'Produtos']];
-      const list = received.filter(p => !pm || p.m === pm || p.k === pm);
-      return `<h2>Entrou em ${monthLabel} ${list.length ? `· ${brl(sumBy(list, p => p.v))}` : ''}</h2>
+      const list = received.filter(p => (!pm || p.m === pm || p.k === pm) && (!dia || p.d === dia));
+      return `<h2>Entrou ${dia ? `em ${fmtDate(dia, { weekday: 'long', day: 'numeric', month: 'long' })}` : `em ${monthLabel}`} ${list.length ? `· ${brl(sumBy(list, p => p.v))}` : ''}</h2>
+        ${dia ? `<a class="btn small" href="${url({ dia: '' })}" data-f style="margin-bottom:.6rem">✕ Ver o mês todo</a>` : ''}
         <div class="chips" style="margin-bottom:.8rem">${chips.map(([k, n]) => `<a class="chip ${pm === k ? 'on' : ''}" href="${url({ pm: k })}" data-f>${n}${k && k.length > 1 ? ' ' + brl(sumBy(received.filter(p => p.m === k), p => p.v)) : ''}</a>`).join('')}</div>
         <div class="list">${list.length ? list.map(p => `
           <a class="card line" href="${link(p.k, p.it)}">
@@ -2377,13 +2436,77 @@ function vFin(_, q) {
         <button class="btn small main" data-saveprice="${a.id}">Salvar</button></div></div>`).join('') || '<div class="muted">Tudo com valor. 🎉</div>'}</div>`,
   };
 
-  // Sem quadro escolhido: um resumo do que pede atenção
+  // Entradas de um mês qualquer (para comparar com o anterior)
+  const receivedIn = mm => {
+    let t = 0;
+    for (const a of db.appts) if (a.status !== 'cancelado') for (const p of paymentsOf(a)) if (p.d?.startsWith(mm)) t += p.v || 0;
+    for (const x of db.sales) for (const p of paymentsOf(x)) if (p.d?.startsWith(mm)) t += p.v || 0;
+    return round2(t);
+  };
+
+  // Gráfico de barras: quanto entrou em cada dia do mês (uma série, uma cor)
+  const dailyChart = () => {
+    const lastDay = new Date(y, mo, 0).getDate();
+    const days = Array.from({ length: lastDay }, (_, i) => `${m}-${pad(i + 1)}`);
+    const byDay = Object.fromEntries(days.map(d => [d, 0]));
+    const countDay = Object.fromEntries(days.map(d => [d, 0]));
+    for (const p of received) if (byDay[p.d] !== undefined) { byDay[p.d] += p.v; countDay[p.d]++; }
+    const max = Math.max(...Object.values(byDay));
+    if (!max) return '';
+    const nice = max <= 100 ? Math.ceil(max / 10) * 10 : max <= 1000 ? Math.ceil(max / 100) * 100 : Math.ceil(max / 500) * 500;
+    const t = today();
+    return `<div class="card chart">
+      <div class="chart-head"><b>Entradas por dia</b><span class="muted" id="chart-tip">Toque numa barra</span></div>
+      <div class="chart-body">
+        <div class="chart-y"><span>${brl(nice).replace(',00', '')}</span><span>${brl(nice / 2).replace(',00', '')}</span><span>0</span></div>
+        <div class="chart-bars" role="img" aria-label="Entradas por dia em ${monthLabel}">
+          ${days.map(d => {
+            const v = round2(byDay[d]);
+            return `<a class="cbar ${d === dia ? 'on' : ''} ${d === t ? 'today' : ''}" href="${url({ f: 'entrou', pm: '', dia: d })}" data-f data-tip="${fmtShort(d).slice(0, 5)} · ${brl(v)}${countDay[d] ? ` · ${plural(countDay[d], 'pagamento', 'pagamentos')}` : ''}" aria-label="${fmtShort(d)}: ${brl(v)}">
+              <i style="height:${v ? Math.max(3, v / nice * 100) : 0}%"></i></a>`;
+          }).join('')}
+        </div>
+      </div>
+      <div class="chart-x"><span>1</span><span>10</span><span>20</span><span>${lastDay}</span></div>
+    </div>`;
+  };
+
+  // Rankings: serviços que mais renderam e clientes que mais gastaram (pelo que entrou no mês)
+  const ranking = (title, rows) => {
+    if (!rows.length) return '';
+    const top = rows[0][1];
+    return `<h2>${title}</h2><div class="card rank">${rows.map(([n, v]) => `
+      <div class="rank-row"><span class="rank-name">${esc(n)}</span><span class="rank-bar"><i style="width:${Math.max(4, v / top * 100)}%"></i></span><b>${brl(v)}</b></div>`).join('')}</div>`;
+  };
+  const group = (list, key) => Object.entries(list.reduce((acc, p) => { const k = key(p); acc[k] = (acc[k] || 0) + p.v; return acc; }, {}))
+    .sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => [k, round2(v)]);
+
+  // Sem quadro escolhido: um resumo do mês e o que pede atenção
   const overview = () => {
+    const prev = receivedIn(shift(-1));
+    const diff = prev ? Math.round((recTotal - prev) / prev * 100) : null;
+    const doneAppts = monthAppts.filter(a => a.status === 'feito' || (a.status === 'marcado' && isPast(a)));
+    const paidAppts = doneAppts.filter(a => paidOf(a) > 0);
+    const ticket = paidAppts.length ? round2(paidAppts.reduce((t, a) => t + paidOf(a), 0) / paidAppts.length) : 0;
+    const svcRank = group(received.filter(p => p.k === 'a'), p => p.it.service || 'Sem serviço');
+    const cliRank = group(received.filter(p => p.it.clientId), p => clientName(p.it.clientId));
     const tips = [];
     if (dueMonth.length + dueOld.length) tips.push(`<a class="card line" href="${url({ f: 'falta' })}" data-f><div class="grow"><b>💸 ${plural(dueMonth.length + dueOld.length, 'conta para receber', 'contas para receber')}</b><span>${brl(owed + owedOld)} no total</span></div><span class="muted">›</span></a>`);
     if (noPrice.length) tips.push(`<a class="card line" href="${url({ f: 'semvalor' })}" data-f><div class="grow"><b>✏️ ${plural(noPrice.length, 'atendimento sem valor', 'atendimentos sem valor')}</b><span>Coloque quanto foi cobrado</span></div><span class="muted">›</span></a>`);
-    return `<p class="muted" style="text-align:center">👆 Toque em um quadro para ver os detalhes.</p>
-      ${tips.length ? `<h2>Precisa de atenção</h2><div class="list">${tips.join('')}</div>` : '<div class="empty">Tudo em dia. 🎉</div>'}`;
+    return `<p class="muted" style="text-align:center;margin:.2rem 0 .8rem">👆 Toque em um quadro para ver os detalhes.</p>
+      ${tips.length ? `<h2>Precisa de atenção</h2><div class="list">${tips.join('')}</div>` : ''}
+      <h2>Resumo de ${monthLabel}</h2>
+      <div class="stats">
+        <div class="stat"><span>Comparado ao mês passado</span><b>${diff === null ? '—' : `${diff >= 0 ? '↑' : '↓'} ${Math.abs(diff)}%`}</b>
+          <small class="muted">${prev ? `${brl(prev)} em ${new Date(y, mo - 2, 1).toLocaleDateString('pt-BR', { month: 'long' })}` : 'sem dados'}</small></div>
+        <div class="stat"><span>Atendimentos feitos</span><b>${doneAppts.length}</b></div>
+        <div class="stat"><span>Média por atendimento</span><b>${ticket ? brl(ticket) : '—'}</b></div>
+        <div class="stat"><span>Despesas</span><b>${plural(expenses.length, 'lançada', 'lançadas')}</b></div>
+      </div>
+      ${dailyChart()}
+      ${ranking('💇 Serviços que mais renderam', svcRank)}
+      ${ranking('👩 Clientes que mais gastaram', cliRank)}
+      ${!tips.length && !received.length ? '<div class="empty">Nenhum dinheiro lançado neste mês ainda.</div>' : ''}`;
   };
 
   return {
@@ -2412,7 +2535,12 @@ function vFin(_, q) {
         if (!a) return;
         e.preventDefault();
         replaceTo(a.getAttribute('href'));
-        if (a.classList.contains('fcard')) setTimeout(() => $('#fin-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+        if (a.classList.contains('fcard') || a.classList.contains('cbar')) setTimeout(() => $('#fin-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+      });
+      // passar o dedo/mouse numa barra mostra o valor do dia
+      el.querySelectorAll('.cbar').forEach(b => {
+        const show = () => { const t = $('#chart-tip', el); if (t) t.textContent = b.dataset.tip; };
+        b.addEventListener('mouseenter', show); b.addEventListener('touchstart', show, { passive: true }); b.addEventListener('focus', show);
       });
     },
   };

@@ -88,7 +88,8 @@ export function registerPortal(app, { db, messenger, push, publicUrl, limitBook,
     const packages = q.clientPackages.all(t.id, client.id).map(r => JSON.parse(r.data)).map(p => {
       const used = all.filter(a => a.packageId === p.id && a.status !== 'cancelado');
       const done = used.filter(a => a.status === 'feito' || zonedEpoch(a.date, a.time, s.timezone) < Date.now()).length;
-      return { name: p.name, total: p.total, scheduled: used.length, done };
+      const before = p.doneBefore || 0;
+      return { name: p.name, total: p.total, scheduled: before + used.length, done: before + done };
     }).filter(p => p.done < p.total);
     return {
       salon: t.name, name: client.name, approval: s.booking.requireApproval, enabled: s.booking.enabled,

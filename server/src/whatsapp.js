@@ -70,8 +70,10 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
     if (!pkg) return '';
     const list = pkgAppts.all(tenantId, appt.packageId).map(r => JSON.parse(r.data))
       .filter(a => a.status !== 'cancelado').sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-    const n = list.findIndex(a => a.id === appt.id) + 1;
-    return n ? `${pkg.name} — ${n}ª de ${pkg.total}` : pkg.name;
+    const i = list.findIndex(a => a.id === appt.id);
+    if (i < 0) return pkg.name;
+    const n = (pkg.doneBefore || 0) + i + 1; // sessões feitas antes de entrar no app também contam
+    return `${pkg.name} — ${n}ª sessão de ${pkg.total}`;
   }
 
   function varsFor(tenant, appt, client, kind) {
@@ -105,7 +107,10 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
 
     const phone = kind === 'owner' ? waNumber(s.whatsapp.ownerPhone || s.whatsapp.number) : waNumber(client?.phone);
     const tpl = s.whatsapp.templates[kind] || DEFAULTS.whatsapp.templates[kind];
-    const body = renderTemplate(tpl, varsFor(tenant, appt, client, kind));
+    const vars = varsFor(tenant, appt, client, kind);
+    // horário de pacote: a cliente sempre fica sabendo em qual sessão está, mesmo se o texto foi editado sem {pacote}
+    const tplFinal = vars.pacote && ['confirm', 'reminder', 'prereserve'].includes(kind) && !tpl.includes('{pacote}') ? `${tpl}\n📦 {pacote}` : tpl;
+    const body = renderTemplate(tplFinal, vars);
     const row = { tenantId, apptId, kind, phone, name: client?.name || '', body, now: Date.now() };
 
     if (!q.claim.run(row).changes && !q.reclaim.run(row).changes) return 'already';
