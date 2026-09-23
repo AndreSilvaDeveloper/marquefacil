@@ -1803,6 +1803,7 @@ function vClient(id, q) {
         <a class="btn" href="tel:${phoneDigits}">📞<small>Ligar</small></a>` : ''}
         <a class="btn" href="#/agendar?c=${c.id}">📅<small>Agendar</small></a>
         <a class="btn" href="#/venda?c=${c.id}">🛍️<small>Vender</small></a>
+        <a class="btn" href="#/cliente-editar?id=${c.id}">✏️<small>Editar</small></a>
       </div>
 
       ${c.phone && c.birthday && bdayIn(c.birthday) <= 0 ? `<a class="btn ok" style="margin-bottom:.8rem" target="_blank" rel="noopener" href="${waLink(c.phone, bdayText(c))}">🎂 Mandar parabéns</a>` : ''}
@@ -1841,9 +1842,15 @@ function vClient(id, q) {
       <h2 id="hist">Histórico</h2>
       ${allHistory.length ? `<div class="chips filters">${Object.entries(hFilters).map(([k, [n, fn]]) =>
         `<a class="chip ${hf === k ? 'on' : ''}" href="${url(k)}" data-f>${n} <small>${allHistory.filter(fn).length}</small></a>`).join('')}</div>` : ''}
-      <div class="list">${historyHtml || `<div class="muted">${allHistory.length ? 'Nada neste filtro.' : 'Ainda não tem histórico.'}</div>`}</div>`,
+      <div class="list">${historyHtml || `<div class="muted">${allHistory.length ? 'Nada neste filtro.' : 'Ainda não tem histórico.'}</div>`}</div>
+
+      <div class="row" style="margin-top:2rem">
+        <a class="btn" href="#/cliente-editar?id=${c.id}">✏️ Editar dados</a>
+        <button type="button" class="btn danger" id="del-client">🗑️ Apagar cliente</button>
+      </div>`,
     bind(el) {
       bindQuickPay(el);
+      $('#del-client', el).onclick = () => deleteClient(c);
       el.addEventListener('click', e => {
         const j = e.target.closest('a[data-jump]');
         if (j) { e.preventDefault(); $(j.getAttribute('href'))?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
@@ -2022,6 +2029,17 @@ function bindQuickPay(el) {
   });
 }
 
+// Apaga a cliente e tudo dela (horários, vendas e pacotes), depois de confirmar
+function deleteClient(c) {
+  const n = db.appts.filter(a => a.clientId === c.id).length + db.sales.filter(s => s.clientId === c.id).length;
+  if (!confirm(`Apagar ${c.name}${n ? ` e todo o histórico dela (${n} ${n === 1 ? 'registro' : 'registros'})` : ''}? Isso não tem volta.`)) return;
+  db.clients = db.clients.filter(x => x.id !== c.id);
+  db.appts = db.appts.filter(a => a.clientId !== c.id);
+  db.sales = db.sales.filter(s => s.clientId !== c.id);
+  db.packages = db.packages.filter(p => p.clientId !== c.id);
+  save(); toast('Cliente apagada'); replaceTo('#/clientes');
+}
+
 function vClientForm(_, q) {
   const c = q.id ? client(q.id) : null;
   return {
@@ -2063,14 +2081,7 @@ function vClientForm(_, q) {
           replaceTo(`#/cliente/${n.id}`);
         }
       });
-      $('#del', el) && ($('#del', el).onclick = () => {
-        const n = db.appts.filter(a => a.clientId === c.id).length + db.sales.filter(s => s.clientId === c.id).length;
-        if (!confirm(`Apagar ${c.name}${n ? ` e todo o histórico dela (${n} registros)` : ''}? Isso não tem volta.`)) return;
-        db.clients = db.clients.filter(x => x.id !== c.id);
-        db.appts = db.appts.filter(a => a.clientId !== c.id);
-        db.sales = db.sales.filter(s => s.clientId !== c.id);
-        save(); toast('Cliente apagada'); replaceTo('#/clientes');
-      });
+      $('#del', el) && ($('#del', el).onclick = () => deleteClient(c));
     },
   };
 }
