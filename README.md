@@ -9,11 +9,17 @@ então o app abre rápido e continua funcionando sem internet (envia quando a in
 - **Agendar**: só precisa do **nome** e do **horário** (livre, ex.: 12:10). Telefone, serviço, tempo,
   valor e "já pagou?" são opcionais. Cliente e serviço novos são cadastrados sozinhos.
   Horário ocupado mostra um **aviso**, mas dá para agendar mesmo assim.
+  **Cliente fixa**: repetir toda semana, a cada 15 dias ou todo mês.
+- **Link para as clientes** (`dominio/nome-do-salao`): a cliente pede o horário; a profissional
+  recebe um **aviso no celular** e confirma; a cliente recebe a confirmação no **WhatsApp**.
+- **WhatsApp automático** (Evolution API): confirmação, lembrete antes do horário, aviso de recusa.
+  Também dá para **lembrar as clientes de amanhã** pelo próprio WhatsApp, uma por uma.
 - **Clientes**: busca, WhatsApp, histórico de serviços e produtos, quanto já pagou e quanto falta.
-- **Vender produto**: cliente e produto novos são cadastrados sozinhos.
-- **Dinheiro**: recebido no mês, quem está devendo, atendimentos sem valor.
-- **Buscar**: por nome, serviço, produto ou data.
-- **Mais**: serviços, produtos, letra grande, conta, cópia de segurança.
+- **Pagamentos**: Pix, dinheiro ou cartão; pagamento **parcial** ("pagou R$ 30, falta R$ 30").
+- **Vender produto**, com **estoque** que baixa sozinho e aviso quando está acabando.
+- **Dinheiro**: o que entrou no mês (por serviço/produto e por forma de pagamento), **despesas**,
+  **lucro**, quem está devendo, atendimentos sem valor.
+- **Marca por domínio**: `studiokadosh.com` abre com nome, logo e cores do Studio Kadosh.
 
 ## Estrutura
 ```

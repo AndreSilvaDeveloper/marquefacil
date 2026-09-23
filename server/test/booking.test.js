@@ -309,3 +309,23 @@ test('marca por domínio: Studio Kadosh x Marque Fácil', async () => {
   assert.match(link.body, /window\.BRAND = \{"name":"Studio Kadosh"/, 'página das clientes também com a marca');
   await app.close();
 });
+
+test('cliente fixa: só a 1ª data recebe confirmação; despesas sincronizam', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl } });
+  const call = await salon(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  const d = nextWeekday(4);
+  const series = [0, 1, 2, 3].map(i => ({ coll: 'appts', id: 'f' + i, data: {
+    clientId: 'cf', date: addDays(d, 7 * i), time: '10:00', status: 'marcado', seriesId: 'S1', seriesIndex: i, seriesEvery: 7, createdAt: Date.now(),
+  } }));
+  await call('POST', '/api/sync', { changes: [{ coll: 'clients', id: 'cf', data: { name: 'Fixa', phone: '11955554444' } }, ...series] });
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal(evo.sent.filter(m => m.number === '5511955554444').length, 1, 'uma confirmação só');
+
+  const r = await call('POST', '/api/sync', { changes: [{ coll: 'expenses', id: 'e1', data: { amount: 120, cat: 'Aluguel', date: d } }] });
+  assert.equal(r.status, 200);
+  assert.ok((await call('GET', '/api/changes?since=0')).body.changes.some(c => c.coll === 'expenses'));
+  await app.close();
+});

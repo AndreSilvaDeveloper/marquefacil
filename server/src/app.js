@@ -197,6 +197,8 @@ export function buildApp({
       if (from) { afterDecision(tenantId, c.id, from, to); continue; }
       // Horário novo marcado no app: manda confirmação, se a opção estiver ligada
       s ||= getSettings(tenantId);
+      // cliente fixa: só a 1ª data da repetição ganha confirmação (as outras recebem o lembrete)
+      if (c.data.seriesIndex > 0) continue;
       if (s.whatsapp.confirmManual && to === 'marcado' && c.data.date && c.data.time &&
           zonedEpoch(c.data.date, c.data.time, s.timezone) > Date.now()) messenger.fire(tenantId, c.id, 'confirm');
     }

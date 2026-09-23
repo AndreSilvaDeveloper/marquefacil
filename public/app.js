@@ -20,7 +20,7 @@ const BRAND = window.BRAND || { name: 'Marque Fácil', logo: null, colors: null 
 })();
 
 const OLD_KEY = 'agendaSalao.v1'; // dados da versão antiga (só no celular)
-const COLLS = ['clients', 'services', 'products', 'appts', 'sales'];
+const COLLS = ['clients', 'services', 'products', 'appts', 'sales', 'expenses'];
 const DEFAULT_SLOT = 30; // minutos considerados quando o horário não tem duração
 
 /* ---------------------------- utilidades ---------------------------- */
@@ -237,15 +237,83 @@ function conflictsFor(date, time, duration, exceptId) {
 }
 
 // Um valor "está devendo" quando tem preço, não foi pago e o serviço já passou/foi feito.
-const apptDue = a => a.status !== 'cancelado' && a.status !== 'pendente' && !a.paid && a.price > 0 && (a.status === 'feito' || isPast(a));
-const saleDue = s => !s.paid && s.total > 0;
+/* Pagamentos: cada horário/venda guarda payments = [{ v: valor, m: 'pix'|'dinheiro'|'cartao', d: 'AAAA-MM-DD' }].
+   Registros antigos só têm paid: true/false — continuam valendo (pago = valor inteiro no dia do horário). */
+const PAY = { pix: 'Pix', dinheiro: 'Dinheiro', cartao: 'Cartão' };
+const round2 = n => Math.round(n * 100) / 100;
+const valueOf = x => ('total' in x ? x.total : x.price) || 0;
+function paymentsOf(x) {
+  if (x.payments?.length) return x.payments;
+  return x.paid && valueOf(x) > 0 ? [{ v: valueOf(x), m: x.payMethod || '', d: x.date }] : [];
+}
+const paidOf = x => round2(paymentsOf(x).reduce((t, p) => t + (p.v || 0), 0));
+const leftOf = x => Math.max(0, round2(valueOf(x) - paidOf(x)));
+const isPaid = x => (valueOf(x) > 0 ? leftOf(x) === 0 && paidOf(x) > 0 : !!x.paid);
+function addPayment(x, v, m, d = today()) {
+  x.payments = [...paymentsOf(x), { v: round2(v), m, d }];
+  x.paid = isPaid(x);
+}
+function clearPayments(x) { x.payments = []; x.paid = false; }
+function refreshPaid(x) { if (x.payments?.length) x.paid = leftOf(x) === 0; } // depois de mudar o valor
+const methodsOf = x => [...new Set(paymentsOf(x).map(p => PAY[p.m]).filter(Boolean))].join(' + ');
+
+const apptDue = a => a.status !== 'cancelado' && a.status !== 'pendente' && valueOf(a) > 0 && leftOf(a) > 0 && (a.status === 'feito' || isPast(a));
+const saleDue = s => valueOf(s) > 0 && leftOf(s) > 0;
 function clientOwes(id) {
-  return db.appts.filter(a => a.clientId === id && apptDue(a)).reduce((t, a) => t + a.price, 0) +
-    db.sales.filter(s => s.clientId === id && saleDue(s)).reduce((t, s) => t + s.total, 0);
+  return round2(db.appts.filter(a => a.clientId === id && apptDue(a)).reduce((t, a) => t + leftOf(a), 0) +
+    db.sales.filter(s => s.clientId === id && saleDue(s)).reduce((t, s) => t + leftOf(s), 0));
 }
 function clientPaid(id) {
-  return db.appts.filter(a => a.clientId === id && a.paid && a.status !== 'cancelado').reduce((t, a) => t + (a.price || 0), 0) +
-    db.sales.filter(s => s.clientId === id && s.paid).reduce((t, s) => t + s.total, 0);
+  return round2(db.appts.filter(a => a.clientId === id && a.status !== 'cancelado').reduce((t, a) => t + paidOf(a), 0) +
+    db.sales.filter(s => s.clientId === id).reduce((t, s) => t + paidOf(s), 0));
+}
+// Selo de pagamento: "Pago R$ 60 (Pix)", "Pagou R$ 30 · falta R$ 30", "Não pago R$ 60"
+function payBadge(x, dueWord = 'Não pago') {
+  const v = valueOf(x), p = paidOf(x), how = methodsOf(x);
+  if (v > 0 && isPaid(x)) return `<span class="badge ok">Pago ${brl(v)}${how ? ' · ' + how : ''}</span>`;
+  if (p > 0) return `<span class="badge warn">Pagou ${brl(p)} · falta ${brl(leftOf(x))}</span>`;
+  if (v > 0) return `<span class="badge warn">${dueWord} ${brl(v)}</span>`;
+  return x.paid ? '<span class="badge ok">Pago</span>' : '';
+}
+
+// Janela "Receber pagamento": quanto recebeu agora e como
+function paySheet(x, title, onDone) {
+  const total = valueOf(x), left = leftOf(x) || total;
+  let method = '';
+  const bg = document.createElement('div');
+  bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet form" role="dialog" aria-modal="true">
+    <h2>💰 Receber pagamento</h2>
+    <p class="muted" style="margin-top:-.3rem">${esc(title)}</p>
+    ${paidOf(x) > 0 ? `<p>Valor ${brl(total)} · já pagou ${brl(paidOf(x))} · <b>falta ${brl(leftOf(x))}</b></p>` : ''}
+    <div class="field"><label for="ps-v">Quanto recebeu agora?</label>
+      <div class="money"><input type="text" id="ps-v" inputmode="decimal" value="${moneyVal(left)}"></div>
+      <small class="hint">Se ela pagou só uma parte, troque o valor.</small></div>
+    <div class="field"><span class="lbl">Como pagou?</span>
+      <div class="paygrid" id="ps-m">${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}">${n}</button>`).join('')}</div></div>
+    <div id="ps-err"></div>
+    <button class="btn ok" id="ps-ok">✓ Confirmar</button>
+    <button class="btn" id="ps-no" style="margin-top:.6rem">Cancelar</button>
+  </div>`;
+  document.body.appendChild(bg);
+  const close = () => bg.remove();
+  const err = m => { $('#ps-err', bg).innerHTML = `<div class="error">${m}</div>`; };
+  $('#ps-m', bg).onclick = e => {
+    const b = e.target.closest('[data-m]');
+    if (!b) return;
+    method = b.dataset.m;
+    bg.querySelectorAll('#ps-m button').forEach(x => x.classList.toggle('on', x === b));
+  };
+  $('#ps-no', bg).onclick = close;
+  bg.onclick = e => { if (e.target === bg) close(); };
+  $('#ps-ok', bg).onclick = () => {
+    const v = parseMoney($('#ps-v', bg).value);
+    if (!(v > 0)) return err('Escreva quanto recebeu. Exemplo: 50,00');
+    if (total > 0 && v > left + 0.004) return err(`É mais do que falta (${brl(left)}).`);
+    if (!method) return err('Toque em Pix, Dinheiro ou Cartão.');
+    close();
+    onDone(v, method);
+  };
 }
 
 function waLink(phone, text = '') {
@@ -272,7 +340,7 @@ function parseHash() {
 
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
-  agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, venda: vSaleForm, financeiro: vFin, mais: vMore,
+  agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: vSaleForm, financeiro: vFin, mais: vMore,
   itens: vItems, item: vItemForm, link: vLink, whatsapp: vWhats,
 };
 
@@ -310,12 +378,10 @@ function badgesFor(a) {
   if (a.status === 'cancelado') b.push('<span class="badge bad">Cancelado</span>');
   else if (a.status === 'feito') b.push('<span class="badge ok">✓ Feito</span>');
   if (a.status !== 'cancelado') {
-    if (a.status === 'pendente') { /* valor só depois de confirmado */ }
-    else if (a.price > 0) b.push(a.paid ? `<span class="badge ok">Pago ${brl(a.price)}</span>`
-      : `<span class="badge warn">${apptDue(a) ? 'Não pago' : 'A pagar'} ${brl(a.price)}</span>`);
-    else if (a.paid) b.push('<span class="badge ok">Pago</span>');
+    if (a.status !== 'pendente') b.push(payBadge(a, apptDue(a) ? 'Não pago' : 'A pagar'));
     if (conflictsFor(a.date, a.time, a.duration, a.id).length) b.push('<span class="badge warn">⚠️ Horário junto</span>');
     if (a.source === 'online') b.push('<span class="badge">🌐 Pelo link</span>');
+    if (a.seriesId) b.push('<span class="badge">🔁 Fixa</span>');
   }
   return b.join('');
 }
@@ -338,7 +404,7 @@ function saleCard(s, { showClient = true } = {}) {
     <div class="info">
       <b>${esc(s.product)}${s.qty > 1 ? ` (${s.qty}x)` : ''}</b>
       <span>${fmtShort(s.date)}${showClient ? ' · ' + esc(clientName(s.clientId)) : ''}</span>
-      <div class="badges">${s.paid ? `<span class="badge ok">Pago ${brl(s.total)}</span>` : `<span class="badge warn">Não pago ${brl(s.total)}</span>`}</div>
+      <div class="badges">${payBadge(s)}</div>
     </div></a>`;
 }
 
@@ -368,6 +434,18 @@ function suggest(input, getItems, onPick, { showOnEmpty = false } = {}) {
   input.addEventListener('blur', () => setTimeout(() => (box.hidden = true), 250));
 }
 
+// Estoque: product.stock = quantidade (null = não controla); product.minStock = avisar quando chegar nisso
+const hasStock = p => p && p.stock !== null && p.stock !== undefined && p.stock !== '';
+const lowStock = p => hasStock(p) && p.stock <= (p.minStock ?? 2);
+const lowProducts = () => db.products.filter(lowStock);
+function moveStock(productName, delta) {
+  const p = findByName(db.products, productName);
+  if (hasStock(p)) p.stock = Math.max(0, p.stock + delta);
+}
+const stockLabel = p => !hasStock(p) ? '' : p.stock <= 0 ? '⚠️ Sem estoque' : lowStock(p) ? `⚠️ Acabando: ${p.stock}` : `Estoque: ${p.stock}`;
+
+const nextInSeries = a => db.appts.filter(x => x.seriesId && x.seriesId === a.seriesId && x.id !== a.id &&
+  (x.date + x.time) > (a.date + a.time) && x.status !== 'cancelado').sort(byWhen);
 const pendingAppts = () => db.appts.filter(a => a.status === 'pendente').sort(byWhen);
 
 // Aceitar ou recusar um pedido do link (o servidor manda a mensagem para a cliente)
@@ -452,6 +530,7 @@ function vAgenda(_, q) {
           <input type="date" id="pick" value="${d}" style="position:absolute;inset:0;opacity:0;min-height:0"></label>
       </div>
       ${pend.length ? `<a class="card pending-banner" href="#/pedidos">⏳ <b>${pend.length} ${pend.length === 1 ? 'pedido esperando' : 'pedidos esperando'}</b> você confirmar ›</a>` : ''}
+      ${d === t && tomorrowList().length ? `<a class="btn" href="#/lembretes" style="margin-bottom:1rem">💬 Lembrar clientes de amanhã (${tomorrowList().filter(x => !x.remindedAt).length} de ${tomorrowList().length})</a>` : ''}
       <div id="push-card"></div>
       <h2>${active.length ? `${active.length} ${active.length === 1 ? 'horário' : 'horários'}` : ''}</h2>
       <div class="list">
@@ -495,13 +574,33 @@ function busyList(date, exceptId) {
     `<b>${a.time}${a.duration ? '–' + hhmm(apptEnd(a)) : ''}</b> ${esc(clientName(a.clientId))}`).join(' · ')}</small>`;
 }
 
+// Datas de uma cliente fixa: every = 7, 14 (dias) ou 'm' (todo mês), por `months` meses
+function seriesDates(start, every, months) {
+  if (!start) return [];
+  const end = toDate(start); end.setMonth(end.getMonth() + months);
+  const out = [];
+  if (every === 'm') {
+    const s0 = toDate(start);
+    for (let i = 0; i <= months; i++) {
+      const d = new Date(s0.getFullYear(), s0.getMonth() + i, 1);
+      d.setDate(Math.min(s0.getDate(), new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
+      if (d <= end) out.push(dstr(d));
+    }
+  } else {
+    for (let d = start; toDate(d) <= end; d = addDays(d, +every)) out.push(d);
+  }
+  return out;
+}
+const seriesLabel = e => ({ 7: 'toda semana', 14: 'a cada 15 dias', m: 'todo mês' }[e] || 'repetindo');
+
 function vApptForm(_, q) {
   const edit = q.id ? db.appts.find(a => a.id === q.id) : null;
   const a = edit || { date: q.d || today(), time: '', clientId: q.c || '', service: '', duration: null, price: null, paid: false, notes: '' };
   const cName = a.clientId ? clientName(a.clientId) : '';
   const durs = [30, 60, 90, 120, 180];
   let dur = a.duration || null;
-  let paid = !!a.paid;
+  let paid = isPaid(a);
+  let method = paymentsOf(a).at(-1)?.m || '';
 
   return {
     title: edit ? 'Editar horário' : 'Novo horário', tab: 'agenda', back: true,
@@ -536,6 +635,21 @@ function vApptForm(_, q) {
           <div id="conflict"></div>
         </div>
 
+        ${edit ? '' : `<div class="field">
+          <span class="lbl">Cliente fixa? Repetir este horário <span class="opt">(se quiser)</span></span>
+          <div class="chips" id="rep">
+            <button type="button" class="chip on" data-r="">Não</button>
+            <button type="button" class="chip" data-r="7">Toda semana</button>
+            <button type="button" class="chip" data-r="14">A cada 15 dias</button>
+            <button type="button" class="chip" data-r="m">Todo mês</button>
+          </div>
+          <div id="rep-for" hidden style="margin-top:.6rem">
+            <label for="rep-months">Por quanto tempo?</label>
+            <select id="rep-months">${[1, 2, 3, 6, 12].map(n => `<option value="${n}" ${n === 3 ? 'selected' : ''}>${n === 12 ? '1 ano' : n + (n === 1 ? ' mês' : ' meses')}</option>`).join('')}</select>
+            <small class="hint" id="rep-hint"></small>
+          </div>
+        </div>`}
+
         <div class="field">
           <label for="f-service">Serviço <span class="opt">(se quiser)</span></label>
           <div class="ac"><input type="text" id="f-service" value="${esc(a.service || '')}" placeholder="Ex.: Escova, Unha, Corte…" autocapitalize="sentences"><div class="sug" hidden></div></div>
@@ -558,6 +672,8 @@ function vApptForm(_, q) {
         <div class="field">
           <span class="lbl">Já está pago?</span>
           ${toggle2('f-paid', paid, '✓ Já pagou', 'Ainda não')}
+          <div class="paygrid" id="f-method" style="margin-top:.5rem" ${paid ? '' : 'hidden'}>
+            ${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}" class="${method === k ? 'on' : ''}">${n}</button>`).join('')}</div>
         </div>
 
         <div class="field">
@@ -589,7 +705,26 @@ function vApptForm(_, q) {
         saveBtn.classList.toggle('warn', !!list.length);
         saveBtn.classList.toggle('main', !list.length);
       };
-      const refreshTimes = () => { $('#busy', el).innerHTML = busyList(iDate.value, a.id); checkConflict(); };
+      const refreshTimes = () => { $('#busy', el).innerHTML = busyList(iDate.value, a.id); checkConflict(); paintRep(); };
+
+      // Repetição: datas que vão ser marcadas
+      let every = '';
+      const repDates = () => every ? seriesDates(iDate.value, every, +($('#rep-months', el)?.value || 3)) : [iDate.value];
+      const paintRep = () => {
+        if (!$('#rep', el)) return;
+        $('#rep-for', el).hidden = !every;
+        if (!every || !iDate.value) return;
+        const ds = repDates();
+        $('#rep-hint', el).textContent = `Vai marcar ${ds.length} horários, de ${fmtShort(ds[0])} até ${fmtShort(ds.at(-1))}.`;
+      };
+      $('#rep', el)?.addEventListener('click', e => {
+        const b = e.target.closest('[data-r]');
+        if (!b) return;
+        every = b.dataset.r;
+        el.querySelectorAll('#rep .chip').forEach(x => x.classList.toggle('on', x === b));
+        paintRep();
+      });
+      $('#rep-months', el)?.addEventListener('change', paintRep);
 
       suggest(iClient, clientItems, () => {});
       bindClientPhone(el, iClient, $('#f-phone', el));
@@ -622,7 +757,13 @@ function vApptForm(_, q) {
       iDate.addEventListener('change', refreshTimes);
       maskTime(iTime);
       iTime.addEventListener('input', checkConflict);
-      bindToggle2($('#f-paid', el), v => (paid = v));
+      bindToggle2($('#f-paid', el), v => { paid = v; $('#f-method', el).hidden = !v; });
+      $('#f-method', el).onclick = e => {
+        const b = e.target.closest('[data-m]');
+        if (!b) return;
+        method = b.dataset.m;
+        el.querySelectorAll('#f-method button').forEach(x => x.classList.toggle('on', x === b));
+      };
 
       paintDur(); checkConflict();
       if (cName) iClient.dispatchEvent(new Event('change'));
@@ -639,6 +780,7 @@ function vApptForm(_, q) {
         if (!time) { err(iTime.value.trim() ? 'O horário não está certo. Exemplo: 12:10' : 'Escreva o horário. Exemplo: 12:10'); iTime.focus(); return; }
         const price = parseMoney(iPrice.value);
         if (iPrice.value.trim() && price == null) { err('O valor não está certo. Exemplo: 50,00'); iPrice.focus(); return; }
+        if (paid && price > 0 && !isPaid({ ...a, price }) && !method) { err('Toque em Pix, Dinheiro ou Cartão (como pagou).'); return; }
 
         const c = findOrCreate(db.clients, name, { phone: '', notes: '' });
         const phone = $('#f-phone', el).value.trim();
@@ -652,13 +794,35 @@ function vApptForm(_, q) {
         const data = {
           clientId: c.id, date: iDate.value, time,
           service: svcName ? findByName(db.services, svcName).name : '',
-          duration: dur, price, paid, notes: $('#f-notes', el).value.trim(),
+          duration: dur, price, notes: $('#f-notes', el).value.trim(),
         };
-        if (edit) Object.assign(edit, data);
-        else db.appts.push({ id: uid(), status: 'marcado', createdAt: Date.now(), ...data });
+        // pagamento: "Já pagou" lança o que falta; "Ainda não" desfaz
+        const setPay = x => {
+          if (!paid) { if (isPaid(x) || x.paid) clearPayments(x); return; }
+          if (!(x.price > 0)) { x.paid = true; return; }
+          refreshPaid(x);
+          if (!isPaid(x)) addPayment(x, leftOf(x) || x.price, method);
+        };
+        if (edit) { Object.assign(edit, data); setPay(edit); }
+        else {
+          const dates = repDates();
+          const seriesId = dates.length > 1 ? uid() : null;
+          let clash = 0;
+          dates.forEach((date, i) => {
+            if (conflictsFor(date, time, dur, null).length) clash++;
+            const n = { id: uid(), status: 'marcado', createdAt: Date.now(), ...data, date, paid: false };
+            if (seriesId) Object.assign(n, { seriesId, seriesIndex: i, seriesEvery: every });
+            if (i === 0) setPay(n); // pagamento só vale para o primeiro
+            db.appts.push(n);
+          });
+          save();
+          toast(dates.length > 1 ? `${dates.length} horários marcados ✓${clash ? ` (${clash} junto com outro horário)` : ''}` : 'Horário marcado ✓');
+          replaceTo(`#/agenda?d=${data.date}`);
+          return;
+        }
         save();
-        toast(edit ? 'Alterações salvas ✓' : 'Horário marcado ✓');
-        if (edit) back(); else { replaceTo(`#/agenda?d=${data.date}`); }
+        toast('Alterações salvas ✓');
+        back();
       });
     },
   };
@@ -682,6 +846,7 @@ function vAppt(id) {
         <p style="font-size:1.15rem"><b style="text-transform:capitalize">${dayName(a.date)}</b>, ${fmtShort(a.date)} às <b>${a.time}</b>${a.duration ? ` até ${hhmm(apptEnd(a))}` : ''}</p>
         ${a.service ? `<p>💇 ${esc(a.service)}${a.duration ? ' · ' + fmtDur(a.duration) : ''}</p>` : ''}
         ${a.notes ? `<p class="muted">📝 ${esc(a.notes)}</p>` : ''}
+        ${a.seriesId ? `<p>🔁 Cliente fixa · ${seriesLabel(a.seriesEvery)}</p>` : ''}
         <div class="badges">${badgesFor(a)}</div>
         ${conflicts.length ? `<div class="conflict-box">⚠️ Junto com: ${conflicts.map(x => `<b>${esc(clientName(x.clientId))}</b> ${x.time}`).join(', ')}</div>` : ''}
       </div>
@@ -700,8 +865,13 @@ function vAppt(id) {
           <div class="quickprice"><div class="money"><input type="text" id="price" inputmode="decimal" placeholder="0,00" value="${moneyVal(a.price)}"></div>
           <button class="btn small main" id="save-price">Salvar</button></div>
         </div>
-        <div><span class="lbl" style="font-weight:700;display:block;margin-bottom:.35rem">Pagamento</span>
-          ${toggle2('paid', a.paid, '✓ Já pagou', 'Não pagou')}</div>
+        <div class="card">
+          <span class="lbl" style="font-weight:700;display:block;margin-bottom:.35rem">Pagamento</span>
+          ${payBadge(a, 'Não pagou') || '<span class="muted">Coloque o valor para lançar o pagamento.</span>'}
+          ${paymentsOf(a).length ? `<ul class="paylist">${paymentsOf(a).map(p => `<li>${brl(p.v)}${PAY[p.m] ? ' · ' + PAY[p.m] : ''} · ${fmtShort(p.d)}</li>`).join('')}</ul>` : ''}
+          ${valueOf(a) > 0 && leftOf(a) > 0 ? `<button class="btn ok" id="receive" style="margin-top:.6rem">💰 Receber ${brl(leftOf(a))}</button>` : ''}
+          ${paymentsOf(a).length ? '<button class="btn small" id="unpay" style="margin-top:.6rem">Desfazer pagamento</button>' : ''}
+        </div>
         ${a.status === 'feito'
           ? '<button class="btn" id="undo-done">Desmarcar "feito"</button>'
           : '<button class="btn ok" id="done">✓ Atendimento feito</button>'}
@@ -713,8 +883,10 @@ function vAppt(id) {
         <a class="btn" href="#/agendar?id=${a.id}">✏️ Mudar dia, horário ou serviço</a>
         ${a.status === 'cancelado'
           ? '<button class="btn" id="uncancel">Desfazer cancelamento</button>'
-          : '<button class="btn danger" id="cancel">Cliente desmarcou (cancelar)</button>'}
-        <button class="btn danger" id="del">🗑️ Apagar de vez</button>
+          : `<button class="btn danger" id="cancel">Cliente desmarcou (cancelar ${a.seriesId ? 'só este' : ''})</button>`}
+        ${a.seriesId && nextInSeries(a).length ? `<button class="btn danger" id="cancel-next">Cancelar este e os próximos (${nextInSeries(a).length + 1})</button>` : ''}
+        <button class="btn danger" id="del">🗑️ Apagar de vez${a.seriesId ? ' (só este)' : ''}</button>
+        ${a.seriesId && nextInSeries(a).length ? `<button class="btn danger" id="del-next">🗑️ Apagar este e os próximos (${nextInSeries(a).length + 1})</button>` : ''}
       </div>`,
     bind(el) {
       const upd = (fn, msg) => { fn(); save(); toast(msg); render(); };
@@ -722,20 +894,71 @@ function vAppt(id) {
         const v = $('#price', el).value;
         const p = parseMoney(v);
         if (v.trim() && p == null) { alert('O valor não está certo. Exemplo: 50,00'); return; }
-        upd(() => (a.price = p), 'Valor salvo ✓');
+        upd(() => { a.price = p; refreshPaid(a); }, 'Valor salvo ✓');
       });
-      $('#paid', el) && bindToggle2($('#paid', el), v => upd(() => (a.paid = v), v ? 'Marcado como pago ✓' : 'Marcado como não pago'));
+      $('#receive', el) && ($('#receive', el).onclick = () => paySheet(a, `${clientName(a.clientId)} — ${a.service || 'Serviço'}`, (v, m) =>
+        upd(() => addPayment(a, v, m), isPaid(a) ? `Pago ✓ (${PAY[m]})` : `Recebido ${brl(v)} ✓`)));
+      $('#unpay', el) && ($('#unpay', el).onclick = () => confirm('Apagar os pagamentos lançados neste horário?') && upd(() => clearPayments(a), 'Pagamento desfeito'));
       $('#accept', el) && ($('#accept', el).onclick = () => { decide(a, true); render(); });
       $('#decline', el) && ($('#decline', el).onclick = () => { if (decide(a, false)) render(); });
       $('#done', el) && ($('#done', el).onclick = () => upd(() => (a.status = 'feito'), 'Atendimento feito ✓'));
       $('#undo-done', el) && ($('#undo-done', el).onclick = () => upd(() => (a.status = 'marcado'), 'Pronto'));
       $('#cancel', el) && ($('#cancel', el).onclick = () => confirm('Marcar este horário como cancelado?') && upd(() => (a.status = 'cancelado'), 'Horário cancelado'));
       $('#uncancel', el) && ($('#uncancel', el).onclick = () => upd(() => (a.status = 'marcado'), 'Horário de volta ✓'));
+      $('#cancel-next', el) && ($('#cancel-next', el).onclick = () => {
+        const list = [a, ...nextInSeries(a)];
+        if (!confirm(`Cancelar ${list.length} horários (este e os próximos da repetição)?`)) return;
+        list.forEach(x => (x.status = 'cancelado'));
+        save(); toast(`${list.length} horários cancelados`); render();
+      });
+      $('#del-next', el) && ($('#del-next', el).onclick = () => {
+        const ids = new Set([a, ...nextInSeries(a)].map(x => x.id));
+        if (!confirm(`Apagar ${ids.size} horários (este e os próximos da repetição) para sempre?`)) return;
+        db.appts = db.appts.filter(x => !ids.has(x.id));
+        save(); toast(`${ids.size} horários apagados`); back();
+      });
       $('#del', el).onclick = () => {
         if (!confirm('Apagar este horário para sempre?')) return;
         db.appts = db.appts.filter(x => x.id !== a.id);
         save(); toast('Horário apagado'); back();
       };
+    },
+  };
+}
+
+/* =====================================================================
+   LEMBRAR CLIENTES DE AMANHÃ (pelo WhatsApp dela, uma por uma)
+   ===================================================================== */
+const tomorrowList = () => db.appts.filter(a => a.date === addDays(today(), 1) && a.status === 'marcado').sort(byWhen);
+function reminderText(a) {
+  const c = client(a.clientId);
+  return `Olá, ${(c?.name || '').split(' ')[0]}! Passando para lembrar do seu horário amanhã (${fmtDate(a.date, { weekday: 'long' })}) às ${a.time}${a.service ? ' — ' + a.service : ''}. Te esperamos! 💖`;
+}
+function vLembretes() {
+  const list = tomorrowList();
+  return {
+    title: 'Lembrar amanhã', tab: 'agenda', back: true,
+    html: list.length ? `<p class="muted" style="margin-top:0">Toque no botão verde: o WhatsApp abre com a mensagem pronta. É só enviar e voltar aqui.</p>
+      <div class="list">${list.map(a => {
+        const c = client(a.clientId);
+        return `<div class="card">
+          <div class="line"><div class="grow"><b>${a.time} · ${esc(clientName(a.clientId))}</b><span>${esc(a.service || '')}</span></div>
+            ${a.remindedAt ? '<span class="badge ok">✓ Lembrada</span>' : ''}</div>
+          ${c?.phone
+            ? `<a class="btn ${a.remindedAt ? '' : 'ok'}" style="margin-top:.6rem" target="_blank" rel="noopener" data-rem="${a.id}" href="${waLink(c.phone, reminderText(a))}">💬 ${a.remindedAt ? 'Mandar de novo' : 'Lembrar pelo WhatsApp'}</a>`
+            : `<p class="muted" style="margin:.4rem 0 0">Sem telefone. <a href="#/cliente-editar?id=${a.clientId}">Colocar telefone</a></p>`}
+        </div>`;
+      }).join('')}</div>`
+      : '<div class="empty">Ninguém marcado para amanhã.</div>',
+    bind(el) {
+      el.addEventListener('click', e => {
+        const b = e.target.closest('[data-rem]');
+        const a = b && db.appts.find(x => x.id === b.dataset.rem);
+        if (!a) return;
+        a.remindedAt = Date.now();
+        save();
+        setTimeout(render, 800); // atualiza quando ela voltar do WhatsApp
+      });
     },
   };
 }
@@ -890,8 +1113,8 @@ function historyRow({ k, it }) {
   if (k === 'a' && !(price > 0)) {
     extra = `<div class="quickprice"><div class="money"><input type="text" inputmode="decimal" placeholder="Quanto custou?" data-price="${it.id}"></div>
       <button class="btn small main" data-saveprice="${it.id}">Salvar</button></div>`;
-  } else if (!it.paid) {
-    extra = `<div class="quickprice"><button class="btn small ok" style="flex:1" data-pay="${k}:${it.id}">✓ Recebi ${brl(price)}</button></div>`;
+  } else if (leftOf(it) > 0) {
+    extra = `<div class="quickprice"><button class="btn small ok" style="flex:1" data-pay="${k}:${it.id}">💰 Receber ${brl(leftOf(it))}</button></div>`;
   }
   return extra ? `<div>${card}${extra}</div>` : card;
 }
@@ -902,7 +1125,14 @@ function bindQuickPay(el) {
     if (pay) {
       const [k, id] = pay.dataset.pay.split(':');
       const it = (k === 'a' ? db.appts : db.sales).find(x => x.id === id);
-      if (it) { it.paid = true; if (k === 'a' && it.status === 'marcado') it.status = 'feito'; save(); toast('Pagamento recebido ✓'); render(); }
+      if (it) {
+        const what = `${clientName(it.clientId)} — ${k === 'a' ? (it.service || 'Serviço') : it.product} (${fmtShort(it.date)})`;
+        paySheet(it, what, (v, m) => {
+          addPayment(it, v, m);
+          if (k === 'a' && it.status === 'marcado' && isPast(it)) it.status = 'feito';
+          save(); toast(isPaid(it) ? `Pago ✓ (${PAY[m]})` : `Recebido ${brl(v)} ✓ Falta ${brl(leftOf(it))}`); render();
+        });
+      }
       return;
     }
     const sp = e.target.closest('[data-saveprice]');
@@ -912,7 +1142,7 @@ function bindQuickPay(el) {
       const p = parseMoney(inp.value);
       if (p == null) { alert('Escreva o valor. Exemplo: 50,00'); inp.focus(); return; }
       const a = db.appts.find(x => x.id === id);
-      if (a) { a.price = p; if (a.status === 'marcado') a.status = 'feito'; save(); toast('Valor salvo ✓'); render(); }
+      if (a) { a.price = p; refreshPaid(a); if (a.status === 'marcado') a.status = 'feito'; save(); toast('Valor salvo ✓'); render(); }
     }
   });
 }
@@ -970,7 +1200,8 @@ function vSaleForm(_, q) {
   const edit = q.id ? db.sales.find(s => s.id === q.id) : null;
   const s = edit || { clientId: q.c || '', product: '', qty: 1, unitPrice: null, date: today(), paid: false, notes: '' };
   let qty = s.qty || 1;
-  let paid = !!s.paid;
+  let paid = isPaid(s);
+  let method = paymentsOf(s).at(-1)?.m || '';
 
   return {
     title: edit ? 'Venda de produto' : 'Vender produto', tab: 'clientes', back: true,
@@ -1010,7 +1241,10 @@ function vSaleForm(_, q) {
         </div>
         <div class="field">
           <span class="lbl">Já está pago?</span>
+          ${edit && paidOf(s) > 0 && !isPaid(s) ? `<p style="margin:.2rem 0 .5rem">${payBadge(s)}</p>` : ''}
           ${toggle2('f-paid', paid, '✓ Já pagou', 'Ainda não')}
+          <div class="paygrid" id="f-method" style="margin-top:.5rem" ${paid ? '' : 'hidden'}>
+            ${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}" class="${method === k ? 'on' : ''}">${n}</button>`).join('')}</div>
         </div>
         <button class="btn main" type="submit">✓ ${edit ? 'Salvar' : 'Lançar venda'}</button>
         ${edit ? '<button class="btn danger" type="button" id="del" style="margin-top:2rem">🗑️ Apagar venda</button>' : ''}
@@ -1027,7 +1261,14 @@ function vSaleForm(_, q) {
         const p = db.products.find(x => x.id === it.id);
         if (p?.price && !iPrice.value) { iPrice.value = moneyVal(p.price); total(); }
       }, { showOnEmpty: true });
-      const hp = () => nameHint($('#h-prod', el), db.products, iProd.value, '✨ Produto novo — vai ficar salvo na lista', '✓ Produto da sua lista');
+      const hp = () => {
+        nameHint($('#h-prod', el), db.products, iProd.value, '✨ Produto novo — vai ficar salvo na lista', '✓ Produto da sua lista');
+        const p = findByName(db.products, iProd.value);
+        if (hasStock(p)) {
+          const have = p.stock + (edit && findByName(db.products, edit.product) === p ? edit.qty : 0);
+          $('#h-prod', el).insertAdjacentHTML('beforeend', ` · ${have <= 0 ? '⚠️ sem estoque' : have < qty ? `⚠️ só tem ${have}` : `📦 tem ${have}`}`);
+        }
+      };
       iProd.addEventListener('input', hp);
       iProd.addEventListener('change', () => {
         hp();
@@ -1035,9 +1276,15 @@ function vSaleForm(_, q) {
         if (p?.price && !iPrice.value) { iPrice.value = moneyVal(p.price); total(); }
       });
       iPrice.addEventListener('input', total);
-      $('#minus', el).onclick = () => { qty = Math.max(1, qty - 1); $('#qty', el).textContent = qty; total(); };
-      $('#plus', el).onclick = () => { qty++; $('#qty', el).textContent = qty; total(); };
-      bindToggle2($('#f-paid', el), v => (paid = v));
+      $('#minus', el).onclick = () => { qty = Math.max(1, qty - 1); $('#qty', el).textContent = qty; total(); hp(); };
+      $('#plus', el).onclick = () => { qty++; $('#qty', el).textContent = qty; total(); hp(); };
+      bindToggle2($('#f-paid', el), v => { paid = v; $('#f-method', el).hidden = !v; });
+      $('#f-method', el).onclick = e => {
+        const b = e.target.closest('[data-m]');
+        if (!b) return;
+        method = b.dataset.m;
+        el.querySelectorAll('#f-method button').forEach(x => x.classList.toggle('on', x === b));
+      };
       if (iProd.value) hp();
       total();
       (iClient.value ? iProd : iClient).focus();
@@ -1055,9 +1302,20 @@ function vSaleForm(_, q) {
         if (phone) c.phone = phone;
         const p = findOrCreate(db.products, prod, { price: unit });
         if (!p.price && unit) p.price = unit;
-        const data = { clientId: c.id, product: p.name, qty, unitPrice: unit, total: Math.round((unit || 0) * qty * 100) / 100, date: $('#f-date', el).value || today(), paid };
-        if (edit) Object.assign(edit, data);
-        else db.sales.push({ id: uid(), createdAt: Date.now(), ...data });
+        const data = { clientId: c.id, product: p.name, qty, unitPrice: unit, total: Math.round((unit || 0) * qty * 100) / 100, date: $('#f-date', el).value || today() };
+        if (paid && data.total > 0 && !method && !isPaid({ ...s, ...data })) { err('Toque em Pix, Dinheiro ou Cartão (como pagou).'); return; }
+        const setPay = x => {
+          if (!paid) { if (isPaid(x) || x.paid) clearPayments(x); return; }
+          if (!(x.total > 0)) { x.paid = true; return; }
+          refreshPaid(x);
+          if (!isPaid(x)) addPayment(x, leftOf(x) || x.total, method, x.date);
+        };
+        if (edit) moveStock(edit.product, +edit.qty); // devolve o da venda antiga…
+        moveStock(data.product, -qty);                 // …e tira o da venda nova
+        if (edit) { Object.assign(edit, data); setPay(edit); }
+        else { const n = { id: uid(), createdAt: Date.now(), ...data, paid: false }; setPay(n); db.sales.push(n); }
+        const pr = findByName(db.products, data.product);
+        if (lowStock(pr)) setTimeout(() => toast(`📦 ${pr.name}: ${pr.stock <= 0 ? 'acabou o estoque' : `só restam ${pr.stock}`}`), 2300);
         save();
         toast(edit ? 'Venda salva ✓' : `Venda lançada para ${c.name} ✓`);
         back(); // volta para onde estava (agenda ou ficha da cliente)
@@ -1065,6 +1323,7 @@ function vSaleForm(_, q) {
       $('#del', el) && ($('#del', el).onclick = () => {
         if (!confirm('Apagar esta venda?')) return;
         db.sales = db.sales.filter(x => x.id !== edit.id);
+        moveStock(edit.product, +edit.qty);
         save(); toast('Venda apagada'); back();
       });
     },
@@ -1079,21 +1338,32 @@ function vFin(_, q) {
   const [y, mo] = m.split('-').map(Number);
   const shift = n => { const d = new Date(y, mo - 1 + n, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
   const monthLabel = new Date(y, mo - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  const sumBy = (xs, f) => round2(xs.reduce((t, x) => t + (f(x) || 0), 0));
 
-  const appts = db.appts.filter(a => a.date.startsWith(m) && a.status !== 'cancelado');
-  const sales = db.sales.filter(s => s.date.startsWith(m));
-  const sum = xs => xs.reduce((t, x) => t + (x.v || 0), 0);
-  const items = [...appts.map(a => ({ v: a.price, paid: a.paid, due: apptDue(a), k: 'a', it: a })),
-                 ...sales.map(s => ({ v: s.total, paid: s.paid, due: saleDue(s), k: 's', it: s }))];
-  const received = sum(items.filter(i => i.paid));
-  const owed = sum(items.filter(i => i.due));
-  const expected = sum(items.filter(i => !i.paid && !i.due && i.k === 'a'));
-  const recServ = sum(items.filter(i => i.paid && i.k === 'a'));
-  const recProd = sum(items.filter(i => i.paid && i.k === 's'));
+  // Dinheiro que ENTROU no mês (pelo dia do pagamento), separado por serviço/produto e forma
+  const received = [];
+  for (const a of db.appts) if (a.status !== 'cancelado') for (const p of paymentsOf(a)) if (p.d?.startsWith(m)) received.push({ ...p, k: 'a' });
+  for (const x of db.sales) for (const p of paymentsOf(x)) if (p.d?.startsWith(m)) received.push({ ...p, k: 's' });
+  const recTotal = sumBy(received, p => p.v);
+  const recServ = sumBy(received.filter(p => p.k === 'a'), p => p.v);
+  const recProd = sumBy(received.filter(p => p.k === 's'), p => p.v);
+  const byMethod = Object.entries(PAY).map(([k, n]) => [n, sumBy(received.filter(p => p.m === k), p => p.v)]).filter(([, v]) => v > 0);
+  const noMethod = sumBy(received.filter(p => !PAY[p.m]), p => p.v);
 
-  // Tudo que falta receber (de qualquer mês)
+  // Despesas do mês e lucro
+  const expenses = db.expenses.filter(e => e.date?.startsWith(m)).sort((a, b) => b.date.localeCompare(a.date));
+  const spent = sumBy(expenses, e => e.amount);
+  const profit = round2(recTotal - spent);
+
+  // O que é deste mês e ainda não foi pago
+  const appts = db.appts.filter(a => a.date.startsWith(m) && a.status !== 'cancelado' && a.status !== 'pendente');
+  const sales = db.sales.filter(x => x.date.startsWith(m));
+  const owed = sumBy([...appts.filter(apptDue), ...sales.filter(saleDue)], leftOf);
+  const expected = sumBy(appts.filter(a => !apptDue(a) && !isPast(a) && a.status === 'marcado'), leftOf);
+
+  // Quem está devendo (de qualquer mês)
   const dueAll = [...db.appts.filter(apptDue).map(a => ({ k: 'a', when: a.date + a.time, it: a })),
-                  ...db.sales.filter(saleDue).map(s => ({ k: 's', when: s.date + '99', it: s }))]
+                  ...db.sales.filter(saleDue).map(x => ({ k: 's', when: x.date + '99', it: x }))]
     .sort((a, b) => a.when.localeCompare(b.when));
   const noPrice = appts.filter(a => isPast(a) && !(a.price > 0)).sort(byWhen);
 
@@ -1102,13 +1372,14 @@ function vFin(_, q) {
       <div class="line">
         <a class="grow" href="${k === 'a' ? '#/agendamento/' + it.id : '#/venda?id=' + it.id}">
           <b>${esc(clientName(it.clientId))}</b>
-          <span>${fmtShort(it.date)} · ${esc(k === 'a' ? (it.service || 'Serviço') : '🛍️ ' + it.product)}</span></a>
-        <span class="amount" style="color:var(--warn)">${brl(k === 'a' ? it.price : it.total)}</span>
+          <span>${fmtShort(it.date)} · ${esc(k === 'a' ? (it.service || 'Serviço') : '🛍️ ' + it.product)}${paidOf(it) > 0 ? ` · já pagou ${brl(paidOf(it))}` : ''}</span></a>
+        <span class="amount" style="color:var(--warn)">${brl(leftOf(it))}</span>
       </div>
-      <div class="quickprice"><button class="btn small ok" style="flex:1" data-pay="${k}:${it.id}">✓ Recebi</button></div>
+      <div class="quickprice"><button class="btn small ok" style="flex:1" data-pay="${k}:${it.id}">💰 Receber</button></div>
     </div>`;
 
-  const moves = items.filter(i => i.v > 0).sort((a, b) => (b.it.date + (b.it.time || '')).localeCompare(a.it.date + (a.it.time || '')));
+  const moves = [...appts.filter(a => valueOf(a) > 0).map(a => ({ k: 'a', it: a })), ...sales.filter(x => valueOf(x) > 0).map(x => ({ k: 's', it: x }))]
+    .sort((a, b) => (b.it.date + (b.it.time || '')).localeCompare(a.it.date + (a.it.time || '')));
 
   return {
     title: 'Dinheiro', tab: 'financeiro',
@@ -1119,11 +1390,15 @@ function vFin(_, q) {
         <a class="btn small" href="#/financeiro?m=${shift(1)}">›</a>
       </div>
       <div class="totals">
-        <div class="total ok full"><span>Recebido no mês</span><b style="font-size:1.8rem">${brl(received)}</b>
-          <span>Serviços ${brl(recServ)} · Produtos ${brl(recProd)}</span></div>
+        <div class="total ok full"><span>Entrou no mês</span><b style="font-size:1.8rem">${brl(recTotal)}</b>
+          <span>Serviços ${brl(recServ)} · Produtos ${brl(recProd)}</span>
+          ${byMethod.length ? `<span>${byMethod.map(([n, v]) => `${n} ${brl(v)}`).join(' · ')}${noMethod ? ` · Sem forma ${brl(noMethod)}` : ''}</span>` : ''}</div>
+        <div class="total bad"><span>Saiu (despesas)</span><b>${brl(spent)}</b></div>
+        <div class="total ${profit >= 0 ? 'ok' : 'bad'}"><span>Lucro do mês</span><b>${brl(profit)}</b></div>
         <div class="total warn"><span>Falta receber</span><b>${brl(owed)}</b></div>
-        <div class="total"><span>Ainda vai entrar (agendados)</span><b>${brl(expected)}</b></div>
+        <div class="total"><span>Ainda vai entrar</span><b>${brl(expected)}</b></div>
       </div>
+      <a class="btn" href="#/despesa">➖ Lançar despesa</a>
 
       <h2>💸 Quem está devendo ${dueAll.length ? `(${dueAll.length})` : ''}</h2>
       <div class="list">${dueAll.length ? dueAll.map(dueRow).join('') : '<div class="muted">Ninguém devendo. 🎉</div>'}</div>
@@ -1136,15 +1411,68 @@ function vFin(_, q) {
           <div class="quickprice"><div class="money"><input type="text" inputmode="decimal" placeholder="0,00" data-price="${a.id}"></div>
           <button class="btn small main" data-saveprice="${a.id}">Salvar</button></div></div>`).join('')}</div>` : ''}
 
-      <h2>Tudo do mês</h2>
-      <div class="list">${moves.length ? moves.map(i => `
-        <a class="card line" href="${i.k === 'a' ? '#/agendamento/' + i.it.id : '#/venda?id=' + i.it.id}">
-          <div class="grow"><b>${esc(clientName(i.it.clientId))}</b>
-          <span>${fmtShort(i.it.date)} · ${esc(i.k === 'a' ? (i.it.service || 'Serviço') : '🛍️ ' + i.it.product)}</span></div>
-          <div style="text-align:right"><div class="amount">${brl(i.v)}</div>
-          ${i.paid ? '<span class="badge ok">Pago</span>' : `<span class="badge warn">${i.due ? 'Não pago' : 'A pagar'}</span>`}</div>
+      <h2>Despesas do mês</h2>
+      <div class="list">${expenses.length ? expenses.map(e => `
+        <a class="card line" href="#/despesa?id=${e.id}">
+          <div class="grow"><b>${esc(e.desc || e.cat || 'Despesa')}</b><span>${fmtShort(e.date)}${e.cat && e.desc ? ' · ' + esc(e.cat) : ''}</span></div>
+          <span class="amount" style="color:var(--bad)">− ${brl(e.amount)}</span></a>`).join('') : '<div class="muted">Nenhuma despesa lançada.</div>'}</div>
+
+      <h2>Serviços e vendas do mês</h2>
+      <div class="list">${moves.length ? moves.map(({ k, it }) => `
+        <a class="card line" href="${k === 'a' ? '#/agendamento/' + it.id : '#/venda?id=' + it.id}">
+          <div class="grow"><b>${esc(clientName(it.clientId))}</b>
+          <span>${fmtShort(it.date)} · ${esc(k === 'a' ? (it.service || 'Serviço') : '🛍️ ' + it.product)}</span></div>
+          <div style="text-align:right"><div class="amount">${brl(valueOf(it))}</div>${
+            isPaid(it) ? '<span class="badge ok">Pago</span>'
+            : paidOf(it) > 0 ? `<span class="badge warn">Falta ${brl(leftOf(it))}</span>`
+            : `<span class="badge warn">${k === 'a' && !apptDue(it) ? 'A pagar' : 'Não pago'}</span>`}</div>
         </a>`).join('') : '<div class="muted">Nenhum valor lançado neste mês.</div>'}</div>`,
     bind(el) { bindQuickPay(el); },
+  };
+}
+
+// Despesa (o que saiu): aluguel, produtos, contas…
+const EXP_CATS = ['Produtos', 'Aluguel', 'Contas (luz, água, internet)', 'Material', 'Outros'];
+function vExpenseForm(_, q) {
+  const e = q.id ? db.expenses.find(x => x.id === q.id) : null;
+  let cat = e?.cat || '';
+  return {
+    title: e ? 'Despesa' : 'Lançar despesa', tab: 'financeiro', back: true,
+    html: `
+      <form class="form" id="f" autocomplete="off" novalidate>
+        <div id="err"></div>
+        <div class="field"><label for="v">Quanto saiu? <em>*</em></label>
+          <div class="money"><input type="text" id="v" inputmode="decimal" placeholder="0,00" value="${moneyVal(e?.amount)}"></div></div>
+        <div class="field"><span class="lbl">Com o quê?</span>
+          <div class="chips" id="cats">${EXP_CATS.map(c => `<button type="button" class="chip ${cat === c ? 'on' : ''}" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div></div>
+        <div class="field"><label for="d">Descrição <span class="opt">(se quiser)</span></label>
+          <input type="text" id="d" value="${esc(e?.desc || '')}" placeholder="Ex.: Tinta de cabelo, conta de luz…" autocapitalize="sentences"></div>
+        <div class="field"><label for="dt">Dia</label><input type="date" id="dt" value="${e?.date || today()}"></div>
+        <button class="btn main" type="submit">✓ Salvar</button>
+        ${e ? '<button class="btn danger" type="button" id="del" style="margin-top:2rem">🗑️ Apagar despesa</button>' : ''}
+      </form>`,
+    bind(el) {
+      if (!e) $('#v', el).focus();
+      $('#cats', el).onclick = ev => {
+        const b = ev.target.closest('[data-c]');
+        if (!b) return;
+        cat = cat === b.dataset.c ? '' : b.dataset.c;
+        el.querySelectorAll('#cats .chip').forEach(x => x.classList.toggle('on', x.dataset.c === cat));
+      };
+      $('#f', el).addEventListener('submit', ev => {
+        ev.preventDefault();
+        const amount = parseMoney($('#v', el).value);
+        if (!(amount > 0)) { $('#err', el).innerHTML = '<div class="error">Escreva o valor. Exemplo: 120,00</div>'; return; }
+        const data = { amount, cat, desc: $('#d', el).value.trim(), date: $('#dt', el).value || today() };
+        if (e) Object.assign(e, data); else db.expenses.push({ id: uid(), createdAt: Date.now(), ...data });
+        save(); toast('Despesa salva ✓'); back('#/financeiro');
+      });
+      $('#del', el) && ($('#del', el).onclick = () => {
+        if (!confirm('Apagar esta despesa?')) return;
+        db.expenses = db.expenses.filter(x => x.id !== e.id);
+        save(); toast('Despesa apagada'); back('#/financeiro');
+      });
+    },
   };
 }
 
@@ -1157,7 +1485,7 @@ function vMore() {
     html: `
       <div class="stack">
         <a class="btn" href="#/itens/services">💇 Meus serviços (${db.services.length})</a>
-        <a class="btn" href="#/itens/products">🛍️ Meus produtos (${db.products.length})</a>
+        <a class="btn" href="#/itens/products">🛍️ Meus produtos (${db.products.length})${lowProducts().length ? ` · ⚠️ ${lowProducts().length} acabando` : ''}</a>
         <a class="btn" href="#/link">🔗 Link para as clientes agendarem</a>
         <a class="btn" href="#/whatsapp">💬 WhatsApp automático</a>
       </div>
@@ -1211,7 +1539,7 @@ const KINDS = {
 
 function vItems(kind) {
   const K = KINDS[kind] || KINDS.services;
-  const list = [...K.list()].sort(byName);
+  const list = [...K.list()].sort((a, b) => (kind === 'products' ? lowStock(b) - lowStock(a) : 0) || byName(a, b));
   return {
     title: K.title, tab: 'mais', back: true,
     html: `
@@ -1220,6 +1548,7 @@ function vItems(kind) {
       <div class="list">${list.length ? list.map(it => `
         <a class="card line" href="#/item/${kind}?id=${it.id}">
           <div class="grow"><b>${esc(it.name)}</b><span>${[K.withDur ? fmtDur(it.duration) : '', it.price ? brl(it.price) : ''].filter(Boolean).join(' · ') || 'Sem valor definido'}</span></div>
+          ${!K.withDur && hasStock(it) ? `<span class="badge ${lowStock(it) ? 'bad' : ''}">${stockLabel(it)}</span>` : ''}
           <span class="muted">›</span></a>`).join('') : `<div class="empty">Nenhum ${K.one} ainda.</div>`}</div>`,
   };
 }
@@ -1239,12 +1568,23 @@ function vItemForm(kind, q) {
           ${toggle2('online', it?.online !== false, '✓ Sim', 'Não')}</div>` : ''}
         <div class="field"><label for="p">Valor <span class="opt">(se quiser)</span></label>
           <div class="money"><input type="text" id="p" inputmode="decimal" placeholder="0,00" value="${moneyVal(it?.price)}"></div></div>
+        ${!K.withDur ? `
+        <div class="field"><label for="st">Quantos tem em estoque? <span class="opt">(se quiser controlar)</span></label>
+          <input type="number" id="st" inputmode="numeric" min="0" step="1" value="${hasStock(it) ? it.stock : ''}" placeholder="Deixe vazio para não controlar">
+          <small class="hint">Diminui sozinho a cada venda. Quando chegar mercadoria, é só somar aqui.</small></div>
+        ${it && hasStock(it) ? `<div class="row" style="margin:-.4rem 0 1rem"><button type="button" class="btn small" id="st-add">+ Chegou mercadoria</button></div>` : ''}
+        <div class="field"><label for="ms">Me avisar quando tiver só</label>
+          <input type="number" id="ms" inputmode="numeric" min="0" step="1" value="${it?.minStock ?? 2}"></div>` : ''}
         <button class="btn main" type="submit">✓ Salvar</button>
         ${it ? '<button class="btn danger" type="button" id="del" style="margin-top:2rem">🗑️ Apagar</button>' : ''}
       </form>`,
     bind(el) {
       if (!it) $('#n', el).focus();
       $('#online', el) && bindToggle2($('#online', el), () => {});
+      $('#st-add', el) && ($('#st-add', el).onclick = () => {
+        const n = parseInt(prompt('Quantos chegaram?', '1'), 10);
+        if (n > 0) { const inp = $('#st', el); inp.value = (parseInt(inp.value, 10) || 0) + n; toast(`+${n} no estoque. Toque em Salvar.`); }
+      });
       $('#f', el).addEventListener('submit', e => {
         e.preventDefault();
         const name = $('#n', el).value.trim().replace(/\s+/g, ' ');
@@ -1258,6 +1598,10 @@ function vItemForm(kind, q) {
           const d = parseInt($('#d', el).value, 10);
           data.duration = d > 0 ? d : null;
           data.online = $('#online .yes', el).classList.contains('on');
+        } else {
+          const st = $('#st', el).value.trim();
+          data.stock = st === '' ? null : Math.max(0, parseInt(st, 10) || 0);
+          data.minStock = Math.max(0, parseInt($('#ms', el).value, 10) || 0);
         }
         if (it) Object.assign(it, data); else K.list().push({ id: uid(), createdAt: Date.now(), ...data });
         save(); toast('Salvo ✓'); back(`#/itens/${kind}`);

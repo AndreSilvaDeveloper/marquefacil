@@ -266,3 +266,13 @@ details summary::-webkit-details-marker { display: none; }
 .login .brand-logo { margin-bottom: .4rem; }
 .branded .login .brand-wrap { background: var(--header); border-radius: 20px; padding: 1.2rem 1rem; margin-bottom: .5rem; }
 #top .top-logo { height: 38px; width: auto; display: block; }
+
+/* ---------- Pagamentos e despesas ---------- */
+.total.bad b { color: var(--bad); }
+.paygrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; }
+.paygrid button { min-height: 3.2rem; border-radius: 12px; border: 2px solid var(--line); background: #fff; font-weight: 700; cursor: pointer; }
+.paygrid button.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+.paygrid[hidden] { display: none; }
+.paylist { margin: .5rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+.sheet-bg { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; justify-content: center; }
+.sheet { background: var(--bg); width: 100%; max-width: 640px; border-radius: 20px 20px 0 0; padding: 1.2rem 1rem calc(1.2rem + env(safe-area-inset-bottom)); max-height: 92vh; overflow: auto; }

@@ -5,7 +5,7 @@ import path from 'node:path';
 // Cada registro do app (cliente, horário, venda…) fica guardado como JSON em `records`,
 // separado por salão (tenant). `seq` cresce a cada mudança, para os aparelhos
 // buscarem só o que mudou desde a última vez.
-export const COLLECTIONS = ['clients', 'services', 'products', 'appts', 'sales'];
+export const COLLECTIONS = ['clients', 'services', 'products', 'appts', 'sales', 'expenses'];
 
 export function openDb(file) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
