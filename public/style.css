@@ -342,3 +342,23 @@ details.cancelled summary { cursor: pointer; color: var(--muted); font-weight: 7
 .wrow span { color: var(--muted); }
 .wrow.cancelado { display: none; }
 .wrow.pendente { background: var(--warn-soft); }
+
+/* ---------- Mais: menu ---------- */
+.profile { display: flex; gap: .9rem; align-items: center; margin-bottom: .5rem; }
+.menu { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.menu-item { display: flex; align-items: center; gap: .8rem; width: 100%; padding: .85rem 1rem; border: 0; border-top: 1px solid var(--line); background: none; text-align: left; text-decoration: none; color: inherit; cursor: pointer; font: inherit; min-height: 3.6rem; }
+.menu > :first-child { border-top: 0; }
+.menu-item.static { cursor: default; }
+.menu-item:active:not(.static) { background: var(--brand-soft); }
+.mi-icon { font-size: 1.4rem; width: 2rem; text-align: center; flex: 0 0 auto; }
+.mi-text { flex: 1; min-width: 0; }
+.mi-text b { display: block; }
+.mi-text small { display: block; color: var(--muted); font-size: .85rem; margin-top: .1rem; }
+.mi-go { color: var(--muted); font-size: 1.3rem; }
+.menu-item.danger b { color: var(--bad); }
+.menu-sub { padding: 0 1rem .9rem 3.8rem; display: flex; gap: .5rem; flex-wrap: wrap; }
+.menu-sub:empty { display: none; }
+.menu-sub .toggle2 { flex: 1; }
+.menu-sub .card { width: 100%; }
+.menu-sub .btn.small { flex: 1 1 0; width: auto; white-space: nowrap; }
+.menu-sub.wide { padding-left: 1rem; flex-wrap: nowrap; }

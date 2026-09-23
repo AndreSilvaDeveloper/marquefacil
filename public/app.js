@@ -342,7 +342,7 @@ function parseHash() {
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
   agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: vSaleForm, financeiro: vFin, mais: vMore,
-  itens: vItems, item: vItemForm, link: vLink, whatsapp: vWhats,
+  itens: vItems, item: vItemForm, link: vLink, whatsapp: vWhats, conta: vConta,
 };
 
 let lastHash = '';
@@ -1840,55 +1840,169 @@ function vExpenseForm(_, q) {
 /* =====================================================================
    MAIS: serviços, produtos, cópia de segurança, tamanho da letra
    ===================================================================== */
+// "Seg a Sex 09:00–18:00 · Sáb 09:00–13:00 · Dom fechado"
+function hoursSummary(days) {
+  if (!days) return '';
+  const names = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const txt = d => (days[d] ? `${days[d][0]}–${days[d][1]}` : 'fechado');
+  const groups = [];
+  for (const d of order) {
+    const g = groups.at(-1);
+    if (g && txt(g.last) === txt(d)) g.last = d; else groups.push({ first: d, last: d });
+  }
+  return groups.map(g => `${names[g.first]}${g.first !== g.last ? ' a ' + names[g.last] : ''} ${txt(g.first)}`).join(' · ');
+}
+
+// Instalar na tela inicial (Android/Chrome avisa quando dá; no iPhone é pelo Compartilhar)
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; });
+const isInstalled = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+
 function vMore() {
+  const salon = salonHours();
+  const low = lowProducts().length;
+  const pend = pendingAppts().length;
+  const link = salon?.slug ? `${location.origin}/${salon.slug}` : '';
+  const lastBk = db.settings.lastBackup ? daysAgo(dstr(new Date(db.settings.lastBackup))) : '';
+  const item = (href, icon, title, sub, extra = '') => `
+    <a class="menu-item" href="${href}"><span class="mi-icon">${icon}</span>
+      <span class="mi-text"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${extra}<span class="mi-go">›</span></a>`;
   return {
     title: 'Mais', tab: 'mais',
     html: `
-      <div class="stack">
-        <a class="btn" href="#/itens/services">💇 Meus serviços (${db.services.length})</a>
-        <a class="btn" href="#/itens/products">🛍️ Meus produtos (${db.products.length})${lowProducts().length ? ` · ⚠️ ${lowProducts().length} acabando` : ''}</a>
-        <a class="btn" href="#/link">🔗 Link para as clientes agendarem</a>
-        <a class="btn" href="#/whatsapp">💬 WhatsApp automático</a>
+      <div class="card profile">
+        ${avatar(session.tenant.name, true)}
+        <div class="grow">
+          <b style="font-size:1.15rem">${esc(session.tenant.name)}</b>
+          <div class="muted">${esc(session.user.name)} · ${esc(session.user.email)}</div>
+          <div id="sync" class="sync"></div>
+        </div>
       </div>
 
-      <h2>Avisos neste aparelho</h2>
-      <div id="push-card"></div>
-
-      <h2>Tamanho da letra</h2>
-      ${toggle2('big', !!db.settings.big, 'A+ Grande', 'A Normal', true)}
-
-      <h2>Minha conta</h2>
-      <div class="card">
-        <b>${esc(session.tenant.name)}</b>
-        <div class="muted">${esc(session.user.name)} · ${esc(session.user.email)}</div>
-        <div id="sync" class="sync"></div>
+      <h2>Meu salão</h2>
+      <div class="menu">
+        ${pend ? item('#/pedidos', '⏳', 'Pedidos esperando', `<span style="color:var(--warn);font-weight:700">${pend} para confirmar</span>`) : ''}
+        ${item('#/itens/services', '💇', 'Serviços', `${db.services.length} ${db.services.length === 1 ? 'serviço' : 'serviços'}`)}
+        ${item('#/itens/products', '🛍️', 'Produtos', `${db.products.length} ${db.products.length === 1 ? 'produto' : 'produtos'}${low ? ` · <span style="color:var(--bad)">⚠️ ${low} acabando</span>` : ''}`)}
+        ${item('#/link', '🔗', 'Link para as clientes', salon ? (salon.enabled ? '<span style="color:var(--ok)">● Ligado</span> · clientes pedem horário por ele' : '○ Desligado') : 'Clientes pedem horário pela internet')}
+        ${link && salon.enabled ? `<div class="menu-sub wide">
+          <button type="button" class="btn small" id="copy-link">📋 Copiar link</button>
+          <a class="btn small" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`Agende seu horário no ${session.tenant.name} por aqui: ${link}`)}">💬 Mandar</a></div>` : ''}
+        ${item('#/link', '🕐', 'Dias e horários de atendimento', salon?.days ? esc(hoursSummary(salon.days)) + (salon.lunch ? ` · almoço ${salon.lunch[0]}–${salon.lunch[1]}` : '') : 'Configure para ver os horários livres na agenda')}
+        ${item('#/whatsapp', '💬', 'WhatsApp automático', '<span id="wa-status">…</span>')}
       </div>
-      <button class="btn danger" id="logout" style="margin-top:.7rem">Sair da conta</button>
 
-      <h2>Cópia de segurança</h2>
-      <p class="muted" style="margin-top:0">Seus dados ficam guardados na internet, na sua conta. Se quiser, também pode guardar uma cópia no celular ou mandar para o seu WhatsApp/e-mail.</p>
-      <div class="stack">
-        <button class="btn main" id="exp">📤 Fazer cópia de segurança</button>
-        <label class="btn">📥 Recuperar de uma cópia
+      <h2>Neste aparelho</h2>
+      <div class="menu">
+        <div class="menu-item static"><span class="mi-icon">🔔</span><span class="mi-text"><b>Avisos de pedidos</b><small id="push-sub">…</small></span></div>
+        <div class="menu-sub" id="push-card"></div>
+        <div class="menu-item static"><span class="mi-icon">🔠</span><span class="mi-text"><b>Tamanho da letra</b></span></div>
+        <div class="menu-sub">${toggle2('big', !!db.settings.big, 'A+ Grande', 'A Normal', true)}</div>
+        ${isInstalled() ? '' : `<button type="button" class="menu-item" id="install"><span class="mi-icon">📲</span>
+          <span class="mi-text"><b>Instalar na tela inicial</b><small>Abre como um aplicativo, com ícone próprio</small></span><span class="mi-go">›</span></button>
+          <div class="menu-sub" id="install-help" hidden></div>`}
+      </div>
+
+      <h2>Seus dados</h2>
+      <div class="menu">
+        <button type="button" class="menu-item" id="exp"><span class="mi-icon">📤</span>
+          <span class="mi-text"><b>Fazer cópia de segurança</b><small>${lastBk ? `Última cópia: ${lastBk}` : 'Nunca fez · os dados já ficam guardados na internet'}</small></span><span class="mi-go">›</span></button>
+        <label class="menu-item"><span class="mi-icon">📥</span>
+          <span class="mi-text"><b>Recuperar de uma cópia</b><small>Troca tudo pelo que está no arquivo</small></span><span class="mi-go">›</span>
           <input type="file" id="imp" accept=".json,application/json" hidden></label>
       </div>
-      ${db.settings.lastBackup ? `<p class="muted">Última cópia: ${new Date(db.settings.lastBackup).toLocaleString('pt-BR')}</p>` : ''}
 
-      <p class="muted" style="margin-top:2rem;font-size:.85rem;text-align:center">
-        ${db.clients.length} clientes · ${db.appts.length} horários · ${db.sales.length} vendas</p>`,
+      <h2>Conta</h2>
+      <div class="menu">
+        ${item('#/conta', '👤', 'Minha conta', 'Nome do salão, seu nome e senha')}
+        <button type="button" class="menu-item danger" id="logout"><span class="mi-icon">🚪</span><span class="mi-text"><b>Sair da conta</b><small>Neste aparelho</small></span></button>
+      </div>
+
+      <p class="muted" style="margin:2rem 0 1rem;font-size:.85rem;text-align:center">
+        ${db.clients.length} clientes · ${db.appts.length} horários · ${db.sales.length} vendas · ${db.expenses.length} despesas<br>
+        ${esc(BRAND.name)}</p>`,
     bind(el) {
       bindToggle2($('#big', el), v => { db.settings.big = v; save(); applySettings(); });
-      paintPushCard($('#push-card', el), true);
+      paintPushCard($('#push-card', el), true).then(() => {
+        const ok = pushSupported() && Notification.permission === 'granted';
+        $('#push-sub', el).innerHTML = ok ? '<span style="color:var(--ok)">● Ligados</span>' : 'Receba um aviso quando uma cliente pedir horário';
+      });
+      $('#copy-link', el) && ($('#copy-link', el).onclick = async () => {
+        try { await navigator.clipboard.writeText(link); toast('Link copiado ✓'); } catch { prompt('Copie o link:', link); }
+      });
+      // estado do WhatsApp (precisa de internet)
+      api('GET', '/api/whatsapp/status').then(st => {
+        const w = $('#wa-status', el);
+        if (!w) return;
+        w.innerHTML = st.state === 'open' ? `<span style="color:var(--ok)">● Conectado</span>${st.number ? ' · +' + esc(st.number) : ''}`
+          : st.available === false ? 'Ainda não disponível' : '○ Não conectado · confirmações e lembretes automáticos';
+      }).catch(() => { const w = $('#wa-status', el); if (w) w.textContent = 'Confirmações e lembretes automáticos'; });
+      $('#install', el) && ($('#install', el).onclick = async () => {
+        if (installPrompt) {
+          installPrompt.prompt();
+          const r = await installPrompt.userChoice.catch(() => null);
+          installPrompt = null;
+          if (r?.outcome === 'accepted') toast('Instalado ✓ Procure o ícone na tela inicial');
+          return;
+        }
+        const help = $('#install-help', el);
+        help.hidden = false;
+        help.innerHTML = isIOS()
+          ? '<ol class="steps"><li>Toque em <b>Compartilhar</b> (o quadrado com a seta ⬆️) embaixo do Safari</li><li>Toque em <b>Adicionar à Tela de Início</b></li><li>Toque em <b>Adicionar</b></li></ol>'
+          : '<ol class="steps"><li>Toque nos <b>três pontinhos ⋮</b> do navegador</li><li>Toque em <b>Instalar app</b> ou <b>Adicionar à tela inicial</b></li></ol>';
+      });
       $('#exp', el).onclick = exportBackup;
       $('#imp', el).onchange = e => importBackup(e.target.files[0]);
       $('#logout', el).onclick = async () => {
         const n = pendingChanges().length;
-        if (!confirm(n ? `Ainda tem ${n} alteração(ões) sem enviar (sem internet). Se sair agora, elas se perdem. Sair mesmo assim?` : 'Sair da conta neste celular?')) return;
+        if (!confirm(n ? `Ainda tem ${n} alteração(ões) sem enviar (sem internet). Se sair agora, elas se perdem. Sair mesmo assim?` : 'Sair da conta neste aparelho?')) return;
         await api('POST', '/api/logout').catch(() => {});
         localStorage.removeItem(cacheKey());
         logoutLocal();
       };
       paintSync();
+    },
+  };
+}
+
+// Minha conta: nome do salão, seu nome, senha
+function vConta() {
+  return {
+    title: 'Minha conta', tab: 'mais', back: true,
+    html: `
+      <form class="form" id="f1" novalidate>
+        <h2 style="margin-top:0">Nomes</h2>
+        <div id="err1"></div>
+        <div class="field"><label for="salon">Nome do salão</label><input type="text" id="salon" value="${esc(session.tenant.name)}" autocapitalize="words"></div>
+        <div class="field"><label for="name">Seu nome</label><input type="text" id="name" value="${esc(session.user.name)}" autocapitalize="words"></div>
+        <p class="muted" style="margin-top:-.3rem">E-mail de entrada: <b>${esc(session.user.email)}</b></p>
+        <button class="btn main" type="submit">✓ Salvar nomes</button>
+      </form>
+      <form class="form" id="f2" novalidate style="margin-top:2rem">
+        <h2>Trocar senha</h2>
+        <div id="err2"></div>
+        <div class="field"><label for="cur">Senha atual</label><input type="password" id="cur" autocomplete="current-password"></div>
+        <div class="field"><label for="new">Senha nova</label><input type="password" id="new" autocomplete="new-password">
+          <small class="hint">Pelo menos 6 letras ou números. Os outros aparelhos vão precisar entrar de novo.</small></div>
+        <button class="btn" type="submit">🔒 Trocar senha</button>
+      </form>`,
+    bind(el) {
+      const done = (me, msg) => { session = me; writeLS('mf.session', me); toast(msg); };
+      const err = (id, e) => { $(id, el).innerHTML = `<div class="error">${esc(e.offline ? 'Precisa de internet para isso.' : e.message)}</div>`; };
+      $('#f1', el).addEventListener('submit', async e => {
+        e.preventDefault();
+        try { done(await api('PUT', '/api/account', { salonName: $('#salon', el).value, name: $('#name', el).value }), 'Nomes salvos ✓'); $('#err1', el).innerHTML = ''; }
+        catch (x) { err('#err1', x); }
+      });
+      $('#f2', el).addEventListener('submit', async e => {
+        e.preventDefault();
+        try {
+          done(await api('PUT', '/api/account', { currentPassword: $('#cur', el).value, newPassword: $('#new', el).value }), 'Senha trocada ✓');
+          $('#cur', el).value = $('#new', el).value = ''; $('#err2', el).innerHTML = '';
+        } catch (x) { err('#err2', x); }
+      });
     },
   };
 }
@@ -2404,7 +2518,7 @@ function showLogin(mode = 'entrar') {
 // Horário de atendimento (dias, almoço) guardado no celular: a agenda usa para mostrar os horários livres
 const salonKey = () => `mf.salon.${session.tenant.id}`;
 const salonHours = () => readLS(salonKey());
-function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch }); } catch { /* ok */ } }
+function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug }); } catch { /* ok */ } }
 function refreshSalon() { api('GET', '/api/settings').then(S => { cacheSalon(S); if (!$('#app form') && parseHash().parts[0] === 'agenda') render(); }).catch(() => {}); }
 
 function refreshPush() {

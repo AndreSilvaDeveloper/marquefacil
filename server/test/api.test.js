@@ -96,3 +96,22 @@ test('importa cópia de segurança (juntar e substituir)', async () => {
   assert.deepEqual(live.map(c => c.id).sort(), ['a1', 'c1']);
   await app.close();
 });
+
+test('minha conta: nome do salão, nome e senha', async () => {
+  const app = buildApp();
+  const call = client(app), other = client(app);
+  await signup(call);
+  await other('POST', '/api/login', { email: 'ana@exemplo.com', password: 'segredo1' });
+  const r = await call('PUT', '/api/account', { salonName: 'Studio Novo', name: 'Ana Maria' });
+  assert.equal(r.body.tenant.name, 'Studio Novo');
+  assert.equal(r.body.user.name, 'Ana Maria');
+  assert.equal(r.body.tenant.slug, 'salao-da-ana', 'link não muda');
+  assert.equal((await call('PUT', '/api/account', { salonName: '  ' })).status, 400);
+  assert.equal((await call('PUT', '/api/account', { currentPassword: 'errada', newPassword: 'nova123' })).status, 400);
+  assert.equal((await call('PUT', '/api/account', { currentPassword: 'segredo1', newPassword: '123' })).status, 400);
+  assert.equal((await call('PUT', '/api/account', { currentPassword: 'segredo1', newPassword: 'nova123' })).status, 200);
+  assert.equal((await call('GET', '/api/me')).status, 200, 'este aparelho continua');
+  assert.equal((await other('GET', '/api/me')).status, 401, 'outros aparelhos saem');
+  assert.equal((await client(app)('POST', '/api/login', { email: 'ana@exemplo.com', password: 'nova123' })).status, 200);
+  await app.close();
+});

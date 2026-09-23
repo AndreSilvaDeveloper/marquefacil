@@ -162,6 +162,32 @@ export function buildApp({
 
   app.get('/api/me', { preHandler: auth }, async req => me(req.s));
 
+  // Minha conta: nome do salão, nome da pessoa e senha
+  app.put('/api/account', { preHandler: auth }, async req => {
+    const b = isObj(req.body) ? req.body : {};
+    const s = req.s;
+    if (b.salonName !== undefined) {
+      const v = String(b.salonName).trim().slice(0, 80);
+      if (!v) fail(400, 'Escreva o nome do salão.');
+      db.prepare('UPDATE tenants SET name = ? WHERE id = ?').run(v, s.tenant_id);
+    }
+    if (b.name !== undefined) {
+      const v = String(b.name).trim().slice(0, 80);
+      if (!v) fail(400, 'Escreva o seu nome.');
+      db.prepare('UPDATE users SET name = ? WHERE id = ?').run(v, s.user_id);
+    }
+    if (b.newPassword !== undefined) {
+      if (!limitAuth(req.ip)) fail(429, 'Muitas tentativas. Espere alguns minutos.');
+      const u = db.prepare('SELECT pass_hash FROM users WHERE id = ?').get(s.user_id);
+      if (!(await checkPassword(String(b.currentPassword || ''), u.pass_hash))) fail(400, 'A senha atual está errada.');
+      if (String(b.newPassword).length < 6) fail(400, 'A senha nova precisa ter pelo menos 6 letras ou números.');
+      db.prepare('UPDATE users SET pass_hash = ? WHERE id = ?').run(await hashPassword(String(b.newPassword)), s.user_id);
+      // sai dos outros aparelhos; este continua entrando
+      db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(s.user_id, s.token_hash);
+    }
+    return me(q.session.get(s.token_hash));
+  });
+
   /* ------------------------------ dados ------------------------------ */
   app.get('/api/changes', { preHandler: auth }, async req => {
     const since = Math.max(0, parseInt(req.query.since, 10) || 0);
