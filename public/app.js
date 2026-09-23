@@ -45,6 +45,7 @@ const today = () => dstr(new Date());
 const toDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
 const addDays = (s, n) => { const d = toDate(s); d.setDate(d.getDate() + n); return dstr(d); };
 const fmtDate = (s, o) => toDate(s).toLocaleDateString('pt-BR', o);
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const fmtShort = s => fmtDate(s, { day: '2-digit', month: '2-digit', year: 'numeric' });
 const weekday = s => fmtDate(s, { weekday: 'long' });
 function dayName(s) {
@@ -1097,64 +1098,180 @@ function vBuscar(_, q) {
 /* =====================================================================
    CLIENTES
    ===================================================================== */
-function clientRow(c) {
-  const owes = clientOwes(c.id);
-  const next = db.appts.filter(a => a.clientId === c.id && !isPast(a) && a.status !== 'cancelado').sort(byWhen)[0];
-  return `<a class="card line" href="#/cliente/${c.id}" data-name="${esc(norm(c.name + ' ' + (c.phone || '')))}">
-    <div class="grow"><b>${esc(c.name)}</b>
-      <span>${[c.phone, next ? `Próximo: ${fmtShort(next.date)} ${next.time}` : ''].filter(Boolean).map(esc).join(' · ') || '&nbsp;'}</span></div>
-    ${owes > 0 ? `<span class="badge warn">Deve ${brl(owes)}</span>` : ''}
+// Resumo de uma cliente: visitas, última vez, serviço preferido…
+function clientStats(c) {
+  const appts = db.appts.filter(a => a.clientId === c.id);
+  const visits = appts.filter(a => a.status === 'feito' || (a.status === 'marcado' && isPast(a))).sort(byWhen);
+  const next = appts.filter(a => !isPast(a) && (a.status === 'marcado' || a.status === 'pendente')).sort(byWhen)[0];
+  const count = {};
+  for (const a of visits) if (a.service) count[a.service] = (count[a.service] || 0) + 1;
+  const fav = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
+  const firstDate = [...appts.map(a => a.date), ...db.sales.filter(x => x.clientId === c.id).map(x => x.date)].sort()[0];
+  return {
+    visits: visits.length, last: visits.at(-1), next, fav: fav?.[0] || '',
+    since: firstDate || (c.createdAt ? dstr(new Date(c.createdAt)) : ''),
+    owes: clientOwes(c.id), paid: clientPaid(c.id),
+    online: c.source === 'online' || appts.some(a => a.source === 'online'),
+  };
+}
+function daysAgo(date) {
+  const n = Math.round((toDate(today()) - toDate(date)) / 86400000);
+  if (n <= 0) return 'hoje';
+  if (n === 1) return 'ontem';
+  if (n < 30) return `há ${n} dias`;
+  if (n < 365) { const m = Math.round(n / 30); return `há ${m} ${m === 1 ? 'mês' : 'meses'}`; }
+  const y = Math.round(n / 365); return `há ${y} ${y === 1 ? 'ano' : 'anos'}`;
+}
+const initials = name => String(name || '?').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+function avatar(name, big = false) {
+  const hue = [...norm(name)].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 360, 7);
+  return `<span class="avatar ${big ? 'big' : ''}" style="background:hsl(${hue} 45% 88%);color:hsl(${hue} 45% 28%)" aria-hidden="true">${esc(initials(name))}</span>`;
+}
+
+function clientRow(c, st = clientStats(c)) {
+  const lines = [];
+  lines.push(st.last ? `Última vez ${daysAgo(st.last.date)}${st.last.service ? ' · ' + esc(st.last.service) : ''}` : 'Ainda não veio');
+  if (st.next) lines.push(`📅 ${st.next.status === 'pendente' ? 'Pedido' : 'Próximo'}: ${esc(fmtDate(st.next.date, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', ''))} ${st.next.time}`);
+  return `<a class="card line client-row" href="#/cliente/${c.id}" data-name="${esc(norm(c.name + ' ' + (c.phone || '').replace(/\D/g, '') + ' ' + (c.phone || '')))}">
+    ${avatar(c.name)}
+    <div class="grow"><b>${esc(c.name)}</b>${lines.map(l => `<span>${l}</span>`).join('')}</div>
+    ${st.owes > 0 ? `<span class="badge warn">Deve ${brl(st.owes)}</span>` : ''}
   </a>`;
 }
 
-function vClients() {
-  const list = [...db.clients].sort(byName);
+let clientsSearch = '';
+const CLIENT_FILTERS = {
+  '': ['Todas', () => true],
+  devendo: ['💸 Devendo', st => st.owes > 0],
+  marcado: ['📅 Com horário', st => !!st.next],
+  sumidas: ['😴 Sumidas', st => st.last && !st.next && st.last.date < addDays(today(), -60)],
+  link: ['🌐 Pelo link', st => st.online],
+};
+function vClients(_, q) {
+  const f = CLIENT_FILTERS[q.f] ? q.f : '';
+  const order = q.o || 'nome';
+  const all = db.clients.map(c => ({ c, st: clientStats(c) }));
+  const list = all.filter(x => CLIENT_FILTERS[f][1](x.st));
+  const sorters = {
+    nome: (a, b) => byName(a.c, b.c),
+    ultima: (a, b) => (b.st.last ? b.st.last.date + b.st.last.time : '').localeCompare(a.st.last ? a.st.last.date + a.st.last.time : '') || byName(a.c, b.c),
+    visitas: (a, b) => b.st.visits - a.st.visits || byName(a.c, b.c),
+  };
+  list.sort(sorters[order] || sorters.nome);
+  const url = o => '#/clientes?' + Object.entries({ f, o: order, ...o }).filter(([, v]) => v && v !== 'nome').map(([k, v]) => `${k}=${v}`).join('&');
+  const owing = all.filter(x => x.st.owes > 0);
+
+  // Letras separando a lista (quando está em ordem de nome)
+  let letter = '';
+  const rows = list.map(({ c, st }) => {
+    let head = '';
+    if (order === 'nome') {
+      const L = norm(c.name)[0]?.toUpperCase() || '#';
+      if (L !== letter) { letter = L; head = `<div class="letter" data-letter>${esc(L)}</div>`; }
+    }
+    return head + clientRow(c, st);
+  }).join('');
+
   return {
     title: 'Clientes', tab: 'clientes',
     html: `
-      <div class="search"><input type="search" id="s" placeholder="Procurar cliente…"></div>
-      <a class="btn main" href="#/cliente-editar" style="margin-bottom:1rem">+ Nova cliente</a>
-      <div class="list" id="list">${list.length ? list.map(clientRow).join('') : '<div class="empty">Nenhuma cliente ainda.<br>Elas aparecem aqui sozinhas quando você agenda.</div>'}</div>
+      <div class="search"><input type="search" id="s" placeholder="🔍 Nome ou telefone" value="${esc(clientsSearch)}"></div>
+      <div class="row" style="margin-bottom:.8rem">
+        <a class="btn main" href="#/cliente-editar">+ Nova cliente</a>
+      </div>
+      ${all.length ? `<p class="muted" style="margin:.2rem 0 .6rem">${all.length} ${all.length === 1 ? 'cliente' : 'clientes'}${owing.length ? ` · <b style="color:var(--warn)">${owing.length} devendo ${brl(owing.reduce((t, x) => t + x.st.owes, 0))}</b>` : ''}</p>` : ''}
+      ${all.length ? `<div class="chips filters">${Object.entries(CLIENT_FILTERS).map(([k, [n, fn]]) =>
+        `<a class="chip ${f === k ? 'on' : ''}" href="${url({ f: k })}" data-f>${n} <small>${all.filter(x => fn(x.st)).length}</small></a>`).join('')}</div>
+      <div class="sortrow"><label for="ord">Ordenar:</label>
+        <select id="ord">${[['nome', 'Nome (A–Z)'], ['ultima', 'Última visita'], ['visitas', 'Quem mais vem']].map(([k, n]) => `<option value="${k}" ${order === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>` : ''}
+      <div class="list" id="list">${rows || (all.length ? '<div class="empty">Nenhuma cliente neste filtro.</div>' : '<div class="empty">Nenhuma cliente ainda.<br>Elas aparecem aqui sozinhas quando você agenda.</div>')}</div>
       <div class="empty" id="none" hidden>Nenhuma cliente com esse nome.</div>`,
     bind(el) {
-      $('#s', el).addEventListener('input', e => {
-        const n = norm(e.target.value);
+      const search = () => {
+        const n = norm($('#s', el).value);
+        const digits = $('#s', el).value.replace(/\D/g, '');
+        clientsSearch = $('#s', el).value;
         let shown = 0;
-        $$('#list > a', el).forEach(a => { const ok = a.dataset.name.includes(n); a.hidden = !ok; shown += ok; });
+        $$('#list > a', el).forEach(a => { const ok = a.dataset.name.includes(n) || (digits.length > 2 && a.dataset.name.includes(digits)); a.hidden = !ok; shown += ok; });
+        $$('#list > .letter', el).forEach(h => (h.hidden = !!n));
         $('#none', el).hidden = !!shown || !list.length;
+      };
+      $('#s', el).addEventListener('input', search);
+      if (clientsSearch) search();
+      el.addEventListener('click', e => {
+        const a = e.target.closest('a[data-f]');
+        if (!a) return;
+        e.preventDefault();
+        replaceTo(a.getAttribute('href'));
       });
+      $('#ord', el)?.addEventListener('change', e => replaceTo(url({ o: e.target.value })));
     },
   };
 }
 
-function vClient(id) {
+function vClient(id, q) {
   const c = client(id);
   if (!c) return { title: 'Cliente', back: true, html: '<div class="empty">Cliente não encontrada.</div>' };
+  const st = clientStats(c);
+  const hf = q.h || '';
   const appts = db.appts.filter(a => a.clientId === id);
   const next = appts.filter(a => !isPast(a) && a.status !== 'cancelado').sort(byWhen);
-  const history = [
+  const allHistory = [
     ...appts.filter(a => isPast(a) || a.status === 'cancelado').map(a => ({ k: 'a', when: a.date + a.time, it: a })),
-    ...db.sales.filter(s => s.clientId === id).map(s => ({ k: 's', when: s.date + '99', it: s })),
+    ...db.sales.filter(x => x.clientId === id).map(x => ({ k: 's', when: x.date + '99', it: x })),
   ].sort((x, y) => y.when.localeCompare(x.when));
-  const owes = clientOwes(id);
+  const hFilters = {
+    '': ['Tudo', () => true],
+    a: ['💇 Serviços', h => h.k === 'a'],
+    s: ['🛍️ Produtos', h => h.k === 's'],
+    deve: ['💸 Devendo', h => (h.k === 'a' ? apptDue(h.it) : saleDue(h.it))],
+  };
+  const history = allHistory.filter(hFilters[hf]?.[1] || (() => true));
+  const due = allHistory.filter(hFilters.deve[1]).reverse(); // mais antigo primeiro
+  const url = h => `#/cliente/${id}${h ? '?h=' + h : ''}`;
+
+  // histórico separado por mês
+  let month = '';
+  const historyHtml = history.map(h => {
+    const mk = h.it.date.slice(0, 7);
+    let head = '';
+    if (mk !== month) { month = mk; head = `<div class="letter">${esc(cap(toDate(mk + '-01').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })))}</div>`; }
+    return head + historyRow(h);
+  }).join('');
+
+  const stat = (label, value) => `<div class="stat"><span>${label}</span><b>${value}</b></div>`;
+  const phoneDigits = (c.phone || '').replace(/\D/g, '');
 
   return {
     title: c.name, tab: 'clientes', back: true,
     html: `
-      <div class="hero">
-        <p class="big">${esc(c.name)}</p>
-        ${c.phone ? `<p>📞 ${esc(c.phone)}</p>` : '<p class="muted">Sem telefone</p>'}
-        ${c.notes ? `<p class="muted">📝 ${esc(c.notes)}</p>` : ''}
-        <div class="row" style="margin-top:.7rem">
-          ${c.phone ? `<a class="btn small" target="_blank" rel="noopener" href="${waLink(c.phone)}">💬 WhatsApp</a>` : ''}
-          <a class="btn small" href="#/cliente-editar?id=${c.id}">✏️ Editar dados</a>
+      <div class="hero client-hero">
+        ${avatar(c.name, true)}
+        <div class="grow">
+          <p class="big">${esc(c.name)}</p>
+          ${c.phone ? `<p>📞 ${esc(c.phone)}</p>` : '<p class="muted">Sem telefone · <a href="#/cliente-editar?id=' + c.id + '">colocar</a></p>'}
+          <div class="badges">${st.online ? '<span class="badge">🌐 Veio pelo link</span>' : ''}${appts.some(a => a.seriesId && !isPast(a) && a.status !== 'cancelado') ? '<span class="badge">🔁 Cliente fixa</span>' : ''}</div>
         </div>
       </div>
-
-      <div class="totals">
-        <div class="total ok"><span>Já pagou (total)</span><b>${brl(clientPaid(id))}</b></div>
-        <div class="total ${owes > 0 ? 'warn' : ''}"><span>Falta pagar</span><b>${brl(owes)}</b></div>
+      <div class="actions3">
+        ${c.phone ? `<a class="btn" target="_blank" rel="noopener" href="${waLink(c.phone)}">💬<small>WhatsApp</small></a>
+        <a class="btn" href="tel:${phoneDigits}">📞<small>Ligar</small></a>` : ''}
+        <a class="btn" href="#/cliente-editar?id=${c.id}">✏️<small>Editar</small></a>
       </div>
+      ${c.notes ? `<div class="note">📝 <b>Observação:</b> ${esc(c.notes)}</div>` : ''}
+
+      <div class="stats">
+        ${stat('Visitas', st.visits)}
+        ${stat('Última vez', st.last ? daysAgo(st.last.date) : '—')}
+        ${stat('Cliente desde', st.since ? fmtDate(st.since, { month: 'short', year: 'numeric' }).replace('.', '') : '—')}
+        ${stat('Serviço preferido', st.fav ? esc(st.fav) : '—')}
+      </div>
+      <div class="totals">
+        <div class="total ok"><span>Já pagou (total)</span><b>${brl(st.paid)}</b></div>
+        <a class="total fcard ${st.owes > 0 ? 'warn' : ''} ${hf === 'deve' ? 'on' : ''}" href="${url(hf === 'deve' ? '' : 'deve')}" data-f>
+          <span>Falta pagar</span><b>${brl(st.owes)}</b><small>${st.owes > 0 ? (hf === 'deve' ? '▲ mostrando abaixo' : 'Toque para ver') : 'Tudo pago'}</small></a>
+      </div>
+      ${st.owes > 0 ? `<button class="btn ok" id="pay-all" style="margin-bottom:.7rem">💰 Receber tudo que ela deve (${brl(st.owes)})</button>` : ''}
 
       <div class="row">
         <a class="btn main" href="#/agendar?c=${c.id}">📅 Agendar</a>
@@ -1164,9 +1281,33 @@ function vClient(id) {
       <h2>Próximos horários</h2>
       <div class="list">${next.length ? next.map(a => apptCard(a, { showDate: true, showClient: false })).join('') : '<div class="muted">Nenhum horário marcado.</div>'}</div>
 
-      <h2>Histórico (serviços e produtos)</h2>
-      <div class="list">${history.length ? history.map(h => historyRow(h)).join('') : '<div class="muted">Ainda não tem histórico.</div>'}</div>`,
-    bind(el) { bindQuickPay(el); },
+      <h2 id="hist">Histórico</h2>
+      ${allHistory.length ? `<div class="chips filters">${Object.entries(hFilters).map(([k, [n, fn]]) =>
+        `<a class="chip ${hf === k ? 'on' : ''}" href="${url(k)}" data-f>${n} <small>${allHistory.filter(fn).length}</small></a>`).join('')}</div>` : ''}
+      <div class="list">${historyHtml || `<div class="muted">${allHistory.length ? 'Nada neste filtro.' : 'Ainda não tem histórico.'}</div>`}</div>`,
+    bind(el) {
+      bindQuickPay(el);
+      el.addEventListener('click', e => {
+        const a = e.target.closest('a[data-f]');
+        if (!a) return;
+        e.preventDefault();
+        replaceTo(a.getAttribute('href'));
+        setTimeout(() => $('#hist')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+      });
+      // Um pagamento só para tudo que ela deve (quita do mais antigo para o mais novo)
+      $('#pay-all', el) && ($('#pay-all', el).onclick = () => paySheet({ total: st.owes }, `${c.name} — tudo que está devendo`, (v, m) => {
+        let rest = v;
+        for (const { it } of due) {
+          const part = Math.min(rest, leftOf(it));
+          if (part > 0) { addPayment(it, part, m); rest = round2(rest - part); }
+          if (it.status === 'marcado' && isPaid(it) && isPast(it)) it.status = 'feito';
+        }
+        save();
+        const left = clientOwes(id);
+        toast(left > 0 ? `Recebido ${brl(v)} ✓ Falta ${brl(left)}` : `Tudo pago ✓ (${PAY[m]})`);
+        render();
+      }));
+    },
   };
 }
 

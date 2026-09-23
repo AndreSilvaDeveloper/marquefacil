@@ -290,3 +290,27 @@ details summary::-webkit-details-marker { display: none; }
 .statement .line { padding: .45rem 0; border-bottom: 1px dashed var(--line); }
 .statement .line.sum { border-bottom: 0; border-top: 2px solid var(--ink); margin-top: .3rem; padding-top: .6rem; font-size: 1.1rem; }
 a.chip { text-decoration: none; color: inherit; display: inline-flex; align-items: center; }
+
+/* ---------- Clientes ---------- */
+.avatar { flex: 0 0 auto; width: 2.8rem; height: 2.8rem; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 1rem; }
+.avatar.big { width: 4rem; height: 4rem; font-size: 1.4rem; }
+.client-row .grow span { font-size: .88rem; }
+.letter { font-weight: 800; color: var(--brand); margin: 1rem 0 .3rem .2rem; font-size: .95rem; }
+.letter:first-child { margin-top: 0; }
+.list > .letter + * { margin-top: 0; }
+.chips.filters { margin-bottom: .7rem; }
+.chips.filters .chip { white-space: nowrap; min-height: 2.6rem; padding: .35rem .8rem; }
+.chip small { opacity: .7; margin-left: .15rem; }
+.sortrow { display: flex; align-items: center; gap: .5rem; margin-bottom: .8rem; }
+.sortrow label { font-weight: 700; white-space: nowrap; }
+.sortrow select { min-height: 2.6rem; padding: .3rem .6rem; }
+.client-hero { display: flex; gap: .9rem; align-items: center; }
+.client-hero p { margin: .1rem 0; }
+.actions3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: .5rem; margin-bottom: 1rem; }
+.actions3 .btn { flex-direction: column; gap: 0; font-size: 1.3rem; min-height: 3.8rem; padding: .4rem; }
+.actions3 .btn small { font-size: .8rem; }
+.note { background: var(--warn-soft); border-left: 5px solid var(--warn); border-radius: 12px; padding: .7rem .9rem; margin-bottom: 1rem; }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin-bottom: .6rem; }
+.stat { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: .6rem .8rem; }
+.stat span { display: block; font-size: .8rem; color: var(--muted); font-weight: 600; }
+.stat b { font-size: 1.05rem; }
