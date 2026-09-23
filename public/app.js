@@ -342,7 +342,7 @@ function parseHash() {
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
   agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: (id, q) => (q.id ? vSaleForm(id, q) : vSell(id, q)), financeiro: vFin, mais: vMore,
-  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, conta: vConta, pacote: vPackageForm,
+  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, conta: vConta, pacote: vPackageForm,
 };
 
 let lastHash = '';
@@ -2805,6 +2805,17 @@ function vMore() {
   const pend = pendingAppts().length;
   const link = salon?.slug ? `${location.origin}/${salon.slug}` : '';
   const lastBk = db.settings.lastBackup ? daysAgo(dstr(new Date(db.settings.lastBackup))) : '';
+  const tom = tomorrowList();
+  const owing = db.clients.filter(c => clientOwes(c.id) > 0).length;
+  // [link, ícone, nome, número, destacar quando tem]
+  const tiles = [
+    ['#/pedidos', '⏳', 'Pedidos', pend, true],
+    ['#/lembretes', '💬', 'Lembrar amanhã', tom.filter(x => !x.remindedAt).length, false],
+    ['#/buscar?k=prereservas', '💳', 'Pré-reservas', preAppts().length, true],
+    ['#/buscar?k=devendo', '💸', 'Quem deve', owing, true],
+    ['#/buscar?k=aniver', '🎂', 'Aniversários', bdaysSoon().length, false],
+    ['#/despesa', '➖', 'Lançar despesa', 0, false],
+  ];
   const item = (href, icon, title, sub, extra = '') => `
     <a class="menu-item" href="${href}"><span class="mi-icon">${icon}</span>
       <span class="mi-text"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${extra}<span class="mi-go">›</span></a>`;
@@ -2822,12 +2833,24 @@ function vMore() {
 
       <div id="ready"></div>
 
+      <h2>Atalhos</h2>
+      <div class="tiles">
+        ${tiles.map(([href, icon, label, n, alert]) => `<a class="tile ${alert && n ? 'alert' : ''}" href="${href}"><span>${icon}</span><b>${label}</b>${n ? `<i>${n}</i>` : ''}</a>`).join('')}
+      </div>
+
       <h2>Meu salão</h2>
       <div class="menu">
-        ${pend ? item('#/pedidos', '⏳', 'Pedidos esperando', `<span style="color:var(--warn);font-weight:700">${pend} para confirmar</span>`) : ''}
         ${item('#/itens/services', '💇', 'Serviços', `${db.services.length} ${db.services.length === 1 ? 'serviço' : 'serviços'}`)}
         ${item('#/itens/products', '🛍️', 'Produtos', `${db.products.length} ${db.products.length === 1 ? 'produto' : 'produtos'}${low ? ` · <span style="color:var(--bad)">⚠️ ${low} acabando</span>` : ''}`)}
-        ${item('#/link', '🔗', 'Link para as clientes', salon ? (salon.enabled ? '<span style="color:var(--ok)">● Ligado</span> · clientes pedem horário por ele' : '○ Desligado') : 'Clientes pedem horário pela internet')}
+        ${item('#/itens/services', '📦', 'Pacotes (cronogramas)', (() => {
+          const presets = db.services.filter(sv => sv.package?.total).length, active = db.packages.filter(pkgActive).length;
+          return `${presets} ${presets === 1 ? 'serviço é pacote' : 'serviços são pacotes'} · ${active} ${active === 1 ? 'cronograma em andamento' : 'cronogramas em andamento'}`;
+        })())}
+      </div>
+
+      <h2>Clientes agendando sozinhas</h2>
+      <div class="menu">
+        ${item('#/link', '🔗', 'Link para as clientes', salon ? (salon.enabled ? `<span style="color:var(--ok)">● Ligado</span> · ${esc(link.replace(/^https?:\/\//, ''))}` : '○ Desligado') : 'Clientes pedem horário pela internet')}
         ${link && salon.enabled ? `<div class="menu-sub wide">
           <button type="button" class="btn small" id="copy-link">📋 Copiar</button>
           <button type="button" class="btn small" id="qr-link">📱 QR code</button>
@@ -2835,16 +2858,11 @@ function vMore() {
         ${item('#/link', '🕐', 'Dias e horários de atendimento', salon?.days ? esc(hoursSummary(salon.days)) + (salon.lunch ? ` · almoço ${salon.lunch[0]}–${salon.lunch[1]}` : '') : 'Configure para ver os horários livres na agenda')}
         ${item('#/whatsapp', '💬', 'WhatsApp automático', '<span id="wa-status">…</span>')}
         ${item('#/whatsapp?textos=1', '✏️', 'Textos das mensagens', 'Confirmação, lembrete, pré-reserva…')}
-        ${item('#/itens/services', '📦', 'Pacotes (cronogramas)', (() => {
-          const presets = db.services.filter(sv => sv.package?.total).length, active = db.packages.filter(pkgActive).length;
-          return `${presets} ${presets === 1 ? 'serviço é pacote' : 'serviços são pacotes'} · ${active} ${active === 1 ? 'cronograma em andamento' : 'cronogramas em andamento'}`;
-        })())}
       </div>
 
       <h2>Neste aparelho</h2>
       <div class="menu">
-        <div class="menu-item static"><span class="mi-icon">🔔</span><span class="mi-text"><b>Avisos de pedidos</b><small id="push-sub">…</small></span></div>
-        <div class="menu-sub" id="push-card"></div>
+        ${item('#/avisos', '🔔', 'Avisos no celular', '<span id="push-sub">…</span>')}
         <div class="menu-item static"><span class="mi-icon">🔠</span><span class="mi-text"><b>Tamanho da letra</b></span></div>
         <div class="menu-sub">${toggle2('big', !!db.settings.big, 'A+ Grande', 'A Normal', true)}</div>
         ${isInstalled() ? '' : `<button type="button" class="menu-item" id="install"><span class="mi-icon">📲</span>
@@ -2871,6 +2889,9 @@ function vMore() {
           ['Como funcionam os pacotes (cronogramas)?', 'Em <b>Serviços</b>, marque que o serviço é um pacote (ex.: 4 sessões, toda semana). Ao agendar esse serviço, as sessões já vêm prontas e a cliente sempre sabe em qual está ("2ª sessão de 4").'],
           ['A cliente quer remarcar ou cancelar', 'Ela mesma pode, pelo link "Ver ou remarcar" que vai nas mensagens. Remarcação vira pedido para você confirmar; o horário antigo vale até você aceitar.'],
           ['Troquei de celular. Perco tudo?', 'Não. Tudo fica guardado na sua conta. É só entrar com o mesmo e-mail e senha no celular novo.'],
+          ['Quais avisos chegam no celular?', 'Pedidos pelo link, horário chegando, pedido sem confirmar, pré-reserva sem sinal, bom dia com o resumo do dia, aniversariantes e WhatsApp desconectado. Ligue em <b>Avisos no celular</b> e escolha quais quer receber.'],
+          ['Como vejo quem faz aniversário?', 'Coloque o aniversário na ficha da cliente (<b>✏️ Editar</b>). No dia você recebe um aviso, e em <b>Clientes → 🎂 Aniversário</b> tem o botão para mandar parabéns.'],
+          ['Dá para buscar falando?', 'Sim. Em <b>Buscar</b>, toque no 🎤 e fale, por exemplo "Maria escova" ou "amanhã".'],
           ['O WhatsApp parou de mandar mensagens', 'Abra <b>WhatsApp automático</b> e veja se está "Conectado". Se não estiver, conecte de novo com o código. As últimas mensagens e erros aparecem no fim daquela tela.'],
         ].map(([q, a]) => `<details class="menu-item faq"><summary><span class="mi-text"><b>${q}</b></span></summary><p>${a}</p></details>`).join('')}
       </div>
@@ -2886,10 +2907,8 @@ function vMore() {
         ${esc(BRAND.name)}</p>`,
     bind(el) {
       bindToggle2($('#big', el), v => { db.settings.big = v; save(); applySettings(); });
-      paintPushCard($('#push-card', el), true).then(() => {
-        const ok = pushSupported() && Notification.permission === 'granted';
-        $('#push-sub', el).innerHTML = ok ? '<span style="color:var(--ok)">● Ligados</span>' : 'Pedidos, horário chegando, resumo do dia…';
-      });
+      $('#push-sub', el).innerHTML = pushSupported() && Notification.permission === 'granted'
+        ? '<span style="color:var(--ok)">● Ligados</span> · escolher quais avisos' : 'Pedidos, horário chegando, resumo do dia…';
       $('#qr-link', el) && ($('#qr-link', el).onclick = () => qrSheet(link, session.tenant.name));
       $('#csv', el).onclick = exportClientsCsv;
       paintReady($('#ready', el));
@@ -2931,6 +2950,16 @@ function vMore() {
   };
 }
 
+// Avisos no celular: ligar neste aparelho e escolher quais chegam
+function vAvisos() {
+  return {
+    title: 'Avisos no celular', tab: 'mais', back: true,
+    html: `<p class="muted" style="margin-top:0">Os avisos chegam neste aparelho mesmo com o app fechado. Cada aparelho precisa ser ligado uma vez.</p>
+      <div id="push-card"></div>`,
+    bind(el) { paintPushCard($('#push-card', el), true); },
+  };
+}
+
 // "Seu salão está pronto?": o que falta configurar, cada item leva direto para onde se resolve
 async function paintReady(box) {
   if (!box) return;
@@ -2940,7 +2969,7 @@ async function paintReady(box) {
     ['Dias e horários de atendimento', !!salon?.days, '#/link'],
     ['Link para as clientes ligado', !!salon?.enabled, '#/link'],
     ['WhatsApp conectado', null, '#/whatsapp'],
-    ['Avisos de pedidos neste aparelho', pushSupported() && Notification.permission === 'granted', '#push-card'],
+    ['Avisos ligados neste aparelho', pushSupported() && Notification.permission === 'granted', '#/avisos'],
     ['Cópia de segurança nos últimos 30 dias', !!db.settings.lastBackup && Date.now() - db.settings.lastBackup < 30 * 86400000, '#exp'],
   ];
   const draw = () => {
@@ -2955,11 +2984,10 @@ async function paintReady(box) {
   draw();
   // itens que ficam nesta mesma página: rola até lá (a cópia já começa a ser feita)
   box.onclick = e => {
-    const a = e.target.closest('a[href="#push-card"], a[href="#exp"]');
+    const a = e.target.closest('a[href="#exp"]');
     if (!a) return;
     e.preventDefault();
-    if (a.getAttribute('href') === '#exp') { exportBackup(); return; }
-    $('#push-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    exportBackup();
   };
   try {
     const st = await api('GET', '/api/whatsapp/status');
