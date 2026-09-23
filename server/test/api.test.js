@@ -96,19 +96,3 @@ test('importa cópia de segurança (juntar e substituir)', async () => {
   assert.deepEqual(live.map(c => c.id).sort(), ['a1', 'c1']);
   await app.close();
 });
-
-test('passagem de dados do app antigo', async () => {
-  const app = buildApp({ handoffOrigins: 'https://andresilvadeveloper.github.io' });
-  const anon = client(app);
-  const h = await anon('POST', '/api/handoff', { data: { clients: [{ id: 'c1', name: 'Maria' }] } },
-    { origin: 'https://andresilvadeveloper.github.io' });
-  assert.equal(h.status, 200);
-  assert.equal(h.headers['access-control-allow-origin'], 'https://andresilvadeveloper.github.io');
-
-  const call = client(app);
-  assert.equal((await call('POST', '/api/handoff/claim', { code: h.body.code })).status, 401);
-  await signup(call);
-  assert.equal((await call('POST', '/api/handoff/claim', { code: h.body.code })).body.imported, 1);
-  assert.equal((await call('POST', '/api/handoff/claim', { code: h.body.code })).status, 404, 'só pode usar uma vez');
-  await app.close();
-});

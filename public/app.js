@@ -19,7 +19,6 @@ const BRAND = window.BRAND || { name: 'Marque Fácil', logo: null, colors: null 
   document.body.classList.add('branded');
 })();
 
-const OLD_KEY = 'agendaSalao.v1'; // dados da versão antiga (só no celular)
 const COLLS = ['clients', 'services', 'products', 'appts', 'sales', 'expenses'];
 const DEFAULT_SLOT = 30; // minutos considerados quando o horário não tem duração
 
@@ -1967,7 +1966,7 @@ function importBackup(f) {
   r.readAsText(f);
 }
 
-// Manda uma cópia inteira para a conta (recuperar cópia / trazer dados antigos)
+// Manda uma cópia inteira para a conta (recuperar cópia de segurança)
 async function uploadAll(data, replace) {
   try {
     await syncNow();
@@ -2045,46 +2044,11 @@ async function startSession(me) {
   render();
   refreshPush();
   await syncNow();
-  await offerOldData();
-}
-
-// Traz os dados da versão antiga do app (que ficavam só no celular)
-async function offerOldData() {
-  const code = sessionStorage.getItem('mf.handoff');
-  if (code) {
-    try {
-      const r = await api('POST', '/api/handoff/claim', { code });
-      sessionStorage.removeItem('mf.handoff');
-      await resetFromServer();
-      toast(`${r.imported} registros trazidos do app antigo ✓`);
-    } catch (e) {
-      if (!e.offline) { sessionStorage.removeItem('mf.handoff'); alert(e.message); }
-    }
-    return;
-  }
-  const old = readLS(OLD_KEY);
-  if (!old || localStorage.getItem('mf.oldImported')) return;
-  const d = migrate(old);
-  const n = COLLS.reduce((t, k) => t + d[k].length, 0);
-  if (!n) return;
-  if (confirm(`Encontramos dados da versão antiga neste celular (${d.clients.length} clientes, ${d.appts.length} horários).\n\nLevar para a sua conta?`)) {
-    if (await uploadAll(d, false)) localStorage.setItem('mf.oldImported', '1');
-  } else localStorage.setItem('mf.oldImported', 'no');
 }
 
 /* ---------------------------- início ---------------------------- */
 function applySettings() { document.documentElement.classList.toggle('big', !!db.settings.big); }
 
-// Link vindo do app antigo: #/migrar?code=...
-function catchHandoff() {
-  const { parts, q } = parseHash();
-  if (parts[0] !== 'migrar') return false;
-  if (q.code) sessionStorage.setItem('mf.handoff', q.code);
-  history.replaceState(null, '', '#/agenda');
-  return true;
-}
-catchHandoff();
-window.addEventListener('hashchange', () => { if (catchHandoff() && session) { render(); offerOldData(); } });
 stack.push(curHash());
 if (session) {
   loadCache();
@@ -2092,7 +2056,6 @@ if (session) {
   render();
   // confere se a sessão ainda vale (sem internet, segue com a cópia do celular)
   api('GET', '/api/me').then(me => { session = me; writeLS('mf.session', me); refreshPush(); return syncNow(); })
-    .then(offerOldData)
     .catch(e => { if (e.status === 401) logoutLocal(); else { syncState = 'offline'; paintSync(); } });
 } else showLogin();
 

@@ -75,11 +75,7 @@ export function openDb(file) {
       data TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS handoffs (
-      code TEXT PRIMARY KEY,
-      data TEXT NOT NULL,
-      created_at INTEGER NOT NULL
-    );
+    DROP TABLE IF EXISTS handoffs;
   `);
   return db;
 }

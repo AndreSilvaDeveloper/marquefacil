@@ -69,9 +69,3 @@ docker compose up -d --build
 
 **Cópias do banco:** o servidor faz uma cópia por dia (guarda 14) dentro do volume `appdata`, em `/data/backups`.
 Para trazer para a VPS: `docker compose cp app:/data/backups ./backups`
-
-## Mudança do app antigo (só no celular) para a conta
-- Se ela abrir a versão nova **no mesmo endereço** do app antigo, o app oferece levar os dados para a conta.
-- Vindo de outro endereço (GitHub Pages → domínio novo), o app antigo manda os dados para `/api/handoff`
-  e abre `https://DOMINIO/#/migrar?code=...`; depois do login os dados entram na conta.
-- Sempre funciona também pelo caminho manual: **Mais → Fazer cópia** no antigo e **Recuperar de uma cópia** no novo.

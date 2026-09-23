@@ -1,7 +1,6 @@
 import Fastify from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { brandFor, brandHtml, manifestFor } from './brands.js';
@@ -17,7 +16,6 @@ import { createPush, registerPush } from './push.js';
 const YEAR = 365 * 24 * 60 * 60;
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 const MAX_RECORD = 20_000; // bytes por registro
-const HANDOFF_TTL = 3 * 24 * 60 * 60 * 1000;
 
 const slugify = s => norm(s).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'salao';
 // Endereços que não podem virar link de salão
@@ -54,7 +52,6 @@ export function buildApp({
   publicDir = null,
   allowSignup = true,
   secureCookies = false,
-  handoffOrigins = '*',
   evolution = {},        // { url, apikey, fetchImpl }
   publicUrl = '',        // endereço do sistema, para links nas mensagens
   pushSender = null,     // para testes
@@ -66,7 +63,6 @@ export function buildApp({
   app.register(fastifyCookie);
 
   const limitAuth = rateLimiter({ max: 10, windowMs: 15 * 60 * 1000 });
-  const limitHandoff = rateLimiter({ max: 20, windowMs: 60 * 60 * 1000 });
   const limitBook = rateLimiter({ max: 10, windowMs: 60 * 60 * 1000 });
 
   const evo = evolutionClient(evolution);
@@ -244,37 +240,6 @@ export function buildApp({
     }
     const seq = changes.length ? applyChanges(db, req.s.tenant_id, changes) : 0;
     return { seq, imported: changes.filter(c => !c.deleted).length };
-  });
-
-  /* --------- passagem dos dados do app antigo (GitHub Pages) para o novo --------- */
-  const cors = (req, reply) => {
-    const origin = req.headers.origin;
-    const ok = handoffOrigins === '*' || String(handoffOrigins).split(',').map(s => s.trim()).includes(origin);
-    if (origin && ok) {
-      reply.header('Access-Control-Allow-Origin', origin);
-      reply.header('Vary', 'Origin');
-      reply.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
-      reply.header('Access-Control-Allow-Headers', 'Content-Type');
-    }
-  };
-  app.options('/api/handoff', async (req, reply) => { cors(req, reply); reply.code(204).send(); });
-  app.post('/api/handoff', async (req, reply) => {
-    cors(req, reply);
-    if (!limitHandoff(req.ip)) fail(429, 'Muitas tentativas. Espere um pouco.');
-    backupToChanges(req.body?.data); // só valida
-    const code = crypto.randomBytes(12).toString('base64url');
-    db.prepare('DELETE FROM handoffs WHERE created_at < ?').run(Date.now() - HANDOFF_TTL);
-    db.prepare('INSERT INTO handoffs (code, data, created_at) VALUES (?, ?, ?)').run(code, JSON.stringify(req.body.data), Date.now());
-    return { code };
-  });
-  app.post('/api/handoff/claim', { preHandler: auth }, async req => {
-    const code = String(req.body?.code || '');
-    const h = db.prepare('SELECT * FROM handoffs WHERE code = ? AND created_at >= ?').get(code, Date.now() - HANDOFF_TTL);
-    if (!h) fail(404, 'Esse link de passagem expirou. Faça de novo pelo app antigo.');
-    const changes = backupToChanges(JSON.parse(h.data));
-    const seq = changes.length ? applyChanges(db, req.s.tenant_id, changes) : 0;
-    db.prepare('DELETE FROM handoffs WHERE code = ?').run(code);
-    return { seq, imported: changes.length };
   });
 
   app.get('/api/health', async () => ({ ok: true }));
