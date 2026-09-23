@@ -18,20 +18,22 @@ function client(app) {
 
 // Evolution de mentira: guarda o que foi enviado
 function fakeEvolution() {
-  const sent = [], instances = {};
+  const sent = [], instances = {}, calls = [];
   const json = (status, body) => ({ ok: status < 400, status, json: async () => body });
   const fetchImpl = async (url, opts) => {
     const u = new URL(url), body = opts.body ? JSON.parse(opts.body) : null;
     const name = decodeURIComponent(u.pathname.split('/').pop());
-    if (u.pathname === '/instance/create') { instances[body.instanceName] = 'connecting'; return json(201, { qrcode: { base64: 'data:image/png;base64,QR' } }); }
+    if (u.pathname === '/instance/create') { instances[body.instanceName] = 'connecting'; calls.push(['create', body.instanceName, body]); return json(201, { qrcode: { base64: 'data:image/png;base64,QR' } }); }
     if (u.pathname.startsWith('/instance/connectionState/')) return instances[name] ? json(200, { instance: { state: instances[name] } }) : json(404, { message: ['not found'] });
     if (u.pathname.startsWith('/instance/connect/')) return json(200, { base64: 'data:image/png;base64,QR2', pairingCode: u.searchParams.get('number') ? 'ABCD1234' : undefined });
     if (u.pathname === '/instance/fetchInstances') return json(200, [{ ownerJid: '5511900000000@s.whatsapp.net' }]);
     if (u.pathname.startsWith('/message/sendText/')) { sent.push({ instance: name, ...body }); return json(201, {}); }
+    if (u.pathname.startsWith('/settings/set/')) { calls.push(['settings', name, body]); return json(201, {}); }
+    if (u.pathname.startsWith('/instance/setPresence/')) { calls.push(['presence', name, body.presence]); return json(201, {}); }
     if (u.pathname.startsWith('/instance/logout/') || u.pathname.startsWith('/instance/delete/')) { delete instances[name]; return json(200, {}); }
     return json(404, {});
   };
-  return { sent, instances, fetchImpl };
+  return { sent, instances, calls, fetchImpl };
 }
 
 // Próxima data (a partir de amanhã) que cai no dia da semana pedido
@@ -581,5 +583,25 @@ test('cronograma que já começou: "3ª sessão de 4" e a sessão vai sempre na 
   assert.match(conf, /📦 Cronograma capilar — 3ª sessão de 4/);
   await app.messenger.runReminders(start - 20 * 3600e3);
   assert.match(evo.sent.at(-1).text, /Oi Rita, amanhã tem\.\n📦 Cronograma capilar — 3ª sessão de 4/);
+  await app.close();
+});
+
+test('WhatsApp fica "offline" para o celular continuar recebendo notificações', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl } });
+  const call = await salon(app);
+  await call('POST', '/api/whatsapp/connect');
+  const created = evo.calls.find(c => c[0] === 'create')[2];
+  assert.equal(created.alwaysOnline, false, 'criada sem ficar sempre online');
+  assert.equal(created.readMessages, false, 'não marca mensagens como lidas');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  await call('GET', '/api/whatsapp/status'); // conectou
+  await new Promise(r => setTimeout(r, 30));
+  assert.ok(evo.calls.some(c => c[0] === 'settings' && c[2].alwaysOnline === false && c[2].readMessages === false));
+  assert.ok(evo.calls.some(c => c[0] === 'presence' && c[2] === 'unavailable'));
+  // e o agendador repete
+  const before = evo.calls.filter(c => c[0] === 'presence').length;
+  assert.equal(await app.messenger.keepQuiet(), 1);
+  assert.equal(evo.calls.filter(c => c[0] === 'presence').length, before + 1);
   await app.close();
 });

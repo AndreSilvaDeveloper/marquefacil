@@ -4,6 +4,12 @@ import { nowIn, zonedEpoch, addDays, dayLabel } from './time.js';
 import { newPortalToken, portalUrl } from './portal.js';
 
 /* ------------------------- cliente da Evolution API (v2) ------------------------- */
+// O WhatsApp do salão não pode parecer "aberto" nem marcar mensagens como lidas: se a conta
+// aparece online num aparelho conectado, o celular da profissional para de tocar as notificações.
+export const QUIET = {
+  rejectCall: false, msgCall: '', groupsIgnore: true, alwaysOnline: false,
+  readMessages: false, readStatus: false, syncFullHistory: false,
+};
 export function evolutionClient({ url, apikey, fetchImpl = fetch, timeoutMs = 15000 }) {
   const base = String(url || '').replace(/\/+$/, '');
   async function call(method, path, body) {
@@ -25,7 +31,10 @@ export function evolutionClient({ url, apikey, fetchImpl = fetch, timeoutMs = 15
   const enc = encodeURIComponent;
   return {
     enabled: !!(base && apikey),
-    create: name => call('POST', '/instance/create', { instanceName: name, integration: 'WHATSAPP-BAILEYS', qrcode: true }),
+    create: name => call('POST', '/instance/create', { instanceName: name, integration: 'WHATSAPP-BAILEYS', qrcode: true, ...QUIET }),
+    // configurações da instância e presença ("offline" = o celular continua recebendo as notificações)
+    setSettings: name => call('POST', `/settings/set/${enc(name)}`, QUIET),
+    setPresence: (name, presence) => call('POST', `/instance/setPresence/${enc(name)}`, { presence }),
     // com `number`, a Evolution devolve também um código para "Conectar com número de telefone"
     connect: (name, number) => call('GET', `/instance/connect/${enc(name)}${number ? '?number=' + enc(number) : ''}`),
     state: name => call('GET', `/instance/connectionState/${enc(name)}`),
@@ -172,17 +181,38 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
     }
     return sent;
   }
+  // Deixa cada WhatsApp conectado "offline" (as notificações continuam chegando no celular)
+  async function keepQuiet() {
+    if (!evo.enabled) return 0;
+    let n = 0;
+    for (const t of tenantsOn.all()) {
+      const name = readSettings(t.settings).whatsapp.instance;
+      try {
+        if (!quieted.has(name)) { await evo.setSettings(name); quieted.add(name); }
+        await evo.setPresence(name, 'unavailable');
+        n++;
+      } catch (e) {
+        if (e.status !== 404) log.warn?.({ err: e.message, name }, 'whatsapp: não consegui deixar offline');
+      }
+    }
+    return n;
+  }
+  const quieted = new Set();
   function startScheduler(everyMs = 60_000) {
-    let busy = false;
+    let busy = false, ticks = 0;
     const tick = async () => {
       if (busy) return;
       busy = true;
-      try { await runReminders(); } catch (e) { log.error?.(e); } finally { busy = false; }
+      try {
+        if (ticks++ % 10 === 0) await keepQuiet(); // logo ao ligar e depois a cada 10 minutos
+        await runReminders();
+      } catch (e) { log.error?.(e); } finally { busy = false; }
     };
+    tick();
     return setInterval(tick, everyMs);
   }
 
-  return { sendForAppt, sendText, fire, runReminders, startScheduler, packageLabel };
+  return { sendForAppt, sendText, fire, runReminders, startScheduler, packageLabel, keepQuiet };
 }
 
 /* ------------------------- rotas (profissional logada) ------------------------- */
@@ -195,12 +225,17 @@ export function registerWhatsapp(app, { db, evo, messenger, auth, getSettings, s
     return String(jid).split('@')[0].replace(/\D/g, '');
   };
 
+  const quietDone = new Set();
   app.get('/api/whatsapp/status', { preHandler: auth }, async req => {
     const s = getSettings(req.s.tenant_id);
     if (!evo.enabled || !s.whatsapp.instance) return { available: evo.enabled, state: 'off' };
     let state = 'close';
     try { state = (await evo.state(s.whatsapp.instance))?.instance?.state || 'close'; }
     catch (e) { if (e.status !== 404) return { available: true, state: 'error', error: e.message }; }
+    if (state === 'open' && !quietDone.has(s.whatsapp.instance)) {
+      quietDone.add(s.whatsapp.instance);
+      evo.setSettings(s.whatsapp.instance).then(() => evo.setPresence(s.whatsapp.instance, 'unavailable')).catch(() => {});
+    }
     if (state === 'open' && !s.whatsapp.number) {
       const number = ownerNumber(await evo.info(s.whatsapp.instance).catch(() => null));
       if (number) saveSettings(req.s.tenant_id, { ...s, whatsapp: { ...s.whatsapp, number } });
