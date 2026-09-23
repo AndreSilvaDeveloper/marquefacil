@@ -492,3 +492,70 @@ test('meus horários: ver, remarcar (com confirmação), recusar, cancelar, pedi
   assert.match(sentNow[0].text, /#meus=/);
   await app.close();
 });
+
+test('pré-reserva: mensagem com o primeiro nome, sem lembrete, confirma ao pagar o sinal', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl }, publicUrl: 'https://studiokadosh.com' });
+  const call = await salon(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  const date = nextWeekday(4);
+  const start = Date.parse(`${date}T10:00:00-03:00`);
+  const appt = { clientId: 'c1', date, time: '10:00', service: 'Progressiva', price: 300, status: 'prereserva', createdAt: start - 5 * 86400e3 };
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'c1', data: { name: 'Maria Eduarda Souza', phone: '11966665555' } },
+    { coll: 'appts', id: 'p1', data: appt },
+  ] });
+  await new Promise(r => setTimeout(r, 60));
+  const msg = evo.sent.find(m => m.number === '5511966665555');
+  assert.match(msg.text, /^Olá, Maria! ✅/, 'só o primeiro nome');
+  assert.match(msg.text, /pré-reservado/);
+  assert.match(msg.text, /Valor: R\$\s?300,00/);
+  assert.match(msg.text, /50% do valor/);
+  assert.doesNotMatch(msg.text, /\{pacote\}|📦/, 'linha do pacote some quando não tem');
+
+  // sem lembrete enquanto for pré-reserva; livre no link? não: ocupa o horário
+  assert.equal(await app.messenger.runReminders(start - 20 * 3600e3), 0);
+  const slots = (await client(app)('GET', `/api/public/studio-ana/slots?date=${date}&service=s1`)).body.slots;
+  assert.ok(!slots.includes('10:00'), 'pré-reserva segura o horário');
+
+  // pagou o sinal → vira confirmado → sai a confirmação
+  await call('POST', '/api/sync', { changes: [{ coll: 'appts', id: 'p1', data: { ...appt, status: 'marcado', payments: [{ v: 150, m: 'pix', d: date }] } }] });
+  await new Promise(r => setTimeout(r, 60));
+  assert.ok(evo.sent.some(m => m.number === '5511966665555' && /está marcado/.test(m.text)));
+  await app.close();
+});
+
+test('pacote: "2ª de 4" nas mensagens e na página da cliente; cancelar renumera', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl }, publicUrl: 'https://x.com' });
+  const call = await salon(app);
+  const pub = client(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  const d = nextWeekday(2);
+  const ap = (id, n, extra = {}) => ({ coll: 'appts', id, data: { clientId: 'c1', date: addDays(d, 7 * n), time: '15:00', service: 'Cronograma', packageId: 'k1', status: 'marcado', seriesId: 'S', seriesIndex: n, ...extra } });
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'c1', data: { name: 'Bia Lima', phone: '11955554444' } },
+    { coll: 'packages', id: 'k1', data: { clientId: 'c1', name: 'Cronograma capilar', total: 4 } },
+    ap('a1', 0), ap('a2', 1), ap('a3', 2),
+  ] });
+  await new Promise(r => setTimeout(r, 60));
+  assert.match(evo.sent.find(m => m.number === '5511955554444').text, /📦 Cronograma capilar — 1ª de 4/);
+  assert.equal(app.messenger.packageLabel((await call('GET', '/api/me')).body.tenant.id, { id: 'a3', packageId: 'k1' }), 'Cronograma capilar — 3ª de 4');
+
+  // cancela a 1ª: a antiga 2ª passa a ser a 1ª
+  await call('POST', '/api/sync', { changes: [ap('a1', 0, { status: 'cancelado' })] });
+  const tid = (await call('GET', '/api/me')).body.tenant.id;
+  assert.equal(app.messenger.packageLabel(tid, { id: 'a2', packageId: 'k1' }), 'Cronograma capilar — 1ª de 4');
+
+  // página da cliente mostra o pacote
+  const b = await pub('POST', '/api/public/studio-ana/access', { phone: '11955554444' });
+  assert.equal(b.status, 200);
+  await new Promise(r => setTimeout(r, 60));
+  const token = evo.sent.at(-1).text.match(/#meus=([\w-]+)/)[1];
+  const me = (await pub('GET', `/api/public/studio-ana/me?t=${token}`)).body;
+  assert.equal(me.upcoming[0].pacote, 'Cronograma capilar — 1ª de 4');
+  assert.deepEqual(me.packages.map(p => [p.name, p.total, p.scheduled]), [['Cronograma capilar', 4, 2]]);
+  await app.close();
+});

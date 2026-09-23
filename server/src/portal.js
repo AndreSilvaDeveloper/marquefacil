@@ -32,6 +32,8 @@ export function registerPortal(app, { db, messenger, push, publicUrl, limitBook,
     dayAppts: db.prepare(`SELECT data FROM records WHERE tenant_id = ? AND coll = 'appts' AND deleted = 0
                           AND json_extract(data, '$.date') = ?`),
     cleanup: db.prepare('DELETE FROM portal_tokens WHERE created_at < ?'),
+    clientPackages: db.prepare(`SELECT data FROM records WHERE tenant_id = ? AND coll = 'packages' AND deleted = 0
+                                AND json_extract(data, '$.clientId') = ?`),
   };
   const get = (t, coll, id) => { const r = q.record.get(t, coll, id); return r ? JSON.parse(r.data) : null; };
 
@@ -46,7 +48,7 @@ export function registerPortal(app, { db, messenger, push, publicUrl, limitBook,
     return { t, s, client, now: nowIn(s.timezone) };
   }
   // Pode mexer? Só horário que ainda não passou e respeitando a antecedência do salão
-  const canChange = (s, a) => (a.status === 'marcado' || a.status === 'pendente') &&
+  const canChange = (s, a) => (a.status === 'marcado' || a.status === 'pendente' || a.status === 'prereserva') &&
     zonedEpoch(a.date, a.time, s.timezone) - Date.now() > s.booking.minAdvanceHours * 3600e3;
 
   // Pedir o link pelo telefone: chega no WhatsApp (a resposta é sempre a mesma, para não revelar quem é cliente)
@@ -72,19 +74,25 @@ export function registerPortal(app, { db, messenger, push, publicUrl, limitBook,
     const all = q.clientAppts.all(t.id, client.id).map(r => JSON.parse(r.data));
     const byWhen = (a, b) => (a.date + a.time).localeCompare(b.date + b.time);
     const upcoming = all.filter(a => (a.date > now.date || (a.date === now.date && a.time >= `${String(Math.floor(now.minutes / 60)).padStart(2, '0')}:${String(now.minutes % 60).padStart(2, '0')}`))
-      && (a.status === 'marcado' || a.status === 'pendente')
+      && (a.status === 'marcado' || a.status === 'pendente' || a.status === 'prereserva')
       && !(a.replaces && a.status === 'pendente' && all.some(o => o.id === a.replaces && o.status !== 'cancelado'))) // pedido de troca aparece no horário original
       .sort(byWhen);
-    const pastDone = all.filter(a => !upcoming.includes(a) && a.status !== 'cancelado' && a.status !== 'pendente').sort(byWhen).reverse().slice(0, 5);
+    const pastDone = all.filter(a => !upcoming.includes(a) && !['cancelado', 'pendente', 'prereserva'].includes(a.status)).sort(byWhen).reverse().slice(0, 5);
     const view = a => ({
       id: a.id, date: a.date, time: a.time, label: dayLabel(a.date), service: a.service || '', status: a.status,
       duration: a.duration || null, canChange: canChange(s, a), replaces: a.replaces || null,
       // pedido de remarcação esperando o salão
       moving: all.find(x => x.replaces === a.id && x.status === 'pendente')?.id || null,
+      pacote: messenger.packageLabel(t.id, a),
     });
+    const packages = q.clientPackages.all(t.id, client.id).map(r => JSON.parse(r.data)).map(p => {
+      const used = all.filter(a => a.packageId === p.id && a.status !== 'cancelado');
+      const done = used.filter(a => a.status === 'feito' || zonedEpoch(a.date, a.time, s.timezone) < Date.now()).length;
+      return { name: p.name, total: p.total, scheduled: used.length, done };
+    }).filter(p => p.done < p.total);
     return {
       salon: t.name, name: client.name, approval: s.booking.requireApproval, enabled: s.booking.enabled,
-      upcoming: upcoming.map(view), past: pastDone.map(view),
+      upcoming: upcoming.map(view), past: pastDone.map(view), packages,
     };
   });
 

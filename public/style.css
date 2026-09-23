@@ -409,3 +409,20 @@ details.more summary small { display: block; font-weight: 400; color: var(--mute
 .cart-total { display: flex; justify-content: space-between; align-items: baseline; padding: .7rem 0 .3rem; font-size: 1.1rem; }
 .cart-total b { font-size: 1.5rem; }
 .paygrid.four { grid-template-columns: 1fr 1fr; }
+
+/* ---------- Pré-reserva e pacotes ---------- */
+.badge.pre { background: #efe6fb; color: #5b2a9a; }
+.appt.prereserva { border: 2px dashed #8a5cc7; }
+.pending-banner.pre { background: #f5effd; border-color: #8a5cc7; color: #5b2a9a; }
+.prebox { background: #f5effd; border: 2px solid #8a5cc7; border-radius: var(--radius); padding: .9rem; margin-bottom: 1rem; }
+.pkg .bar { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; margin: .6rem 0; }
+.pkg .bar i { display: block; height: 100%; background: var(--ok); border-radius: 5px; }
+.sessions { list-style: none; padding: 0; margin: 0 0 .7rem; display: grid; grid-template-columns: 1fr 1fr; gap: .3rem .6rem; font-size: .92rem; }
+.sessions li a { text-decoration: none; }
+.sessions li.ok { color: var(--ok); }
+.sessions li.todo { color: var(--muted); }
+.note { display: flex; gap: .5rem; align-items: center; }
+.note .btn.small { margin-left: auto; flex: 0 0 auto; }
+.note.empty-note { background: #fff; border-left-color: var(--line); }
+.jump { margin: .4rem 0 .2rem; }
+.actions3 { grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }

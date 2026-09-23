@@ -19,7 +19,7 @@ const BRAND = window.BRAND || { name: 'Marque Fácil', logo: null, colors: null 
   document.body.classList.add('branded');
 })();
 
-const COLLS = ['clients', 'services', 'products', 'appts', 'sales', 'expenses'];
+const COLLS = ['clients', 'services', 'products', 'appts', 'sales', 'expenses', 'packages'];
 const DEFAULT_SLOT = 30; // minutos considerados quando o horário não tem duração
 
 /* ---------------------------- utilidades ---------------------------- */
@@ -258,7 +258,7 @@ function clearPayments(x) { x.payments = []; x.paid = false; }
 function refreshPaid(x) { if (x.payments?.length) x.paid = leftOf(x) === 0; } // depois de mudar o valor
 const methodsOf = x => [...new Set(paymentsOf(x).map(p => PAY[p.m]).filter(Boolean))].join(' + ');
 
-const apptDue = a => a.status !== 'cancelado' && a.status !== 'pendente' && valueOf(a) > 0 && leftOf(a) > 0 && (a.status === 'feito' || isPast(a));
+const apptDue = a => a.status !== 'cancelado' && a.status !== 'pendente' && a.status !== 'prereserva' && valueOf(a) > 0 && leftOf(a) > 0 && (a.status === 'feito' || isPast(a));
 const saleDue = s => valueOf(s) > 0 && leftOf(s) > 0;
 function clientOwes(id) {
   return round2(db.appts.filter(a => a.clientId === id && apptDue(a)).reduce((t, a) => t + leftOf(a), 0) +
@@ -342,7 +342,7 @@ function parseHash() {
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
   agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: (id, q) => (q.id ? vSaleForm(id, q) : vSell(id, q)), financeiro: vFin, mais: vMore,
-  itens: vItems, item: vItemForm, link: vLink, whatsapp: vWhats, conta: vConta,
+  itens: vItems, item: vItemForm, link: vLink, whatsapp: vWhats, conta: vConta, pacote: vPackageForm,
 };
 
 let lastHash = '';
@@ -376,6 +376,9 @@ $('#btn-back').addEventListener('click', () => back());
 function badgesFor(a) {
   const b = [];
   if (a.status === 'pendente') b.push('<span class="badge warn">⏳ Aguardando você confirmar</span>');
+  if (a.status === PRE) b.push(`<span class="badge pre">💳 Pré-reserva · sinal${a.price > 0 ? ' ' + brl(depositOf(a)) : ''}</span>`);
+  const pos = pkgPos(a);
+  if (pos && a.status !== 'cancelado') b.push(`<span class="badge">📦 ${pos.n}ª de ${pos.total}</span>`);
   if (a.serviceCustom && a.status === 'pendente') b.push('<span class="badge">✏️ Serviço escrito pela cliente</span>');
   if (a.replaces && a.status === 'pendente') {
     const old = db.appts.find(x => x.id === a.replaces);
@@ -388,7 +391,7 @@ function badgesFor(a) {
     if (a.priceLater && !(a.price > 0) && a.status !== 'cancelado') b.push('<span class="badge">🔎 Valor na hora</span>');
     if (conflictsFor(a.date, a.time, a.duration, a.id).length) b.push('<span class="badge warn">⚠️ Horário junto</span>');
     if (a.source === 'online') b.push('<span class="badge">🌐 Pelo link</span>');
-    if (a.seriesId) b.push('<span class="badge">🔁 Fixa</span>');
+    if (a.seriesId && !a.packageId) b.push('<span class="badge">🔁 Fixa</span>');
     const sold = salesOfAppt(a).reduce((t, x) => t + (x.qty || 1), 0);
     if (sold) b.push(`<span class="badge">🛍️ +${sold} produto${sold > 1 ? 's' : ''}</span>`);
   }
@@ -459,6 +462,26 @@ const nextInSeries = a => db.appts.filter(x => x.seriesId && x.seriesId === a.se
 const salesOfAppt = a => db.sales.filter(x => x.apptId === a.id);
 const visitTotal = a => round2(valueOf(a) + salesOfAppt(a).reduce((t, x) => t + valueOf(x), 0));
 const visitLeft = a => round2(leftOf(a) + salesOfAppt(a).reduce((t, x) => t + leftOf(x), 0));
+
+/* Pré-reserva: horário segurado esperando o sinal (status 'prereserva') */
+const PRE = 'prereserva';
+const depositPct = () => salonHours()?.deposit ?? 50;
+const depositOf = a => (a.price > 0 ? round2(a.price * depositPct() / 100) : 0);
+const preAppts = () => db.appts.filter(a => a.status === PRE && !isPast(a)).sort(byWhen);
+
+/* Pacotes (cronogramas): várias sessões; a posição de cada horário vem da ordem das datas */
+const pkgOf = id => db.packages.find(p => p.id === id);
+const pkgAppts = p => db.appts.filter(a => a.packageId === p.id && a.status !== 'cancelado').sort(byWhen);
+const pkgDone = p => pkgAppts(p).filter(a => a.status === 'feito' || (a.status === 'marcado' && isPast(a))).length;
+const pkgLeftToBook = p => Math.max(0, p.total - pkgAppts(p).length);
+const pkgActive = p => pkgDone(p) < p.total;
+function pkgPos(a) {
+  const p = a.packageId && pkgOf(a.packageId);
+  if (!p) return null;
+  const n = pkgAppts(p).findIndex(x => x.id === a.id) + 1;
+  return n ? { p, n, total: p.total } : null;
+}
+const clientPackages = cid => db.packages.filter(p => p.clientId === cid).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
 const pendingAppts = () => db.appts.filter(a => a.status === 'pendente').sort(byWhen);
 
@@ -663,6 +686,7 @@ function vAgenda(_, q) {
         <label class="btn small" style="position:relative">📆 Escolher dia
           <input type="date" id="pick" value="${d}" style="position:absolute;inset:0;opacity:0;min-height:0"></label>
       </div>
+      ${preAppts().length ? `<a class="card pending-banner pre" href="#/buscar?k=prereservas">💳 <b>${preAppts().length} ${preAppts().length === 1 ? 'pré-reserva' : 'pré-reservas'}</b> esperando o sinal ›</a>` : ''}
       ${pend.length ? `<a class="card pending-banner" href="#/pedidos">⏳ <b>${pend.length} ${pend.length === 1 ? 'pedido esperando' : 'pedidos esperando'}</b> você confirmar ›</a>` : ''}
       ${d === t && view === 'dia' && tomorrowList().length ? `<a class="btn" href="#/lembretes" style="margin-bottom:1rem">💬 Lembrar clientes de amanhã (${tomorrowList().filter(x => !x.remindedAt).length} de ${tomorrowList().length})</a>` : ''}
       <div id="push-card"></div>
@@ -773,6 +797,20 @@ function seriesDates(start, every, months) {
   }
   return out;
 }
+// Datas até completar `count` sessões (pacote)
+function seriesByCount(start, every, count) {
+  if (!start || count < 1) return [];
+  const out = [start];
+  const s0 = toDate(start);
+  for (let i = 1; out.length < count; i++) {
+    if (every === 'm') {
+      const d = new Date(s0.getFullYear(), s0.getMonth() + i, 1);
+      d.setDate(Math.min(s0.getDate(), new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
+      out.push(dstr(d));
+    } else out.push(addDays(start, i * +every));
+  }
+  return out;
+}
 const seriesLabel = e => ({ 7: 'toda semana', 14: 'a cada 15 dias', m: 'todo mês' }[e] || 'repetindo');
 
 function vApptForm(_, q) {
@@ -782,6 +820,8 @@ function vApptForm(_, q) {
   const durs = [30, 60, 90, 120, 180];
   let dur = a.duration || null;
   let paid = isPaid(a);
+  let pre = a.status === PRE;
+  let pkgId = a.packageId || (q.pk && pkgOf(q.pk) ? q.pk : '');
   let method = paymentsOf(a).at(-1)?.m || '';
 
   return {
@@ -836,6 +876,14 @@ function vApptForm(_, q) {
             <span class="chip" id="dur-other">Outro: <input type="number" id="f-dur" inputmode="numeric" min="5" step="5" placeholder="min"> min</span>
           </div>
         </div>
+
+        <div class="field">
+          <span class="lbl">Como fica este horário?</span>
+          ${toggle2('f-kind', a.status !== PRE, '✅ Confirmado', '💳 Pré-reserva')}
+          <small class="hint" id="kind-hint"></small>
+        </div>
+
+        <div id="pkgbox"></div>
 
         <details class="more" ${edit && (a.price > 0 || a.priceLater || a.notes || paid) ? 'open' : ''}>
           <summary>➕ Mais detalhes <small>${edit ? 'valor, pagamento, observação' : 'repetir, valor, pagamento, observação'}</small></summary>
@@ -932,7 +980,13 @@ function vApptForm(_, q) {
 
       // Repetição: datas que vão ser marcadas
       let every = '';
-      const repDates = () => every ? seriesDates(iDate.value, every, +($('#rep-months', el)?.value || 3)) : [iDate.value];
+      // pacote escolhido: "repetir" marca exatamente as sessões que faltam
+      const pkgLeft = () => { const p = pkgId && pkgOf(pkgId); return p ? pkgLeftToBook(p) : 0; };
+      const repDates = () => {
+        if (!every) return [iDate.value];
+        if (pkgId && pkgLeft() > 0) return seriesByCount(iDate.value, every, pkgLeft());
+        return seriesDates(iDate.value, every, +($('#rep-months', el)?.value || 3));
+      };
       const paintRep = () => {
         if (!$('#rep', el)) return;
         $('#rep-for', el).hidden = !every;
@@ -1025,6 +1079,47 @@ function vApptForm(_, q) {
         method = b.dataset.m;
         el.querySelectorAll('#f-method button').forEach(x => x.classList.toggle('on', x === b));
       };
+      // Confirmado ou pré-reserva
+      const paintKind = () => {
+        $('#kind-hint', el).textContent = pre
+          ? `O horário fica segurado e a cliente recebe a mensagem de pré-reserva pedindo o sinal (${depositPct()}%). Sem lembrete até confirmar.`
+          : 'A cliente recebe a confirmação no WhatsApp (se tiver telefone).';
+      };
+      bindToggle2($('#f-kind', el), v => { pre = !v; paintKind(); });
+      paintKind();
+      // Pacote da cliente
+      const paintPkg = () => {
+        const c = findByName(db.clients, iClient.value);
+        const list = c ? clientPackages(c.id).filter(p => pkgActive(p) || p.id === pkgId) : [];
+        if (pkgId && !list.some(p => p.id === pkgId)) pkgId = '';
+        if (!list.length) { $('#pkgbox', el).innerHTML = c ? `<p class="muted" style="margin:-.4rem 0 1rem;font-size:.9rem">📦 Faz cronograma? <a href="#/pacote?c=${c.id}">Criar um pacote</a></p>` : ''; return; }
+        const nextN = p => (edit?.packageId === p.id ? (pkgPos(edit)?.n || 1) : pkgAppts(p).length + 1);
+        $('#pkgbox', el).innerHTML = `<div class="field"><span class="lbl">📦 Faz parte de um pacote?</span>
+          <div class="pick" id="pkgs">${list.map(p => `<button type="button" data-pk="${p.id}" class="${p.id === pkgId ? 'on' : ''}">${esc(p.name)}
+            <small>Esta será a <b>${Math.min(nextN(p), p.total)}ª de ${p.total}</b> · ${pkgDone(p)} ${pkgDone(p) === 1 ? 'feita' : 'feitas'}</small></button>`).join('')}
+            <button type="button" data-pk="" class="${!pkgId ? 'on' : ''}">Não, horário avulso</button></div>
+          ${pkgId && !edit && pkgLeft() > 1 ? `<div class="chips mini" id="pkg-rep" style="margin-top:.6rem"><span class="muted">Marcar as ${pkgLeft()} sessões que faltam:</span>
+            ${[['', 'Só esta'], ['7', 'Toda semana'], ['14', 'A cada 15 dias'], ['m', 'Todo mês']].map(([r, n]) => `<button type="button" class="chip ${every === r ? 'on' : ''}" data-r="${r}">${n}</button>`).join('')}</div>
+            ${every ? `<small class="hint">Vai marcar ${repDates().length} horários, de ${fmtShort(repDates()[0])} até ${fmtShort(repDates().at(-1))}.</small>` : ''}` : ''}</div>`;
+      };
+      $('#pkgbox', el).addEventListener('click', e => {
+        const b = e.target.closest('[data-pk]');
+        if (b) {
+          pkgId = b.dataset.pk;
+          const p = pkgOf(pkgId);
+          if (p && !iService.value.trim()) { iService.value = p.service || p.name; iService.dispatchEvent(new Event('change')); }
+          if (!pkgId) every = '';
+          paintPkg(); paintSum();
+          return;
+        }
+        const r = e.target.closest('#pkg-rep [data-r]');
+        if (r) { every = r.dataset.r; paintPkg(); paintRep(); }
+      });
+      iClient.addEventListener('change', paintPkg);
+      iClient.addEventListener('input', paintPkg);
+      paintPkg();
+      // veio de "marcar a próxima sessão": o serviço é o do pacote
+      if (pkgId && !edit && !iService.value.trim()) { const p0 = pkgOf(pkgId); iService.value = p0.service || p0.name; iService.dispatchEvent(new Event('change')); }
       $('#f-later', el).onclick = e => { const on = !e.currentTarget.classList.contains('on'); e.currentTarget.classList.toggle('on', on); if (on) iPrice.value = ''; };
       iPrice.addEventListener('input', () => { if (iPrice.value.trim()) $('#f-later', el).classList.remove('on'); });
 
@@ -1059,7 +1154,9 @@ function vApptForm(_, q) {
           service: svcName ? findByName(db.services, svcName).name : '',
           duration: dur, price, notes: $('#f-notes', el).value.trim(),
           priceLater: !(price > 0) && $('#f-later', el).classList.contains('on'),
+          packageId: pkgId || undefined,
         };
+        if (!data.packageId) delete data.packageId;
         // pagamento: "Já pagou" lança o que falta; "Ainda não" desfaz
         const setPay = x => {
           if (!paid) { if (isPaid(x) || x.paid) clearPayments(x); return; }
@@ -1067,14 +1164,20 @@ function vApptForm(_, q) {
           refreshPaid(x);
           if (!isPaid(x)) addPayment(x, leftOf(x) || x.price, method);
         };
-        if (edit) { Object.assign(edit, data); setPay(edit); }
+        if (edit) {
+          Object.assign(edit, data);
+          if (!pkgId) delete edit.packageId;
+          if (edit.status === 'marcado' && pre) edit.status = PRE;
+          else if (edit.status === PRE && !pre) edit.status = 'marcado';
+          setPay(edit);
+        }
         else {
           const dates = repDates();
           const seriesId = dates.length > 1 ? uid() : null;
           let clash = 0;
           dates.forEach((date, i) => {
             if (conflictsFor(date, time, dur, null).length) clash++;
-            const n = { id: uid(), status: 'marcado', createdAt: Date.now(), ...data, date, paid: false };
+            const n = { id: uid(), status: pre ? PRE : 'marcado', createdAt: Date.now(), ...data, date, paid: false };
             if (seriesId) Object.assign(n, { seriesId, seriesIndex: i, seriesEvery: every });
             if (i === 0) setPay(n); // pagamento só vale para o primeiro
             db.appts.push(n);
@@ -1110,10 +1213,19 @@ function vAppt(id) {
         <p style="font-size:1.15rem"><b style="text-transform:capitalize">${dayName(a.date)}</b>, ${fmtShort(a.date)} às <b>${a.time}</b>${a.duration ? ` até ${hhmm(apptEnd(a))}` : ''}</p>
         ${a.service ? `<p>💇 ${esc(a.service)}${a.duration ? ' · ' + fmtDur(a.duration) : ''}</p>` : ''}
         ${a.notes ? `<p class="muted">📝 ${esc(a.notes)}</p>` : ''}
-        ${a.seriesId ? `<p>🔁 Cliente fixa · ${seriesLabel(a.seriesEvery)}</p>` : ''}
+        ${a.seriesId && !a.packageId ? `<p>🔁 Cliente fixa · ${seriesLabel(a.seriesEvery)}</p>` : ''}
+        ${pkgPos(a) ? `<p>📦 ${esc(pkgPos(a).p.name)} · <b>${pkgPos(a).n}ª de ${pkgPos(a).total}</b> · <a href="#/cliente/${a.clientId}">ver pacote</a></p>` : ''}
         <div class="badges">${badgesFor(a)}</div>
         ${conflicts.length ? `<div class="conflict-box">⚠️ Junto com: ${conflicts.map(x => `<b>${esc(clientName(x.clientId))}</b> ${x.time}`).join(', ')}</div>` : ''}
       </div>
+
+      ${a.status === PRE ? `
+      <div class="stack prebox">
+        <p style="margin:0">💳 <b>Pré-reserva</b> — o horário está segurado esperando o sinal${a.price > 0 ? ` de <b>${brl(depositOf(a))}</b> (${depositPct()}% de ${brl(a.price)})` : ''}.</p>
+        <button class="btn ok" id="pre-pay">💰 Recebi o sinal — confirmar horário</button>
+        <button class="btn" id="pre-ok">✓ Confirmar sem sinal</button>
+        ${c?.phone ? `<a class="btn" target="_blank" rel="noopener" href="${waLink(c.phone, `Olá, ${c.name.split(' ')[0]}! Para confirmar o seu horário de ${dayName(a.date).toLowerCase()} (${fmtShort(a.date)}) às ${a.time}, falta o sinal${a.price > 0 ? ' de ' + brl(depositOf(a)) : ''}. 😊`)}">💬 Lembrar do sinal pelo WhatsApp</a>` : ''}
+      </div>` : ''}
 
       ${a.status === 'pendente' ? `
       <div class="stack">
@@ -1184,6 +1296,10 @@ function vAppt(id) {
         }, () => (visitLeft(a) === 0 ? `Tudo pago ✓ (${PAY[m]})` : `Recebido ${brl(v)} ✓ Falta ${brl(visitLeft(a))}`)));
       });
       $('#unpay', el) && ($('#unpay', el).onclick = () => confirm('Apagar os pagamentos lançados neste horário?') && upd(() => clearPayments(a), 'Pagamento desfeito'));
+      // pré-reserva: recebeu o sinal (ou confirma sem) → vira confirmado; o servidor manda a confirmação
+      $('#pre-pay', el) && ($('#pre-pay', el).onclick = () => paySheet({ total: depositOf(a) || 0 }, `Sinal — ${clientName(a.clientId)}${a.service ? ' · ' + a.service : ''}`, (v, m) =>
+        upd(() => { addPayment(a, v, m); a.status = 'marcado'; }, () => `Sinal recebido ✓ Horário confirmado${client(a.clientId)?.phone ? ' — ela recebe a confirmação' : ''}`)));
+      $('#pre-ok', el) && ($('#pre-ok', el).onclick = () => confirm('Confirmar o horário sem o sinal?') && upd(() => (a.status = 'marcado'), 'Horário confirmado ✓'));
       $('#accept', el) && ($('#accept', el).onclick = () => confirmSheet(a, v => { decide(a, true, v); render(); }));
       $('#decline', el) && ($('#decline', el).onclick = () => { if (decide(a, false)) render(); });
       $('#done', el) && ($('#done', el).onclick = () => upd(() => (a.status = 'feito'), 'Atendimento feito ✓'));
@@ -1286,7 +1402,8 @@ const SEARCH_SHORTCUTS = {
   semana: ['🗓️ Próximos 7 dias', () => db.appts.filter(a => a.date >= today() && a.date <= addDays(today(), 7) && a.status !== 'cancelado' && !isPast(a)).sort(byWhen)],
   pedidos: ['⏳ Pedidos', () => pendingAppts()],
   devendo: ['💸 Quem deve', null],
-  semvalor: ['✏️ Sem valor', () => db.appts.filter(a => isPast(a) && a.status !== 'cancelado' && a.status !== 'pendente' && !(a.price > 0) && !a.paid).sort(byWhen).reverse()],
+  prereservas: ['💳 Pré-reservas', () => preAppts()],
+  semvalor: ['✏️ Sem valor', () => db.appts.filter(a => isPast(a) && a.status !== 'cancelado' && a.status !== 'pendente' && a.status !== PRE && !a.packageId && !(a.price > 0) && !a.paid).sort(byWhen).reverse()],
   cancelados: ['❌ Cancelados', () => db.appts.filter(a => a.status === 'cancelado').sort(byWhen).reverse()],
 };
 const recentKey = () => `mf.buscas.${session.tenant.id}`;
@@ -1519,6 +1636,25 @@ function vClients(_, q) {
   };
 }
 
+// Cartão de um pacote: progresso e cada sessão (feita, marcada ou a marcar)
+function packageCard(p) {
+  const list = pkgAppts(p);
+  const done = pkgDone(p);
+  const rows = Array.from({ length: Math.max(p.total, list.length) }, (_, i) => {
+    const a = list[i];
+    if (!a) return `<li class="todo"><b>${i + 1}ª</b> <span>a marcar</span></li>`;
+    const ok = a.status === 'feito' || (a.status === 'marcado' && isPast(a));
+    return `<li class="${ok ? 'ok' : ''}"><a href="#/agendamento/${a.id}"><b>${i + 1}ª</b> ${ok ? '✓' : a.status === PRE ? '💳' : '📅'} ${fmtShort(a.date).slice(0, 5)} ${a.time}</a></li>`;
+  }).join('');
+  return `<div class="card pkg">
+    <div class="line"><div class="grow"><b>📦 ${esc(p.name)}</b><span>${done} de ${p.total} ${done === 1 ? 'feita' : 'feitas'}${pkgLeftToBook(p) ? ` · faltam marcar ${pkgLeftToBook(p)}` : ''}</span></div>
+      <a class="btn small" href="#/pacote?id=${p.id}">✏️</a></div>
+    <div class="bar"><i style="width:${Math.round(done / p.total * 100)}%"></i></div>
+    <ol class="sessions">${rows}</ol>
+    ${pkgLeftToBook(p) ? `<a class="btn main" href="#/agendar?c=${p.clientId}&pk=${p.id}">📅 Marcar a ${list.length + 1}ª sessão</a>` : ''}
+  </div>`;
+}
+
 function vClient(id, q) {
   const c = client(id);
   if (!c) return { title: 'Cliente', back: true, html: '<div class="empty">Cliente não encontrada.</div>' };
@@ -1526,6 +1662,9 @@ function vClient(id, q) {
   const hf = q.h || '';
   const appts = db.appts.filter(a => a.clientId === id);
   const next = appts.filter(a => !isPast(a) && a.status !== 'cancelado').sort(byWhen);
+  const pres = next.filter(a => a.status === PRE);
+  const pkgs = clientPackages(id);
+  const activePkgs = pkgs.filter(pkgActive), donePkgs = pkgs.filter(p => !pkgActive(p));
   const allHistory = [
     ...appts.filter(a => isPast(a) || a.status === 'cancelado').map(a => ({ k: 'a', when: a.date + a.time, it: a })),
     ...db.sales.filter(x => x.clientId === id).map(x => ({ k: 's', when: x.date + '99', it: x })),
@@ -1539,8 +1678,8 @@ function vClient(id, q) {
   const history = allHistory.filter(hFilters[hf]?.[1] || (() => true));
   const due = allHistory.filter(hFilters.deve[1]).reverse(); // mais antigo primeiro
   const url = h => `#/cliente/${id}${h ? '?h=' + h : ''}`;
+  const first = c.name.split(' ')[0];
 
-  // histórico separado por mês
   let month = '';
   const historyHtml = history.map(h => {
     const mk = h.it.date.slice(0, 7);
@@ -1551,6 +1690,7 @@ function vClient(id, q) {
 
   const stat = (label, value) => `<div class="stat"><span>${label}</span><b>${value}</b></div>`;
   const phoneDigits = (c.phone || '').replace(/\D/g, '');
+  const jump = [next.length && ['#c-next', `📅 Próximos (${next.length})`], pkgs.length && ['#c-pkgs', `📦 Pacotes (${activePkgs.length})`], allHistory.length && ['#hist', `🕘 Histórico (${allHistory.length})`]].filter(Boolean);
 
   return {
     title: c.name, tab: 'clientes', back: true,
@@ -1560,15 +1700,18 @@ function vClient(id, q) {
         <div class="grow">
           <p class="big">${esc(c.name)}</p>
           ${c.phone ? `<p>📞 ${esc(c.phone)}</p>` : '<p class="muted">Sem telefone · <a href="#/cliente-editar?id=' + c.id + '">colocar</a></p>'}
-          <div class="badges">${st.online ? '<span class="badge">🌐 Veio pelo link</span>' : ''}${appts.some(a => a.seriesId && !isPast(a) && a.status !== 'cancelado') ? '<span class="badge">🔁 Cliente fixa</span>' : ''}</div>
+          <div class="badges">${st.online ? '<span class="badge">🌐 Veio pelo link</span>' : ''}${appts.some(a => a.seriesId && !a.packageId && !isPast(a) && a.status !== 'cancelado') ? '<span class="badge">🔁 Cliente fixa</span>' : ''}${activePkgs.length ? '<span class="badge">📦 Pacote</span>' : ''}</div>
         </div>
       </div>
       <div class="actions3">
         ${c.phone ? `<a class="btn" target="_blank" rel="noopener" href="${waLink(c.phone)}">💬<small>WhatsApp</small></a>
         <a class="btn" href="tel:${phoneDigits}">📞<small>Ligar</small></a>` : ''}
-        <a class="btn" href="#/cliente-editar?id=${c.id}">✏️<small>Editar</small></a>
+        <a class="btn" href="#/agendar?c=${c.id}">📅<small>Agendar</small></a>
+        <a class="btn" href="#/venda?c=${c.id}">🛍️<small>Vender</small></a>
       </div>
-      ${c.notes ? `<div class="note">📝 <b>Observação:</b> ${esc(c.notes)}</div>` : ''}
+
+      <div class="note ${c.notes ? '' : 'empty-note'}" id="note">📝 ${c.notes ? `<b>Observação:</b> ${esc(c.notes)}` : '<span class="muted">Sem observação (alergias, preferências…)</span>'}
+        <button type="button" class="btn small" id="edit-note">${c.notes ? '✏️' : '+ Escrever'}</button></div>
 
       <div class="stats">
         ${stat('Visitas', st.visits)}
@@ -1581,15 +1724,23 @@ function vClient(id, q) {
         <a class="total fcard ${st.owes > 0 ? 'warn' : ''} ${hf === 'deve' ? 'on' : ''}" href="${url(hf === 'deve' ? '' : 'deve')}" data-f>
           <span>Falta pagar</span><b>${brl(st.owes)}</b><small>${st.owes > 0 ? (hf === 'deve' ? '▲ mostrando abaixo' : 'Toque para ver') : 'Tudo pago'}</small></a>
       </div>
-      ${st.owes > 0 ? `<button class="btn ok" id="pay-all" style="margin-bottom:.7rem">💰 Receber tudo que ela deve (${brl(st.owes)})</button>` : ''}
+      ${st.owes > 0 ? `<div class="row" style="margin-bottom:.7rem">
+        <button class="btn ok" id="pay-all">💰 Receber ${brl(st.owes)}</button>
+        ${c.phone ? `<a class="btn" target="_blank" rel="noopener" href="${waLink(c.phone, `Olá, ${first}! Tudo bem? 😊 Passando para lembrar que ficou um valor em aberto de ${brl(st.owes)} aqui no ${session.tenant.name}. Pode ser por Pix, dinheiro ou cartão. Obrigada! 💖`)}">💸 Cobrar</a>` : ''}
+      </div>` : ''}
 
-      <div class="row">
-        <a class="btn main" href="#/agendar?c=${c.id}">📅 Agendar</a>
-        <a class="btn main" href="#/venda?c=${c.id}">🛍️ Vender produto</a>
-      </div>
+      ${jump.length > 1 ? `<div class="chips mini jump">${jump.map(([h, n]) => `<a class="chip" href="${h}" data-jump>${n}</a>`).join('')}</div>` : ''}
 
-      <h2>Próximos horários</h2>
-      <div class="list">${next.length ? next.map(a => apptCard(a, { showDate: true, showClient: false })).join('') : '<div class="muted">Nenhum horário marcado.</div>'}</div>
+      ${pres.length ? `<h2>💳 Pré-reservas esperando o sinal</h2>
+        <div class="list">${pres.map(a => apptCard(a, { showDate: true, showClient: false })).join('')}</div>` : ''}
+
+      <h2 id="c-next">Próximos horários</h2>
+      <div class="list">${next.filter(a => a.status !== PRE).length ? next.filter(a => a.status !== PRE).map(a => apptCard(a, { showDate: true, showClient: false })).join('') : '<div class="muted">Nenhum horário marcado.</div>'}</div>
+
+      <h2 id="c-pkgs">📦 Pacotes</h2>
+      <div class="list">${activePkgs.map(packageCard).join('') || '<p class="muted" style="margin:0">Faz cronograma ou vende sessões em pacote? Crie um pacote e cada horário mostra "2ª de 4".</p>'}</div>
+      <a class="btn" href="#/pacote?c=${c.id}" style="margin-top:.6rem">+ Novo pacote</a>
+      ${donePkgs.length ? `<details class="cancelled"><summary>Pacotes concluídos (${donePkgs.length})</summary><div class="list">${donePkgs.map(packageCard).join('')}</div></details>` : ''}
 
       <h2 id="hist">Histórico</h2>
       ${allHistory.length ? `<div class="chips filters">${Object.entries(hFilters).map(([k, [n, fn]]) =>
@@ -1598,13 +1749,19 @@ function vClient(id, q) {
     bind(el) {
       bindQuickPay(el);
       el.addEventListener('click', e => {
+        const j = e.target.closest('a[data-jump]');
+        if (j) { e.preventDefault(); $(j.getAttribute('href'))?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
         const a = e.target.closest('a[data-f]');
         if (!a) return;
         e.preventDefault();
         replaceTo(a.getAttribute('href'));
         setTimeout(() => $('#hist')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
       });
-      // Um pagamento só para tudo que ela deve (quita do mais antigo para o mais novo)
+      $('#edit-note', el).onclick = () => {
+        const v = prompt('Observação da cliente (alergias, preferências…):', c.notes || '');
+        if (v === null) return;
+        c.notes = v.trim(); save(); toast('Observação salva ✓'); render();
+      };
       $('#pay-all', el) && ($('#pay-all', el).onclick = () => paySheet({ total: st.owes }, `${c.name} — tudo que está devendo`, (v, m) => {
         let rest = v;
         for (const { it } of due) {
@@ -1617,6 +1774,87 @@ function vClient(id, q) {
         toast(left > 0 ? `Recebido ${brl(v)} ✓ Falta ${brl(left)}` : `Tudo pago ✓ (${PAY[m]})`);
         render();
       }));
+    },
+  };
+}
+
+// Novo pacote / editar pacote
+function vPackageForm(_, q) {
+  const p = q.id ? pkgOf(q.id) : null;
+  const cid = p?.clientId || q.c;
+  const c = client(cid);
+  if (!c) return { title: 'Pacote', back: true, html: '<div class="empty">Cliente não encontrada.</div>' };
+  let total = p?.total || 4;
+  let paid = true, method = '';
+  const counts = [2, 3, 4, 5, 6, 8, 10, 12];
+  return {
+    title: p ? 'Editar pacote' : 'Novo pacote', tab: 'clientes', back: true,
+    html: `
+      <form class="form" id="f" autocomplete="off" novalidate>
+        <div id="err"></div>
+        <p class="muted" style="margin-top:0">Cliente: <b>${esc(c.name)}</b></p>
+        <div class="field"><label for="pn">Nome do pacote</label>
+          ${!p && topServices().length ? `<div class="chips mini" id="svc-chips" style="margin-bottom:.5rem">${topServices().map(sv => `<button type="button" class="chip" data-svc="${esc(sv.name)}">${esc(sv.name)}</button>`).join('')}</div>` : ''}
+          <input type="text" id="pn" value="${esc(p?.name || '')}" placeholder="Ex.: Cronograma capilar" autocapitalize="sentences"></div>
+        <div class="field"><span class="lbl">Quantas sessões?</span>
+          <div class="chips" id="counts">${counts.map(n => `<button type="button" class="chip ${n === total ? 'on' : ''}" data-n="${n}">${n}</button>`).join('')}
+            <span class="chip ${counts.includes(total) ? '' : 'on'}">Outro: <input type="number" id="pt" min="1" max="60" style="width:4rem" value="${counts.includes(total) ? '' : total}"></span></div>
+          ${p ? `<small class="hint">Já tem ${pkgAppts(p).length} marcadas.</small>` : ''}</div>
+        ${p ? '' : `
+        <div class="field"><label for="pv">Valor do pacote <span class="opt">(se quiser — entra como venda)</span></label>
+          <div class="money"><input type="text" id="pv" inputmode="decimal" placeholder="0,00"></div></div>
+        <div class="field" id="pay-f" hidden><span class="lbl">Já pagou o pacote?</span>
+          ${toggle2('pp', true, '✓ Já pagou', 'Vai pagar depois')}
+          <div class="paygrid" id="pm" style="margin-top:.5rem">${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}">${n}</button>`).join('')}</div></div>`}
+        <div class="field"><label for="pnote">Observação <span class="opt">(se quiser)</span></label>
+          <textarea id="pnote" placeholder="Ex.: 1 hidratação, 2 nutrições e 1 reconstrução">${esc(p?.notes || '')}</textarea></div>
+        <button class="btn main" type="submit">${p ? '✓ Salvar' : '✓ Criar pacote e marcar a 1ª sessão'}</button>
+        ${p ? '<button class="btn danger" type="button" id="del" style="margin-top:2rem">🗑️ Apagar pacote</button>' : ''}
+      </form>`,
+    bind(el) {
+      $('#counts', el).addEventListener('click', e => {
+        const b = e.target.closest('[data-n]');
+        if (!b) return;
+        total = +b.dataset.n; $('#pt', el).value = '';
+        el.querySelectorAll('#counts .chip').forEach(x => x.classList.toggle('on', x === b));
+      });
+      $('#pt', el).addEventListener('input', e => {
+        const n = parseInt(e.target.value, 10);
+        if (n > 0) { total = n; el.querySelectorAll('#counts .chip').forEach(x => x.classList.toggle('on', !x.dataset.n)); }
+      });
+      $('#svc-chips', el)?.addEventListener('click', e => { const b = e.target.closest('[data-svc]'); if (b) $('#pn', el).value = b.dataset.svc; });
+      $('#pv', el)?.addEventListener('input', () => { $('#pay-f', el).hidden = !(parseMoney($('#pv', el).value) > 0); });
+      $('#pp', el) && bindToggle2($('#pp', el), v => { paid = v; $('#pm', el).hidden = !v; });
+      $('#pm', el)?.addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (!b) return; method = b.dataset.m; el.querySelectorAll('#pm button').forEach(x => x.classList.toggle('on', x === b)); });
+      $('#f', el).addEventListener('submit', e => {
+        e.preventDefault();
+        const err = m => { $('#err', el).innerHTML = `<div class="error">${m}</div>`; window.scrollTo(0, 0); };
+        const name = niceName($('#pn', el).value);
+        if (!name) return err('Escreva o nome do pacote. Exemplo: Cronograma capilar');
+        if (!(total > 0)) return err('Escolha quantas sessões.');
+        if (p && total < pkgAppts(p).length) return err(`Já tem ${pkgAppts(p).length} sessões marcadas: o total não pode ser menor.`);
+        const notes = $('#pnote', el).value.trim();
+        if (p) { Object.assign(p, { name, total, notes }); save(); toast('Pacote salvo ✓'); back(); return; }
+        const price = $('#pv', el) ? parseMoney($('#pv', el).value) : null;
+        if (price > 0 && paid && !method) return err('Toque em como pagou o pacote (Pix, Dinheiro ou Cartão).');
+        const svc = findByName(db.services, name);
+        const pkg = { id: uid(), clientId: c.id, name, total, notes, service: svc?.name || '', createdAt: Date.now() };
+        db.packages.push(pkg);
+        if (price > 0) {
+          const sale = { id: uid(), createdAt: Date.now(), clientId: c.id, product: `📦 ${name} (${total} sessões)`, qty: 1, unitPrice: price, total: price, date: today(), paid: false, payments: [], packageId: pkg.id };
+          if (paid) addPayment(sale, price, method);
+          db.sales.push(sale);
+        }
+        save();
+        toast('Pacote criado ✓ Agora marque a 1ª sessão');
+        replaceTo(`#/agendar?c=${c.id}&pk=${pkg.id}`);
+      });
+      $('#del', el) && ($('#del', el).onclick = () => {
+        if (!confirm(`Apagar o pacote "${p.name}"? Os horários continuam na agenda, só deixam de ser do pacote.`)) return;
+        for (const a of db.appts) if (a.packageId === p.id) delete a.packageId;
+        db.packages = db.packages.filter(x => x.id !== p.id);
+        save(); toast('Pacote apagado'); back();
+      });
     },
   };
 }
@@ -2081,7 +2319,7 @@ function vFin(_, q) {
   const upcomingNoPrice = upcoming.filter(a => !(a.price > 0)).length;
 
   // SEM VALOR: atendimentos que já aconteceram sem valor lançado
-  const noPrice = monthAppts.filter(a => isPast(a) && !(a.price > 0) && !a.paid).sort(byWhen);
+  const noPrice = monthAppts.filter(a => isPast(a) && !(a.price > 0) && !a.paid && !a.packageId && a.status !== PRE).sort(byWhen);
 
   const card = (key, cls, label, value, hint, full = false) => `
     <a class="total fcard ${cls} ${full ? 'full' : ''} ${f === key ? 'on' : ''}" href="${url({ f: f === key ? '' : key, pm: '' })}" data-f>
@@ -2659,7 +2897,7 @@ function vWhats() {
       }
       const w = S.whatsapp;
       const connected = st.state === 'open';
-      const kinds = { confirm: 'Confirmação', reminder: 'Lembrete', owner: 'Aviso para você', decline: 'Pedido recusado', test: 'Teste' };
+      const kinds = { confirm: 'Confirmação', reminder: 'Lembrete', owner: 'Aviso para você', decline: 'Pedido recusado', prereserve: 'Pré-reserva', rescheduleNo: 'Remarcação recusada', access: 'Link "meus horários"', test: 'Teste' };
       const status = { sent: '<span class="badge ok">Enviada</span>', error: '<span class="badge bad">Falhou</span>', skipped: '<span class="badge warn">Sem telefone</span>', sending: '<span class="badge">Enviando</span>' };
       box.innerHTML = `
         <div class="card">
@@ -2679,6 +2917,9 @@ function vWhats() {
           <h2>O que mandar</h2>
           <div class="field"><span class="lbl">Confirmação quando eu aceito um pedido do link</span>${toggle2('confirmOnline', w.confirmOnline, '✓ Mandar', 'Não')}</div>
           <div class="field"><span class="lbl">Aviso para a cliente quando eu recuso um pedido</span>${toggle2('declineMessage', w.declineMessage, '✓ Mandar', 'Não')}</div>
+          <div class="field"><span class="lbl">Mensagem de pré-reserva (pede o sinal)</span>${toggle2('prereserveMessage', w.prereserveMessage, '✓ Mandar', 'Não')}</div>
+          <div class="field"><label for="dep">Sinal da pré-reserva</label>
+            <select id="dep">${opts([20, 30, 40, 50, 60, 100], w.depositPercent ?? 50, v => `${v}% do valor`)}</select></div>
           <div class="field"><span class="lbl">Confirmação quando eu agendo no app</span>${toggle2('confirmManual', w.confirmManual, '✓ Mandar', 'Não')}</div>
           <div class="field"><label for="rem">Lembrete antes do horário</label>
             <select id="rem">${(() => {
@@ -2699,9 +2940,10 @@ function vWhats() {
             <input type="tel" id="own" placeholder="(11) 99999-9999" value="${esc(w.ownerPhone || '')}"></div>
 
           <details><summary class="btn">✏️ Mudar o texto das mensagens</summary>
-            <p class="muted">Pode usar: {nome}, {dia}, {hora}, {servico}, {salao}, {telefone}, {link}. Linha com campo vazio (ex.: sem serviço) some sozinha.</p>
+            <p class="muted">Pode usar: {nome} (só o primeiro nome), {dia}, {hora}, {servico}, {valor}, {sinal}, {pacote}, {salao}, {telefone}, {meus_horarios}. Linha com campo vazio (ex.: sem serviço) some sozinha.</p>
             <div class="field"><label for="t-confirm">Confirmação</label><textarea id="t-confirm" rows="6">${esc(w.templates.confirm)}</textarea></div>
             <div class="field"><label for="t-reminder">Lembrete</label><textarea id="t-reminder" rows="6">${esc(w.templates.reminder)}</textarea></div>
+            <div class="field"><label for="t-prereserve">Pré-reserva</label><textarea id="t-prereserve" rows="8">${esc(w.templates.prereserve)}</textarea></div>
             <div class="field"><label for="t-decline">Pedido recusado</label><textarea id="t-decline" rows="4">${esc(w.templates.decline)}</textarea></div>
             <div class="field"><label for="t-owner">Aviso para você</label><textarea id="t-owner" rows="5">${esc(w.templates.owner)}</textarea></div>
           </details>
@@ -2715,7 +2957,7 @@ function vWhats() {
           <span>${new Date(m.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${m.error ? ' · ' + esc(m.error) : ''}</span></div>
           ${status[m.status] || ''}</div></div>`).join('') : '<div class="muted">Nenhuma mensagem ainda.</div>'}</div>`;
 
-      const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner, declineMessage: w.declineMessage };
+      const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner, declineMessage: w.declineMessage, prereserveMessage: w.prereserveMessage };
       for (const k of Object.keys(flags)) bindToggle2($('#' + k, box), v => (flags[k] = v));
 
       const err = e => { $('#err', box).innerHTML = `<div class="error">${esc(e.offline ? 'Precisa de internet.' : e.message)}</div>`; };
@@ -2730,10 +2972,11 @@ function vWhats() {
       $('#rem', box).onchange = e => { $('#rem-other', box).hidden = e.target.value !== 'outro'; if (e.target.value === 'outro') $('#rem-n', box).focus(); };
       $('#save', box).onclick = async () => {
         try {
-          await api('PUT', '/api/settings', { whatsapp: {
+          cacheSalon(await api('PUT', '/api/settings', { whatsapp: {
             ...flags, reminderMinutes: reminderValue(), ownerPhone: $('#own', box).value.trim(),
-            templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value, decline: $('#t-decline', box).value },
-          } });
+            depositPercent: +$('#dep', box).value,
+            templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value, decline: $('#t-decline', box).value, prereserve: $('#t-prereserve', box).value },
+          } }));
           toast('Salvo ✓');
           $('#err', box).innerHTML = '';
         } catch (e) { err(e); }
@@ -2937,7 +3180,7 @@ function showLogin(mode = 'entrar') {
 // Horário de atendimento (dias, almoço) guardado no celular: a agenda usa para mostrar os horários livres
 const salonKey = () => `mf.salon.${session.tenant.id}`;
 const salonHours = () => readLS(salonKey());
-function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug }); } catch { /* ok */ } }
+function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50 }); } catch { /* ok */ } }
 function refreshSalon() { api('GET', '/api/settings').then(S => { cacheSalon(S); if (!$('#app form') && parseHash().parts[0] === 'agenda') render(); }).catch(() => {}); }
 
 function refreshPush() {

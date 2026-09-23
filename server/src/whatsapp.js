@@ -61,6 +61,19 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
   };
   const getRecord = (t, coll, id) => { const r = q.record.get(t, coll, id); return r ? JSON.parse(r.data) : null; };
 
+  // "Cronograma capilar — 2ª de 4": posição do horário no pacote, pela ordem das datas
+  const pkgAppts = db.prepare(`SELECT data FROM records WHERE tenant_id = ? AND coll = 'appts' AND deleted = 0
+                               AND json_extract(data, '$.packageId') = ?`);
+  function packageLabel(tenantId, appt) {
+    if (!appt.packageId) return '';
+    const pkg = getRecord(tenantId, 'packages', appt.packageId);
+    if (!pkg) return '';
+    const list = pkgAppts.all(tenantId, appt.packageId).map(r => JSON.parse(r.data))
+      .filter(a => a.status !== 'cancelado').sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+    const n = list.findIndex(a => a.id === appt.id) + 1;
+    return n ? `${pkg.name} — ${n}ª de ${pkg.total}` : pkg.name;
+  }
+
   function varsFor(tenant, appt, client, kind) {
     // link pessoal "ver ou remarcar" (só nas mensagens para a cliente)
     const meus = client && kind !== 'owner' && publicUrl ? portalUrl(publicUrl, tenant.slug, newPortalToken(db, tenant.id, client.id)) : '';
@@ -74,6 +87,8 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
       hora: appt.time,
       servico: appt.service || '',
       valor: appt.price > 0 ? brl(appt.price) : appt.priceLater ? 'avaliado na hora do atendimento' : '',
+      sinal: appt.price > 0 ? brl(Math.round(appt.price * (readSettings(tenant.settings).whatsapp.depositPercent / 100) * 100) / 100) : '',
+      pacote: packageLabel(tenant.id, appt),
       link: publicUrl ? `${publicUrl.replace(/\/+$/, '')}/${tenant.slug}` : '',
     };
   }
@@ -162,7 +177,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
     return setInterval(tick, everyMs);
   }
 
-  return { sendForAppt, sendText, fire, runReminders, startScheduler };
+  return { sendForAppt, sendText, fire, runReminders, startScheduler, packageLabel };
 }
 
 /* ------------------------- rotas (profissional logada) ------------------------- */

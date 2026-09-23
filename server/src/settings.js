@@ -23,12 +23,15 @@ export const DEFAULTS = {
     confirmOnline: true,    // confirmar para a cliente quando o pedido do link é aceito
     confirmManual: true,    // confirmar quando a profissional agenda no app (e a cliente tem telefone)
     declineMessage: true,   // avisar a cliente quando o pedido é recusado
+    prereserveMessage: true, // avisar a cliente quando a profissional faz uma pré-reserva
+    depositPercent: 50,     // sinal da pré-reserva (% do valor)
     reminderMinutes: 1440,  // lembrete X minutos antes (0 = não manda; até 3 dias)
     notifyOwner: true,      // avisar a profissional de agendamento pelo link
     ownerPhone: '',         // número que recebe o aviso (vazio = o próprio número conectado)
     templates: {
-      confirm: 'Olá, {nome}! ✅\nSeu horário no *{salao}* está marcado:\n📅 {dia} às {hora}\n💇 {servico}\n💰 Valor: {valor}\n\n📋 Ver ou remarcar: {meus_horarios}',
-      reminder: 'Olá, {nome}! Passando para lembrar do seu horário no *{salao}*:\n📅 {dia} às {hora}\n💇 {servico}\n\nTe esperamos! 💖\n📋 Precisa remarcar? {meus_horarios}',
+      confirm: 'Olá, {nome}! ✅\nSeu horário no *{salao}* está marcado:\n📅 {dia} às {hora}\n💇 {servico}\n📦 {pacote}\n💰 Valor: {valor}\n\n📋 Ver ou remarcar: {meus_horarios}',
+      reminder: 'Olá, {nome}! Passando para lembrar do seu horário no *{salao}*:\n📅 {dia} às {hora}\n💇 {servico}\n📦 {pacote}\n\nTe esperamos! 💖\n📋 Precisa remarcar? {meus_horarios}',
+      prereserve: 'Olá, {nome}! ✅\nSeu horário no *{salao}* está pré-reservado:\n📅 {dia} às {hora}\n💇 {servico}\n📦 {pacote}\n💰 Valor: {valor}\n* A confirmação do horário será feita mediante ao pagamento do valor de 50% do valor do serviço.\n\nSe precisar remarcar, é só responder esta mensagem.',
       rescheduleNo: 'Olá, {nome}. Não conseguimos mudar o seu horário para {dia} às {hora}. 😕\nO seu horário de antes continua marcado.\n📋 Ver seus horários: {meus_horarios}',
       owner: '📅 Novo pedido de agendamento pelo link!\n👩 {nome_completo} — {telefone}\n📅 {dia} às {hora}\n💇 {servico}\n\nAbra o app para confirmar.',
       decline: 'Olá, {nome}. Infelizmente não conseguimos atender {dia} às {hora} no *{salao}*. 😕\nEscolha outro horário aqui: {link}',
@@ -101,12 +104,13 @@ export function updateSettings(current, input) {
 
   const w = input.whatsapp;
   if (isObj(w)) {
-    for (const k of ['confirmOnline', 'confirmManual', 'notifyOwner', 'declineMessage']) if (w[k] !== undefined) s.whatsapp[k] = bool(w[k]);
+    if (w.depositPercent !== undefined) s.whatsapp.depositPercent = int(w.depositPercent, 0, 100, 'sinal');
+    for (const k of ['confirmOnline', 'confirmManual', 'notifyOwner', 'declineMessage', 'prereserveMessage']) if (w[k] !== undefined) s.whatsapp[k] = bool(w[k]);
     if (w.reminderMinutes !== undefined) s.whatsapp.reminderMinutes = int(w.reminderMinutes, 0, 3 * 24 * 60, 'lembrete');
     else if (w.reminderHours !== undefined) s.whatsapp.reminderMinutes = int(w.reminderHours, 0, 72, 'lembrete') * 60;
     if (w.ownerPhone !== undefined) s.whatsapp.ownerPhone = text(w.ownerPhone, 30);
     if (isObj(w.templates)) {
-      for (const k of ['confirm', 'reminder', 'owner', 'decline', 'rescheduleNo']) {
+      for (const k of ['confirm', 'reminder', 'owner', 'decline', 'rescheduleNo', 'prereserve']) {
         if (w.templates[k] !== undefined) s.whatsapp.templates[k] = text(w.templates[k], 1000).trim() || DEFAULTS.whatsapp.templates[k];
       }
     }

@@ -230,9 +230,14 @@ export function buildApp({
     for (const c of changes) {
       if (c.coll !== 'appts' || c.deleted) continue;
       const from = before.get(c.id), to = c.data.status || 'marcado';
-      if (from) { afterDecision(tenantId, c.id, from, to); continue; }
-      // Horário novo marcado no app: manda confirmação, se a opção estiver ligada
       s ||= getSettings(tenantId);
+      // pré-reserva que virou confirmada (a cliente pagou o sinal): manda a confirmação
+      if (from === 'prereserva' && to === 'marcado') { if (s.whatsapp.confirmManual) messenger.fire(tenantId, c.id, 'confirm'); continue; }
+      if (from) { afterDecision(tenantId, c.id, from, to); continue; }
+      const future = c.data.date && c.data.time && zonedEpoch(c.data.date, c.data.time, s.timezone) > Date.now();
+      // pré-reserva nova: mensagem de pré-reserva (pede o sinal)
+      if (to === 'prereserva') { if (s.whatsapp.prereserveMessage && future && !(c.data.seriesIndex > 0)) messenger.fire(tenantId, c.id, 'prereserve'); continue; }
+      // Horário novo marcado no app: manda confirmação, se a opção estiver ligada
       // cliente fixa: só a 1ª data da repetição ganha confirmação (as outras recebem o lembrete)
       if (c.data.seriesIndex > 0) continue;
       if (s.whatsapp.confirmManual && to === 'marcado' && c.data.date && c.data.time &&

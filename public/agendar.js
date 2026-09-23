@@ -311,8 +311,9 @@ function portalGo(view, push = true) {
 }
 const backBtn = (label = '‹ Voltar') => `<button type="button" class="btn" id="pback" style="margin-top:1rem">${label}</button>`;
 const bindBack = () => $('#pback')?.addEventListener('click', () => history.back());
-const statusBadge = a => a.status === 'pendente'
-  ? '<span class="badge warn">⏳ Esperando o salão confirmar</span>' : '<span class="badge ok">✅ Confirmado</span>';
+const statusBadge = a => a.status === 'pendente' ? '<span class="badge warn">⏳ Esperando o salão confirmar</span>'
+  : a.status === 'prereserva' ? '<span class="badge warn">💳 Pré-reservado — aguardando o sinal</span>'
+  : '<span class="badge ok">✅ Confirmado</span>';
 const fmtDay = d => cap(toDate(d).toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', ''));
 
 async function showMeus() {
@@ -327,6 +328,7 @@ async function showMeus() {
   const card = a => `<div class="step meu">
     <p class="big-when"><b>${esc(dayName(a.date))}</b> às <b>${esc(a.time)}</b></p>
     ${a.service ? `<p>💇 ${esc(a.service)}</p>` : ''}
+    ${a.pacote ? `<p>📦 <b>${esc(a.pacote)}</b></p>` : ''}
     <div class="badges">${statusBadge(a)}</div>
     ${a.moving ? '<p class="moving">🔁 Você pediu para mudar este horário. Esperando o salão confirmar.</p>' : ''}
     ${a.canChange ? `<div class="row" style="margin-top:.8rem">
@@ -339,6 +341,10 @@ async function showMeus() {
     ${pv.msg ? `<div class="summary">${pv.msg}</div>` : ''}
     <h2>Seus próximos horários</h2>
     ${d.upcoming.length ? d.upcoming.map(card).join('') : '<p class="muted">Você não tem horário marcado.</p>'}
+    ${d.packages?.length ? `<h2>📦 Seus pacotes</h2>${d.packages.map(p => `<div class="step meu">
+      <p><b>${esc(p.name)}</b></p>
+      <div class="pbar"><i style="width:${Math.round(p.done / p.total * 100)}%"></i></div>
+      <p class="muted" style="font-size:.92rem">${p.done} de ${p.total} ${p.done === 1 ? 'feita' : 'feitas'}${p.scheduled > p.done ? ` · ${p.scheduled - p.done} marcada${p.scheduled - p.done > 1 ? 's' : ''}` : ''}${p.total > p.scheduled ? ` · ${p.total - p.scheduled} para marcar` : ''}</p></div>`).join('')}` : ''}
     ${d.enabled ? '<button type="button" class="btn main" id="new">📅 Pedir um horário novo</button>' : ''}
     ${d.past.length ? `<h2>Últimas vezes</h2><div class="list">${d.past.map(a => `<div class="card line"><div class="grow"><b>${esc(fmtDay(a.date))}</b><span>${esc(a.service || '')}</span></div></div>`).join('')}</div>` : ''}
     <button type="button" class="btn" id="notme" style="margin-top:1.5rem">Não é você? Sair</button>`;
