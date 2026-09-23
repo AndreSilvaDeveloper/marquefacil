@@ -719,6 +719,38 @@ function busyList(date, exceptId) {
     `<b>${a.time}${a.duration ? '–' + hhmm(apptEnd(a)) : ''}</b> ${esc(clientName(a.clientId))}`).join(' · ')}</small>`;
 }
 
+// Horários livres de um dia para um serviço de `duration` minutos (usa o horário de atendimento guardado)
+function freeStarts(date, duration, exceptId, step = 30) {
+  const hours = salonHours();
+  const open = hours?.days?.[toDate(date).getDay()];
+  if (!open || date < today()) return [];
+  const busy = db.appts.filter(a => a.date === date && a.status !== 'cancelado' && a.id !== exceptId).map(a => [mins(a.time), apptEnd(a)]);
+  if (hours.lunch) busy.push([mins(hours.lunch[0]), mins(hours.lunch[1])]);
+  const earliest = date === today() ? Math.ceil((nowMins() + 1) / step) * step : 0;
+  const out = [];
+  for (let t = mins(open[0]); t + duration <= mins(open[1]); t += step) {
+    if (t < earliest) continue;
+    if (!busy.some(([a, b]) => t < b && a < t + duration)) out.push(hhmm(t));
+  }
+  return out;
+}
+// Clientes usadas por último (para um toque)
+function recentClients(n = 6) {
+  const seen = new Set(), out = [];
+  for (const a of [...db.appts].sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0))) {
+    if (seen.has(a.clientId) || !client(a.clientId)) continue;
+    seen.add(a.clientId); out.push(client(a.clientId));
+    if (out.length === n) break;
+  }
+  return out;
+}
+// Serviços mais usados
+function topServices(n = 6) {
+  const count = {};
+  for (const a of db.appts) if (a.service) count[norm(a.service)] = (count[norm(a.service)] || 0) + 1;
+  return [...db.services].sort((a, b) => (count[norm(b.name)] || 0) - (count[norm(a.name)] || 0) || byName(a, b)).slice(0, n);
+}
+
 // Datas de uma cliente fixa: every = 7, 14 (dias) ou 'm' (todo mês), por `months` meses
 function seriesDates(start, every, months) {
   if (!start) return [];
@@ -757,6 +789,9 @@ function vApptForm(_, q) {
           <label for="f-client">Nome da cliente <em>*</em></label>
           <div class="ac"><input type="text" id="f-client" value="${esc(cName)}" placeholder="Digite o nome" autocapitalize="words"><div class="sug" hidden></div></div>
           <small id="h-client" class="hint"></small>
+          ${!cName && recentClients().length ? `<div class="chips mini" id="recent" style="margin-top:.5rem"><span class="muted">Recentes:</span>
+            ${recentClients().map(c => `<button type="button" class="chip" data-cid="${c.id}">${esc(c.name.split(' ').slice(0, 2).join(' '))}</button>`).join('')}</div>` : ''}
+          <div id="c-info"></div>
         </div>
 
         <div class="field">
@@ -765,20 +800,40 @@ function vApptForm(_, q) {
         </div>
 
         <div class="field">
-          <label for="f-date">Dia <em>*</em></label>
-          <input type="date" id="f-date" value="${a.date}">
-          <div class="chips" style="margin-top:.5rem">
-            <button type="button" class="chip" data-day="${today()}">Hoje</button>
-            <button type="button" class="chip" data-day="${addDays(today(), 1)}">Amanhã</button>
+          <span class="lbl">Dia <em>*</em></span>
+          <div class="daychips" id="days">
+            ${Array.from({ length: 7 }, (_, i) => addDays(today(), i)).map((d, i) => `<button type="button" data-day="${d}">
+              <small>${i === 0 ? 'Hoje' : i === 1 ? 'Amanhã' : fmtDate(d, { weekday: 'short' }).replace('.', '')}</small><b>${toDate(d).getDate()}</b></button>`).join('')}
+            <label class="other-day"><small>Outro</small><b>📆</b><input type="date" id="f-date" value="${a.date}"></label>
           </div>
+          <small class="hint" id="date-label"></small>
         </div>
 
         <div class="field">
           <label for="f-time">Horário <em>*</em></label>
-          <input type="text" id="f-time" inputmode="numeric" maxlength="5" value="${a.time}" placeholder="Ex.: 12:10" style="font-size:1.3rem;font-weight:700;max-width:10rem">
+          <div id="free"></div>
+          <input type="text" id="f-time" inputmode="numeric" maxlength="5" value="${a.time}" placeholder="Ou digite: 12:10" style="font-size:1.3rem;font-weight:700;max-width:12rem">
           <div id="busy">${busyList(a.date, a.id)}</div>
           <div id="conflict"></div>
         </div>
+
+        <div class="field">
+          <label for="f-service">Serviço <span class="opt">(se quiser)</span></label>
+          ${topServices().length ? `<div class="chips mini" id="svc-chips" style="margin-bottom:.5rem">${topServices().map(sv => `<button type="button" class="chip" data-svc="${esc(sv.name)}">${esc(sv.name)}</button>`).join('')}</div>` : ''}
+          <div class="ac"><input type="text" id="f-service" value="${esc(a.service || '')}" placeholder="Ou escreva: Escova, Unha, Corte…" autocapitalize="sentences"><div class="sug" hidden></div></div>
+          <small id="h-service" class="hint"></small>
+        </div>
+
+        <div class="field">
+          <span class="lbl">Quanto tempo demora? <span class="opt">(se quiser)</span></span>
+          <div class="chips" id="durs">
+            ${durs.map(m => `<button type="button" class="chip" data-m="${m}">${fmtDur(m)}</button>`).join('')}
+            <span class="chip" id="dur-other">Outro: <input type="number" id="f-dur" inputmode="numeric" min="5" step="5" placeholder="min"> min</span>
+          </div>
+        </div>
+
+        <details class="more" ${edit && (a.price > 0 || a.priceLater || a.notes || paid) ? 'open' : ''}>
+          <summary>➕ Mais detalhes <small>${edit ? 'valor, pagamento, observação' : 'repetir, valor, pagamento, observação'}</small></summary>
 
         ${edit ? '' : `<div class="field">
           <span class="lbl">Cliente fixa? Repetir este horário <span class="opt">(se quiser)</span></span>
@@ -794,20 +849,6 @@ function vApptForm(_, q) {
             <small class="hint" id="rep-hint"></small>
           </div>
         </div>`}
-
-        <div class="field">
-          <label for="f-service">Serviço <span class="opt">(se quiser)</span></label>
-          <div class="ac"><input type="text" id="f-service" value="${esc(a.service || '')}" placeholder="Ex.: Escova, Unha, Corte…" autocapitalize="sentences"><div class="sug" hidden></div></div>
-          <small id="h-service" class="hint"></small>
-        </div>
-
-        <div class="field">
-          <span class="lbl">Quanto tempo demora? <span class="opt">(se quiser)</span></span>
-          <div class="chips" id="durs">
-            ${durs.map(m => `<button type="button" class="chip" data-m="${m}">${fmtDur(m)}</button>`).join('')}
-            <span class="chip" id="dur-other">Outro: <input type="number" id="f-dur" inputmode="numeric" min="5" step="5" placeholder="min"> min</span>
-          </div>
-        </div>
 
         <div class="field">
           <label for="f-price">Valor deste atendimento <span class="opt">(se quiser)</span></label>
@@ -826,8 +867,12 @@ function vApptForm(_, q) {
           <label for="f-notes">Observação <span class="opt">(se quiser)</span></label>
           <textarea id="f-notes" placeholder="Algo para lembrar…">${esc(a.notes || '')}</textarea>
         </div>
+        </details>
 
-        <button class="btn main" id="save" type="submit">${edit ? 'Salvar alterações' : '✓ Agendar'}</button>
+        <div class="savebar">
+          <div id="sum" class="sum"></div>
+          <button class="btn main" id="save" type="submit">${edit ? 'Salvar alterações' : '✓ Agendar'}</button>
+        </div>
       </form>`,
     bind(el) {
       const f = $('#f', el);
@@ -851,7 +896,34 @@ function vApptForm(_, q) {
         saveBtn.classList.toggle('warn', !!list.length);
         saveBtn.classList.toggle('main', !list.length);
       };
-      const refreshTimes = () => { $('#busy', el).innerHTML = busyList(iDate.value, a.id); checkConflict(); paintRep(); };
+      // Resumo embaixo, junto do botão de salvar
+      const paintSum = () => {
+        const t = parseTime(iTime.value), d = iDate.value;
+        const ask = w => `<span class="muted">${w}?</span>`;
+        const parts = [
+          iClient.value.trim() ? esc(iClient.value.trim()) : ask('cliente'),
+          d ? esc(cap(fmtDate(d, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', ''))) : ask('dia'),
+          t ? `${t}${dur ? '–' + hhmm(mins(t) + dur) : ''}` : ask('hora'),
+        ];
+        if (iService.value.trim()) parts.push(esc(iService.value.trim()));
+        $('#sum', el).innerHTML = parts.join(' · ');
+      };
+      // Horários livres do dia (botões)
+      const paintFree = () => {
+        const list = iDate.value ? freeStarts(iDate.value, dur || 30, a.id) : [];
+        const cur = parseTime(iTime.value);
+        iTime.placeholder = list.length ? 'Ou digite: 12:10' : 'Ex.: 12:10';
+        $('#free', el).innerHTML = list.length ? `<div class="chips mini" style="margin-bottom:.5rem"><span class="muted">Livres:</span>
+          ${list.slice(0, 16).map(t => `<button type="button" class="chip ${t === cur ? 'on' : ''}" data-t="${t}">${t}</button>`).join('')}</div>`
+          : (salonHours()?.days && iDate.value >= today() && !salonHours().days[toDate(iDate.value).getDay()] ? '<small class="hint">Dia fechado no seu horário de atendimento (pode agendar mesmo assim).</small>' : '');
+      };
+      const paintDay = () => {
+        el.querySelectorAll('#days [data-day]').forEach(b => b.classList.toggle('on', b.dataset.day === iDate.value));
+        const inWeek = [...el.querySelectorAll('#days [data-day]')].some(b => b.dataset.day === iDate.value);
+        $('.other-day', el).classList.toggle('on', !inWeek && !!iDate.value);
+        $('#date-label', el).textContent = iDate.value ? cap(fmtDate(iDate.value, { weekday: 'long', day: 'numeric', month: 'long' })) : '';
+      };
+      const refreshTimes = () => { $('#busy', el).innerHTML = busyList(iDate.value, a.id); checkConflict(); paintRep(); paintFree(); paintDay(); paintSum(); };
 
       // Repetição: datas que vão ser marcadas
       let every = '';
@@ -877,7 +949,8 @@ function vApptForm(_, q) {
 
       // Serviço já conhecido: completa tempo e valor (sem apagar o que ela já escreveu)
       const fillFromService = s => {
-        if (s?.duration && !dur) { dur = s.duration; paintDur(); checkConflict(); }
+        if (s?.duration && !dur) { dur = s.duration; paintDur(); checkConflict(); paintFree(); }
+        paintSum();
       };
       const onService = () => {
         nameHint($('#h-service', el), db.services, iService.value, '✨ Serviço novo — vai ficar salvo na lista', '✓ Serviço da sua lista');
@@ -894,14 +967,52 @@ function vApptForm(_, q) {
         const c = e.target.closest('.chip[data-m]');
         if (!c) return;
         dur = dur === +c.dataset.m ? null : +c.dataset.m;
-        paintDur(); checkConflict();
+        paintDur(); checkConflict(); paintFree(); paintSum();
       });
-      iDur.addEventListener('input', () => { const n = parseInt(iDur.value, 10); dur = n > 0 ? n : null; paintDur(); checkConflict(); });
+      iDur.addEventListener('input', () => { const n = parseInt(iDur.value, 10); dur = n > 0 ? n : null; paintDur(); checkConflict(); paintFree(); paintSum(); });
 
       $$('[data-day]', el).forEach(b => b.onclick = () => { iDate.value = b.dataset.day; refreshTimes(); });
       iDate.addEventListener('change', refreshTimes);
       maskTime(iTime);
-      iTime.addEventListener('input', checkConflict);
+      iTime.addEventListener('input', () => { checkConflict(); paintFree(); paintSum(); });
+      $('#free', el).addEventListener('click', e => {
+        const b = e.target.closest('[data-t]');
+        if (!b) return;
+        iTime.value = b.dataset.t;
+        checkConflict(); paintFree(); paintSum();
+      });
+      // Clientes recentes e informações da cliente
+      const paintClient = () => {
+        const c = findByName(db.clients, iClient.value);
+        if (!c) { $('#c-info', el).innerHTML = ''; return; }
+        const st = clientStats(c);
+        const bits = [];
+        if (c.notes) bits.push(`<div class="note" style="margin:.5rem 0 0">📝 ${esc(c.notes)}</div>`);
+        const line = [st.last ? `Última vez ${daysAgo(st.last.date)}${st.last.service ? ' · ' + esc(st.last.service) : ''}` : 'Primeira vez',
+          st.owes > 0 ? `<b style="color:var(--warn)">deve ${brl(st.owes)}</b>` : ''].filter(Boolean).join(' · ');
+        bits.unshift(`<small class="hint">${line}</small>`);
+        $('#c-info', el).innerHTML = bits.join('');
+      };
+      $('#recent', el)?.addEventListener('click', e => {
+        const b = e.target.closest('[data-cid]');
+        const c = b && client(b.dataset.cid);
+        if (!c) return;
+        iClient.value = c.name;
+        iClient.dispatchEvent(new Event('change'));
+        $('#recent', el).remove();
+      });
+      iClient.addEventListener('input', () => { paintClient(); paintSum(); });
+      iClient.addEventListener('change', () => { paintClient(); paintSum(); });
+      $('#svc-chips', el)?.addEventListener('click', e => {
+        const b = e.target.closest('[data-svc]');
+        if (!b) return;
+        iService.value = b.dataset.svc;
+        const sv = findByName(db.services, b.dataset.svc);
+        if (sv?.duration) dur = null;
+        iService.dispatchEvent(new Event('change'));
+        el.querySelectorAll('#svc-chips .chip').forEach(x => x.classList.toggle('on', x === b));
+      });
+      iService.addEventListener('input', paintSum);
       bindToggle2($('#f-paid', el), v => { paid = v; $('#f-method', el).hidden = !v; });
       $('#f-method', el).onclick = e => {
         const b = e.target.closest('[data-m]');
@@ -912,7 +1023,7 @@ function vApptForm(_, q) {
       $('#f-later', el).onclick = e => { const on = !e.currentTarget.classList.contains('on'); e.currentTarget.classList.toggle('on', on); if (on) iPrice.value = ''; };
       iPrice.addEventListener('input', () => { if (iPrice.value.trim()) $('#f-later', el).classList.remove('on'); });
 
-      paintDur(); checkConflict();
+      paintDur(); checkConflict(); paintFree(); paintDay(); paintSum();
       if (cName) iClient.dispatchEvent(new Event('change'));
       if (a.service) onService();
       if (!cName) setTimeout(() => iClient.focus(), 50);
@@ -923,6 +1034,7 @@ function vApptForm(_, q) {
         const name = iClient.value.trim();
         if (!name) { err('Escreva o nome da cliente.'); iClient.focus(); return; }
         if (!iDate.value) { err('Escolha o dia.'); return; }
+        if (paid && !method && parseMoney(iPrice.value) > 0) $('details.more', el).open = true;
         const time = parseTime(iTime.value);
         if (!time) { err(iTime.value.trim() ? 'O horário não está certo. Exemplo: 12:10' : 'Escreva o horário. Exemplo: 12:10'); iTime.focus(); return; }
         const price = parseMoney(iPrice.value);
