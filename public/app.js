@@ -1406,99 +1406,145 @@ function vSaleForm(_, q) {
    ===================================================================== */
 function vFin(_, q) {
   const m = q.m || today().slice(0, 7);
+  const f = q.f || '';          // quadro escolhido (filtro)
+  const pm = q.pm || '';        // filtro dentro de "Entrou": pix, dinheiro, cartao, a (serviços), s (produtos)
   const [y, mo] = m.split('-').map(Number);
   const shift = n => { const d = new Date(y, mo - 1 + n, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
   const monthLabel = new Date(y, mo - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-  const sumBy = (xs, f) => round2(xs.reduce((t, x) => t + (f(x) || 0), 0));
+  const sumBy = (xs, fn) => round2(xs.reduce((t, x) => t + (fn(x) || 0), 0));
+  const link = (k, it) => (k === 'a' ? '#/agendamento/' + it.id : '#/venda?id=' + it.id);
+  const what = (k, it) => (k === 'a' ? (it.service || 'Serviço') : `🛍️ ${it.product}${it.qty > 1 ? ` (${it.qty}x)` : ''}`);
+  const url = (o = {}) => { const p = { m, f, pm, ...o }; return '#/financeiro?' + Object.entries(p).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join('&'); };
+  const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
 
-  // Dinheiro que ENTROU no mês (pelo dia do pagamento), separado por serviço/produto e forma
+  // ENTROU: cada pagamento recebido no mês (pelo dia do pagamento)
   const received = [];
-  for (const a of db.appts) if (a.status !== 'cancelado') for (const p of paymentsOf(a)) if (p.d?.startsWith(m)) received.push({ ...p, k: 'a' });
-  for (const x of db.sales) for (const p of paymentsOf(x)) if (p.d?.startsWith(m)) received.push({ ...p, k: 's' });
+  for (const a of db.appts) if (a.status !== 'cancelado') for (const p of paymentsOf(a)) if (p.d?.startsWith(m)) received.push({ ...p, k: 'a', it: a });
+  for (const x of db.sales) for (const p of paymentsOf(x)) if (p.d?.startsWith(m)) received.push({ ...p, k: 's', it: x });
+  received.sort((a, b) => b.d.localeCompare(a.d));
   const recTotal = sumBy(received, p => p.v);
   const recServ = sumBy(received.filter(p => p.k === 'a'), p => p.v);
   const recProd = sumBy(received.filter(p => p.k === 's'), p => p.v);
-  const byMethod = Object.entries(PAY).map(([k, n]) => [n, sumBy(received.filter(p => p.m === k), p => p.v)]).filter(([, v]) => v > 0);
-  const noMethod = sumBy(received.filter(p => !PAY[p.m]), p => p.v);
 
-  // Despesas do mês e lucro
+  // SAIU: despesas do mês
   const expenses = db.expenses.filter(e => e.date?.startsWith(m)).sort((a, b) => b.date.localeCompare(a.date));
   const spent = sumBy(expenses, e => e.amount);
+  const byCat = Object.entries(expenses.reduce((t, e) => { const c = e.cat || 'Outros'; t[c] = (t[c] || 0) + e.amount; return t; }, {}))
+    .sort((a, b) => b[1] - a[1]);
   const profit = round2(recTotal - spent);
 
-  // O que é deste mês e ainda não foi pago
-  const appts = db.appts.filter(a => a.date.startsWith(m) && a.status !== 'cancelado' && a.status !== 'pendente');
-  const sales = db.sales.filter(x => x.date.startsWith(m));
-  const owed = sumBy([...appts.filter(apptDue), ...sales.filter(saleDue)], leftOf);
-  const expected = sumBy(appts.filter(a => !apptDue(a) && !isPast(a) && a.status === 'marcado'), leftOf);
+  // FALTA RECEBER (do mês) e de meses anteriores
+  const monthAppts = db.appts.filter(a => a.date.startsWith(m) && a.status !== 'cancelado' && a.status !== 'pendente');
+  const monthSales = db.sales.filter(x => x.date.startsWith(m));
+  const dueOf = list => list.sort((a, b) => (a.it.date + (a.it.time || '')).localeCompare(b.it.date + (b.it.time || '')));
+  const dueMonth = dueOf([...monthAppts.filter(apptDue).map(it => ({ k: 'a', it })), ...monthSales.filter(saleDue).map(it => ({ k: 's', it }))]);
+  const dueOld = dueOf([...db.appts.filter(a => a.date < m + '-01' && apptDue(a)).map(it => ({ k: 'a', it })),
+                        ...db.sales.filter(x => x.date < m + '-01' && saleDue(x)).map(it => ({ k: 's', it }))]);
+  const owed = sumBy(dueMonth, d => leftOf(d.it));
+  const owedOld = sumBy(dueOld, d => leftOf(d.it));
 
-  // Quem está devendo (de qualquer mês)
-  const dueAll = [...db.appts.filter(apptDue).map(a => ({ k: 'a', when: a.date + a.time, it: a })),
-                  ...db.sales.filter(saleDue).map(x => ({ k: 's', when: x.date + '99', it: x }))]
-    .sort((a, b) => a.when.localeCompare(b.when));
-  const noPrice = appts.filter(a => isPast(a) && !(a.price > 0)).sort(byWhen);
+  // AINDA VAI ENTRAR: horários do mês que ainda vão acontecer
+  const upcoming = monthAppts.filter(a => !isPast(a) && a.status === 'marcado' && !isPaid(a)).sort(byWhen);
+  const expected = sumBy(upcoming, leftOf);
+  const upcomingNoPrice = upcoming.filter(a => !(a.price > 0)).length;
+
+  // SEM VALOR: atendimentos que já aconteceram sem valor lançado
+  const noPrice = monthAppts.filter(a => isPast(a) && !(a.price > 0) && !a.paid).sort(byWhen);
+
+  const card = (key, cls, label, value, hint, full = false) => `
+    <a class="total fcard ${cls} ${full ? 'full' : ''} ${f === key ? 'on' : ''}" href="${url({ f: f === key ? '' : key, pm: '' })}" data-f>
+      <span>${label}</span><b>${value}</b><small>${f === key ? '▲ mostrando abaixo' : hint}</small></a>`;
 
   const dueRow = ({ k, it }) => `
     <div class="card">
       <div class="line">
-        <a class="grow" href="${k === 'a' ? '#/agendamento/' + it.id : '#/venda?id=' + it.id}">
-          <b>${esc(clientName(it.clientId))}</b>
-          <span>${fmtShort(it.date)} · ${esc(k === 'a' ? (it.service || 'Serviço') : '🛍️ ' + it.product)}${paidOf(it) > 0 ? ` · já pagou ${brl(paidOf(it))}` : ''}</span></a>
+        <a class="grow" href="${link(k, it)}"><b>${esc(clientName(it.clientId))}</b>
+          <span>${fmtShort(it.date)} · ${esc(what(k, it))}${paidOf(it) > 0 ? ` · já pagou ${brl(paidOf(it))}` : ''}</span></a>
         <span class="amount" style="color:var(--warn)">${brl(leftOf(it))}</span>
       </div>
       <div class="quickprice"><button class="btn small ok" style="flex:1" data-pay="${k}:${it.id}">💰 Receber</button></div>
     </div>`;
 
-  const moves = [...appts.filter(a => valueOf(a) > 0).map(a => ({ k: 'a', it: a })), ...sales.filter(x => valueOf(x) > 0).map(x => ({ k: 's', it: x }))]
-    .sort((a, b) => (b.it.date + (b.it.time || '')).localeCompare(a.it.date + (a.it.time || '')));
+  // Conteúdo de cada quadro
+  const views = {
+    entrou: () => {
+      const chips = [['', 'Tudo'], ...Object.entries(PAY), ['a', 'Serviços'], ['s', 'Produtos']];
+      const list = received.filter(p => !pm || p.m === pm || p.k === pm);
+      return `<h2>Entrou em ${monthLabel} ${list.length ? `· ${brl(sumBy(list, p => p.v))}` : ''}</h2>
+        <div class="chips" style="margin-bottom:.8rem">${chips.map(([k, n]) => `<a class="chip ${pm === k ? 'on' : ''}" href="${url({ pm: k })}" data-f>${n}${k && k.length > 1 ? ' ' + brl(sumBy(received.filter(p => p.m === k), p => p.v)) : ''}</a>`).join('')}</div>
+        <div class="list">${list.length ? list.map(p => `
+          <a class="card line" href="${link(p.k, p.it)}">
+            <div class="grow"><b>${esc(clientName(p.it.clientId))}</b><span>${fmtShort(p.d)} · ${esc(what(p.k, p.it))}${PAY[p.m] ? ' · ' + PAY[p.m] : ''}</span></div>
+            <span class="amount" style="color:var(--ok)">+ ${brl(p.v)}</span></a>`).join('') : '<div class="muted">Nada recebido com esse filtro.</div>'}</div>`;
+    },
+    saiu: () => `<h2>Saiu em ${monthLabel} · ${brl(spent)}</h2>
+      ${byCat.length ? `<div class="catbars">${byCat.map(([c, v]) => `<div><span>${esc(c)}</span><i style="width:${Math.max(4, Math.round(v / spent * 100))}%"></i><b>${brl(v)}</b></div>`).join('')}</div>` : ''}
+      <a class="btn" href="#/despesa" style="margin:.8rem 0">➖ Lançar despesa</a>
+      <div class="list">${expenses.length ? expenses.map(e => `
+        <a class="card line" href="#/despesa?id=${e.id}">
+          <div class="grow"><b>${esc(e.desc || e.cat || 'Despesa')}</b><span>${fmtShort(e.date)}${e.cat && e.desc ? ' · ' + esc(e.cat) : ''}</span></div>
+          <span class="amount" style="color:var(--bad)">− ${brl(e.amount)}</span></a>`).join('') : '<div class="muted">Nenhuma despesa lançada neste mês.</div>'}</div>`,
+    lucro: () => `<h2>Como chegou no lucro</h2>
+      <div class="card statement">
+        <div class="line"><span class="grow">Serviços recebidos</span><b style="color:var(--ok)">+ ${brl(recServ)}</b></div>
+        <div class="line"><span class="grow">Produtos vendidos (recebido)</span><b style="color:var(--ok)">+ ${brl(recProd)}</b></div>
+        ${byCat.map(([c, v]) => `<div class="line"><span class="grow">${esc(c)}</span><b style="color:var(--bad)">− ${brl(v)}</b></div>`).join('')}
+        <div class="line sum"><b class="grow">Lucro do mês</b><b style="color:${profit >= 0 ? 'var(--ok)' : 'var(--bad)'}">${brl(profit)}</b></div>
+      </div>
+      <p class="muted">Conta só o dinheiro que já entrou. O que falta receber (${brl(owed)}) entra no lucro quando for pago.</p>`,
+    falta: () => `<h2>Falta receber de ${monthLabel} · ${brl(owed)}</h2>
+      <div class="list">${dueMonth.length ? dueMonth.map(dueRow).join('') : '<div class="muted">Ninguém devendo neste mês. 🎉</div>'}</div>
+      ${dueOld.length ? `<h2>De meses anteriores · ${brl(owedOld)}</h2><div class="list">${dueOld.map(dueRow).join('')}</div>` : ''}`,
+    vai: () => `<h2>Ainda vai entrar · ${brl(expected)}</h2>
+      ${upcomingNoPrice ? `<p class="muted" style="margin-top:-.3rem">${plural(upcomingNoPrice, 'horário ainda sem valor', 'horários ainda sem valor')} (não entra na soma).</p>` : ''}
+      <div class="list">${upcoming.length ? upcoming.map(a => apptCard(a, { showDate: true })).join('') : '<div class="muted">Nenhum horário para o resto do mês.</div>'}</div>`,
+    semvalor: () => `<h2>Atendimentos sem valor</h2>
+      <p class="muted" style="margin-top:-.3rem">Coloque quanto foi cobrado:</p>
+      <div class="list">${noPrice.map(a => `<div class="card">
+        <a class="line" style="text-decoration:none" href="#/agendamento/${a.id}"><div class="grow"><b>${esc(clientName(a.clientId))}</b>
+        <span>${fmtShort(a.date)} ${a.time}${a.service ? ' · ' + esc(a.service) : ''}${a.priceLater ? ' · 🔎 avaliar na hora' : ''}</span></div></a>
+        <div class="quickprice"><div class="money"><input type="text" inputmode="decimal" placeholder="0,00" data-price="${a.id}"></div>
+        <button class="btn small main" data-saveprice="${a.id}">Salvar</button></div></div>`).join('') || '<div class="muted">Tudo com valor. 🎉</div>'}</div>`,
+  };
+
+  // Sem quadro escolhido: um resumo do que pede atenção
+  const overview = () => {
+    const tips = [];
+    if (dueMonth.length + dueOld.length) tips.push(`<a class="card line" href="${url({ f: 'falta' })}" data-f><div class="grow"><b>💸 ${plural(dueMonth.length + dueOld.length, 'conta para receber', 'contas para receber')}</b><span>${brl(owed + owedOld)} no total</span></div><span class="muted">›</span></a>`);
+    if (noPrice.length) tips.push(`<a class="card line" href="${url({ f: 'semvalor' })}" data-f><div class="grow"><b>✏️ ${plural(noPrice.length, 'atendimento sem valor', 'atendimentos sem valor')}</b><span>Coloque quanto foi cobrado</span></div><span class="muted">›</span></a>`);
+    return `<p class="muted" style="text-align:center">👆 Toque em um quadro para ver os detalhes.</p>
+      ${tips.length ? `<h2>Precisa de atenção</h2><div class="list">${tips.join('')}</div>` : '<div class="empty">Tudo em dia. 🎉</div>'}`;
+  };
 
   return {
     title: 'Dinheiro', tab: 'financeiro',
     html: `
       <div class="monthnav">
-        <a class="btn small" href="#/financeiro?m=${shift(-1)}">‹</a>
+        <a class="btn small" href="${url({ m: shift(-1) })}" data-f aria-label="Mês anterior">‹</a>
         <b>${monthLabel}</b>
-        <a class="btn small" href="#/financeiro?m=${shift(1)}">›</a>
+        <a class="btn small" href="${url({ m: shift(1) })}" data-f aria-label="Próximo mês">›</a>
       </div>
       <div class="totals">
-        <div class="total ok full"><span>Entrou no mês</span><b style="font-size:1.8rem">${brl(recTotal)}</b>
-          <span>Serviços ${brl(recServ)} · Produtos ${brl(recProd)}</span>
-          ${byMethod.length ? `<span>${byMethod.map(([n, v]) => `${n} ${brl(v)}`).join(' · ')}${noMethod ? ` · Sem forma ${brl(noMethod)}` : ''}</span>` : ''}</div>
-        <div class="total bad"><span>Saiu (despesas)</span><b>${brl(spent)}</b></div>
-        <div class="total ${profit >= 0 ? 'ok' : 'bad'}"><span>Lucro do mês</span><b>${brl(profit)}</b></div>
-        <div class="total warn"><span>Falta receber</span><b>${brl(owed)}</b></div>
-        <div class="total"><span>Ainda vai entrar</span><b>${brl(expected)}</b></div>
+        ${card('entrou', 'ok', 'Entrou no mês', `<span class="bignum">${brl(recTotal)}</span>`,
+          received.length ? `${plural(received.length, 'pagamento', 'pagamentos')} · Serviços ${brl(recServ)} · Produtos ${brl(recProd)}` : 'Nenhum pagamento ainda', true)}
+        ${card('saiu', 'bad', 'Saiu (despesas)', brl(spent), expenses.length ? plural(expenses.length, 'despesa', 'despesas') : 'Toque para lançar')}
+        ${card('lucro', profit >= 0 ? 'ok' : 'bad', 'Lucro do mês', brl(profit), 'Entrou − saiu')}
+        ${card('falta', 'warn', 'Falta receber', brl(owed), dueMonth.length ? plural(new Set(dueMonth.map(d => d.it.clientId)).size, 'cliente', 'clientes') : 'Ninguém devendo')}
+        ${card('vai', '', 'Ainda vai entrar', brl(expected), upcoming.length ? plural(upcoming.length, 'horário', 'horários') : 'Nada marcado')}
+        ${noPrice.length ? card('semvalor', 'warn', 'Sem valor', String(noPrice.length), 'Atendimentos sem valor lançado', true) : ''}
       </div>
-      <a class="btn" href="#/despesa">➖ Lançar despesa</a>
-
-      <h2>💸 Quem está devendo ${dueAll.length ? `(${dueAll.length})` : ''}</h2>
-      <div class="list">${dueAll.length ? dueAll.map(dueRow).join('') : '<div class="muted">Ninguém devendo. 🎉</div>'}</div>
-
-      ${noPrice.length ? `<h2>Atendimentos sem valor (${noPrice.length})</h2>
-        <p class="muted" style="margin-top:-.3rem">Coloque quanto foi cobrado:</p>
-        <div class="list">${noPrice.map(a => `<div class="card">
-          <a class="line" style="text-decoration:none" href="#/agendamento/${a.id}"><div class="grow"><b>${esc(clientName(a.clientId))}</b>
-          <span>${fmtShort(a.date)} ${a.time}${a.service ? ' · ' + esc(a.service) : ''}</span></div></a>
-          <div class="quickprice"><div class="money"><input type="text" inputmode="decimal" placeholder="0,00" data-price="${a.id}"></div>
-          <button class="btn small main" data-saveprice="${a.id}">Salvar</button></div></div>`).join('')}</div>` : ''}
-
-      <h2>Despesas do mês</h2>
-      <div class="list">${expenses.length ? expenses.map(e => `
-        <a class="card line" href="#/despesa?id=${e.id}">
-          <div class="grow"><b>${esc(e.desc || e.cat || 'Despesa')}</b><span>${fmtShort(e.date)}${e.cat && e.desc ? ' · ' + esc(e.cat) : ''}</span></div>
-          <span class="amount" style="color:var(--bad)">− ${brl(e.amount)}</span></a>`).join('') : '<div class="muted">Nenhuma despesa lançada.</div>'}</div>
-
-      <h2>Serviços e vendas do mês</h2>
-      <div class="list">${moves.length ? moves.map(({ k, it }) => `
-        <a class="card line" href="${k === 'a' ? '#/agendamento/' + it.id : '#/venda?id=' + it.id}">
-          <div class="grow"><b>${esc(clientName(it.clientId))}</b>
-          <span>${fmtShort(it.date)} · ${esc(k === 'a' ? (it.service || 'Serviço') : '🛍️ ' + it.product)}</span></div>
-          <div style="text-align:right"><div class="amount">${brl(valueOf(it))}</div>${
-            isPaid(it) ? '<span class="badge ok">Pago</span>'
-            : paidOf(it) > 0 ? `<span class="badge warn">Falta ${brl(leftOf(it))}</span>`
-            : `<span class="badge warn">${k === 'a' && !apptDue(it) ? 'A pagar' : 'Não pago'}</span>`}</div>
-        </a>`).join('') : '<div class="muted">Nenhum valor lançado neste mês.</div>'}</div>`,
-    bind(el) { bindQuickPay(el); },
+      <div id="fin-detail">${views[f] ? views[f]() : overview()}</div>`,
+    bind(el) {
+      bindQuickPay(el);
+      // Filtros trocam a tela sem encher o histórico do "voltar"
+      el.addEventListener('click', e => {
+        const a = e.target.closest('a[data-f]');
+        if (!a) return;
+        e.preventDefault();
+        replaceTo(a.getAttribute('href'));
+        if (a.classList.contains('fcard')) setTimeout(() => $('#fin-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+      });
+    },
   };
 }
 

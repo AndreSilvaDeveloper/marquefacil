@@ -276,3 +276,17 @@ details summary::-webkit-details-marker { display: none; }
 .paylist { margin: .5rem 0 0; padding-left: 1.2rem; color: var(--muted); }
 .sheet-bg { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; justify-content: center; }
 .sheet { background: var(--bg); width: 100%; max-width: 640px; border-radius: 20px 20px 0 0; padding: 1.2rem 1rem calc(1.2rem + env(safe-area-inset-bottom)); max-height: 92vh; overflow: auto; }
+
+/* ---------- Dinheiro: quadros que filtram ---------- */
+.fcard { display: block; text-decoration: none; color: inherit; cursor: pointer; border-width: 2px; transition: .15s; }
+.fcard small { display: block; margin-top: .2rem; font-size: .8rem; color: var(--muted); }
+.fcard .bignum { font-size: 1.8rem; color: inherit; display: inline; font-weight: inherit; }
+.fcard:active { transform: scale(.98); }
+.fcard.on { border-color: var(--brand); background: var(--brand-soft); box-shadow: 0 4px 14px rgba(0,0,0,.08); }
+.fcard.on small { color: var(--brand); font-weight: 700; }
+#fin-detail { scroll-margin-top: 4rem; }
+.catbars > div { display: grid; grid-template-columns: 7.5rem 1fr auto; align-items: center; gap: .5rem; margin: .35rem 0; font-size: .9rem; }
+.catbars i { display: block; height: 10px; border-radius: 5px; background: var(--bad); opacity: .7; }
+.statement .line { padding: .45rem 0; border-bottom: 1px dashed var(--line); }
+.statement .line.sum { border-bottom: 0; border-top: 2px solid var(--ink); margin-top: .3rem; padding-top: .6rem; font-size: 1.1rem; }
+a.chip { text-decoration: none; color: inherit; display: inline-flex; align-items: center; }
