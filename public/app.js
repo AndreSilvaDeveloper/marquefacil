@@ -2405,6 +2405,10 @@ function vFin(_, q) {
   // SEM VALOR: atendimentos que já aconteceram sem valor lançado
   const noPrice = monthAppts.filter(a => isPast(a) && !(a.price > 0) && !a.paid && !a.packageId && a.status !== PRE).sort(byWhen);
 
+  const fixedTodo = m <= today().slice(0, 7) ? pendingFixed(m) : [];
+  const isNow = m === today().slice(0, 7);
+  const goal = salonHours()?.goal || 0;
+
   const card = (key, cls, label, value, hint, full = false) => `
     <a class="total fcard ${cls} ${full ? 'full' : ''} ${f === key ? 'on' : ''}" href="${url({ f: f === key ? '' : key, pm: '' })}" data-f>
       <span>${label}</span><b>${value}</b><small>${f === key ? '▲ mostrando abaixo' : hint}</small></a>`;
@@ -2433,11 +2437,15 @@ function vFin(_, q) {
             <span class="amount" style="color:var(--ok)">+ ${brl(p.v)}</span></a>`).join('') : '<div class="muted">Nada recebido com esse filtro.</div>'}</div>`;
     },
     saiu: () => `<h2>Saiu em ${monthLabel} · ${brl(spent)}</h2>
+      ${fixedTodo.length ? `<div class="card fixedbox"><b>📌 Despesas fixas para lançar</b>
+        <span class="muted">Do mês passado, ainda não lançadas em ${monthLabel}:</span>
+        ${fixedTodo.map(e => `<div class="line"><span class="grow">${esc(e.desc || e.cat || 'Despesa')}</span><b>${brl(e.amount)}</b><button class="btn small" data-fixed="${e.id}">Lançar</button></div>`).join('')}
+        ${fixedTodo.length > 1 ? `<button class="btn small main" data-fixed="all" style="margin-top:.4rem">Lançar todas · ${brl(sumBy(fixedTodo, e => e.amount))}</button>` : ''}</div>` : ''}
       ${byCat.length ? `<div class="catbars">${byCat.map(([c, v]) => `<div><span>${esc(c)}</span><i style="width:${Math.max(4, Math.round(v / spent * 100))}%"></i><b>${brl(v)}</b></div>`).join('')}</div>` : ''}
       <a class="btn" href="#/despesa" style="margin:.8rem 0">➖ Lançar despesa</a>
       <div class="list">${expenses.length ? expenses.map(e => `
         <a class="card line" href="#/despesa?id=${e.id}">
-          <div class="grow"><b>${esc(e.desc || e.cat || 'Despesa')}</b><span>${fmtShort(e.date)}${e.cat && e.desc ? ' · ' + esc(e.cat) : ''}</span></div>
+          <div class="grow"><b>${esc(e.desc || e.cat || 'Despesa')}</b><span>${fmtShort(e.date)}${e.cat && e.desc ? ' · ' + esc(e.cat) : ''}${e.fixed ? ' · 📌 fixa' : ''}</span></div>
           <span class="amount" style="color:var(--bad)">− ${brl(e.amount)}</span></a>`).join('') : '<div class="muted">Nenhuma despesa lançada neste mês.</div>'}</div>`,
     lucro: () => `<h2>Como chegou no lucro</h2>
       <div class="card statement">
@@ -2507,6 +2515,19 @@ function vFin(_, q) {
   const group = (list, key) => Object.entries(list.reduce((acc, p) => { const k = key(p); acc[k] = (acc[k] || 0) + p.v; return acc; }, {}))
     .sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => [k, round2(v)]);
 
+  // Resumo em texto para mandar no WhatsApp (para a contadora, sócia ou para guardar)
+  const shareText = (diff, prev) => [
+    `💰 *Resumo de ${monthLabel}* — ${session.tenant.name}`,
+    `✅ Entrou: ${brl(recTotal)}`,
+    recProd ? `   • Serviços: ${brl(recServ)}\n   • Produtos: ${brl(recProd)}` : '',
+    received.length ? '   ' + Object.entries(PAY).map(([k, n]) => [n, sumBy(received.filter(p => p.m === k), p => p.v)]).filter(r => r[1]).map(([n, v]) => `${n} ${brl(v)}`).join(' · ') : '',
+    `➖ Saiu: ${brl(spent)}`, ...byCat.map(([c, v]) => `   • ${c}: ${brl(v)}`),
+    `📈 *Lucro: ${brl(profit)}*`,
+    owed + owedOld ? `⏳ Falta receber: ${brl(owed + owedOld)}` : '',
+    diff !== null ? `${diff >= 0 ? '↑' : '↓'} ${Math.abs(diff)}% em relação ao mês anterior (${brl(prev)})` : '',
+    goal ? `🎯 Meta: ${brl(goal)} (${Math.round(recTotal / goal * 100)}%)` : '',
+  ].filter(Boolean).join('\n');
+
   // Sem quadro escolhido: um resumo do mês e o que pede atenção
   const overview = () => {
     const prev = receivedIn(shift(-1));
@@ -2518,8 +2539,29 @@ function vFin(_, q) {
     const cliRank = group(received.filter(p => p.it.clientId), p => clientName(p.it.clientId));
     const tips = [];
     if (dueMonth.length + dueOld.length) tips.push(`<a class="card line" href="${url({ f: 'falta' })}" data-f><div class="grow"><b>💸 ${plural(dueMonth.length + dueOld.length, 'conta para receber', 'contas para receber')}</b><span>${brl(owed + owedOld)} no total</span></div><span class="muted">›</span></a>`);
+    if (fixedTodo.length) tips.push(`<a class="card line" href="${url({ f: 'saiu' })}" data-f><div class="grow"><b>📌 ${plural(fixedTodo.length, 'despesa fixa para lançar', 'despesas fixas para lançar')}</b><span>${fixedTodo.map(e => esc(e.desc || e.cat)).join(', ')} · ${brl(sumBy(fixedTodo, e => e.amount))}</span></div><span class="muted">›</span></a>`);
     if (noPrice.length) tips.push(`<a class="card line" href="${url({ f: 'semvalor' })}" data-f><div class="grow"><b>✏️ ${plural(noPrice.length, 'atendimento sem valor', 'atendimentos sem valor')}</b><span>Coloque quanto foi cobrado</span></div><span class="muted">›</span></a>`);
-    return `<p class="muted" style="text-align:center;margin:.2rem 0 .8rem">👆 Toque em um quadro para ver os detalhes.</p>
+    // Caixa de hoje: o que entrou hoje, separado por forma (o "Dinheiro" é o que tem na gaveta)
+    const t = today(), todayPays = received.filter(p => p.d === t);
+    const cashBox = !isNow ? '' : `<a class="card cashbox" href="${url({ f: 'entrou', pm: '', dia: t })}" data-f>
+      <div class="line"><b class="grow">🧾 Caixa de hoje</b><b style="color:var(--ok)">${brl(sumBy(todayPays, p => p.v))}</b></div>
+      ${todayPays.length ? `<div class="paysplit">${Object.entries(PAY).map(([k, n]) => `<span><small>${n}</small><b>${brl(sumBy(todayPays.filter(p => p.m === k), p => p.v))}</b></span>`).join('')}</div>
+      <small class="muted">${plural(todayPays.length, 'pagamento', 'pagamentos')} hoje · 💵 em dinheiro é o que deve ter na gaveta</small>` : '<small class="muted">Nenhum pagamento recebido hoje ainda.</small>'}</a>`;
+    // Meta do mês
+    const pct = goal ? Math.min(100, Math.round(recTotal / goal * 100)) : 0;
+    const lastDay = new Date(y, mo, 0).getDate(), daysLeft = isNow ? lastDay - +t.slice(8, 10) + 1 : 0;
+    const goalBox = goal ? `<div class="card goal">
+        <div class="line"><b class="grow">🎯 Meta: ${brl(goal)}</b><button class="btn small" data-goal>Mudar</button></div>
+        <div class="pbar" role="img" aria-label="${pct}% da meta"><i style="width:${pct}%"></i></div>
+        <span>${recTotal >= goal ? `<b style="color:var(--ok)">🎉 Meta batida!</b> Entrou ${brl(recTotal)}.`
+          : `<b>${pct}%</b> · faltam <b>${brl(goal - recTotal)}</b>${daysLeft ? ` em ${plural(daysLeft, 'dia', 'dias')}${expected ? ` · marcados ainda: ${brl(expected)}` : ''}` : ''}`}</span></div>`
+      : `<button class="btn" data-goal style="margin-bottom:.8rem">🎯 Definir uma meta para o mês</button>`;
+    // Formas de pagamento do mês
+    const methods = Object.entries(PAY).map(([k, n]) => [k, n, sumBy(received.filter(p => p.m === k), p => p.v)]).filter(r => r[2] > 0);
+    const methodBox = methods.length ? `<h2>💳 Como você recebeu</h2><div class="card rank">${methods.sort((a, b) => b[2] - a[2]).map(([k, n, v]) => `
+      <a class="rank-row" href="${url({ f: 'entrou', pm: k })}" data-f><span class="rank-name">${n}</span><span class="rank-bar"><i style="width:${Math.max(4, v / methods[0][2] * 100)}%"></i></span><b>${brl(v)} <small class="muted">${Math.round(v / recTotal * 100)}%</small></b></a>`).join('')}</div>` : '';
+    return `${cashBox}${goalBox}
+      <p class="muted" style="text-align:center;margin:.2rem 0 .8rem">👆 Toque em um quadro para ver os detalhes.</p>
       ${tips.length ? `<h2>Precisa de atenção</h2><div class="list">${tips.join('')}</div>` : ''}
       <h2>Resumo de ${monthLabel}</h2>
       <div class="stats">
@@ -2530,9 +2572,11 @@ function vFin(_, q) {
         <div class="stat"><span>Despesas</span><b>${plural(expenses.length, 'lançada', 'lançadas')}</b></div>
       </div>
       ${dailyChart()}
+      ${methodBox}
       ${ranking('💇 Serviços que mais renderam', svcRank)}
       ${ranking('👩 Clientes que mais gastaram', cliRank)}
-      ${!tips.length && !received.length ? '<div class="empty">Nenhum dinheiro lançado neste mês ainda.</div>' : ''}`;
+      ${!tips.length && !received.length ? '<div class="empty">Nenhum dinheiro lançado neste mês ainda.</div>' : ''}
+      ${received.length || expenses.length ? `<a class="btn" style="margin-top:1rem" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(shareText(diff, prev))}">📤 Enviar resumo do mês pelo WhatsApp</a>` : ''}`;
   };
 
   return {
@@ -2557,6 +2601,14 @@ function vFin(_, q) {
       bindQuickPay(el);
       // Filtros trocam a tela sem encher o histórico do "voltar"
       el.addEventListener('click', e => {
+        if (e.target.closest('[data-goal]')) { goalSheet(goal); return; }
+        const fx = e.target.closest('[data-fixed]');
+        if (fx) {
+          const list = fx.dataset.fixed === 'all' ? fixedTodo : fixedTodo.filter(x => x.id === fx.dataset.fixed);
+          launchFixed(m, list);
+          toast(list.length > 1 ? `${list.length} despesas lançadas ✓` : `${list[0].desc || list[0].cat || 'Despesa'} lançada ✓`);
+          render(); return;
+        }
         const a = e.target.closest('a[data-f]');
         if (!a) return;
         e.preventDefault();
@@ -2574,9 +2626,59 @@ function vFin(_, q) {
 
 // Despesa (o que saiu): aluguel, produtos, contas…
 const EXP_CATS = ['Produtos', 'Aluguel', 'Contas (luz, água, internet)', 'Material', 'Outros'];
+const FIXED_CATS = ['Aluguel', 'Contas (luz, água, internet)'];
+
+// Despesas fixas do mês anterior que ainda não foram lançadas no mês m
+function pendingFixed(m) {
+  const [y, mo] = m.split('-').map(Number);
+  const d = new Date(y, mo - 2, 1), prev = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+  const key = e => norm((e.cat || '') + '|' + (e.desc || ''));
+  const here = new Set(db.expenses.filter(e => e.date?.startsWith(m)).map(key));
+  const seen = new Set();
+  return db.expenses.filter(e => e.fixed && e.date?.startsWith(prev) && !here.has(key(e)) && !seen.has(key(e)) && seen.add(key(e)));
+}
+function launchFixed(m, list) {
+  const [y, mo] = m.split('-').map(Number);
+  const last = new Date(y, mo, 0).getDate();
+  for (const e of list) {
+    const day = Math.min(+e.date.slice(8, 10), last);
+    db.expenses.push({ id: uid(), createdAt: Date.now(), amount: e.amount, cat: e.cat, desc: e.desc, date: `${m}-${pad(day)}`, fixed: true });
+  }
+  save();
+}
+
+// Meta do mês (fica no servidor, vale para todos os aparelhos)
+function goalSheet(current) {
+  const bg = document.createElement('div');
+  bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet form" role="dialog" aria-modal="true">
+    <h2>🎯 Meta do mês</h2>
+    <p class="muted" style="margin-top:-.3rem">Quanto você quer que entre por mês? A página mostra quanto falta.</p>
+    <div class="field"><div class="money"><input type="text" id="gs-v" inputmode="decimal" placeholder="0,00" value="${moneyVal(current || '')}"></div></div>
+    <div id="gs-err"></div>
+    <button class="btn main" id="gs-ok">✓ Salvar meta</button>
+    ${current ? '<button class="btn" id="gs-off" style="margin-top:.6rem">Tirar a meta</button>' : ''}
+    <button class="btn" id="gs-no" style="margin-top:.6rem">Cancelar</button>
+  </div>`;
+  document.body.appendChild(bg);
+  const close = () => bg.remove();
+  const saveGoal = async goal => {
+    try { cacheSalon(await api('PUT', '/api/settings', { finance: { goal } })); close(); toast(goal ? 'Meta salva ✓' : 'Meta retirada'); render(); }
+    catch (e) { $('#gs-err', bg).innerHTML = `<div class="error">${esc(e.message || 'Sem internet. Tente de novo.')}</div>`; }
+  };
+  bg.onclick = e => { if (e.target === bg) close(); };
+  $('#gs-no', bg).onclick = close;
+  $('#gs-off', bg) && ($('#gs-off', bg).onclick = () => saveGoal(0));
+  $('#gs-ok', bg).onclick = () => {
+    const v = parseMoney($('#gs-v', bg).value);
+    if (!(v > 0)) { $('#gs-err', bg).innerHTML = '<div class="error">Escreva a meta. Exemplo: 5.000,00</div>'; return; }
+    saveGoal(v);
+  };
+  $('#gs-v', bg).focus();
+}
 function vExpenseForm(_, q) {
   const e = q.id ? db.expenses.find(x => x.id === q.id) : null;
-  let cat = e?.cat || '';
+  let cat = e?.cat || '', fixed = !!e?.fixed;
   return {
     title: e ? 'Despesa' : 'Lançar despesa', tab: 'financeiro', back: true,
     html: `
@@ -2589,22 +2691,27 @@ function vExpenseForm(_, q) {
         <div class="field"><label for="d">Descrição <span class="opt">(se quiser)</span></label>
           <input type="text" id="d" value="${esc(e?.desc || '')}" placeholder="Ex.: Tinta de cabelo, conta de luz…" autocapitalize="sentences"></div>
         <div class="field"><label for="dt">Dia</label><input type="date" id="dt" value="${e?.date || today()}"></div>
+        <div class="field"><span class="lbl">📌 Se repete todo mês? <span class="opt">(aluguel, luz, internet…)</span></span>
+          ${toggle2('fixed', fixed, '✓ Sim, todo mês', 'Não')}
+          <small class="muted">As fixas aparecem no mês seguinte para lançar com um toque.</small></div>
         <button class="btn main" type="submit">✓ Salvar</button>
         ${e ? '<button class="btn danger" type="button" id="del" style="margin-top:2rem">🗑️ Apagar despesa</button>' : ''}
       </form>`,
     bind(el) {
       if (!e) $('#v', el).focus();
+      bindToggle2($('#fixed', el), v => { fixed = v; });
       $('#cats', el).onclick = ev => {
         const b = ev.target.closest('[data-c]');
         if (!b) return;
         cat = cat === b.dataset.c ? '' : b.dataset.c;
         el.querySelectorAll('#cats .chip').forEach(x => x.classList.toggle('on', x.dataset.c === cat));
+        if (!e && FIXED_CATS.includes(cat) && !fixed) $('#fixed .yes', el).click(); // aluguel e contas costumam repetir
       };
       $('#f', el).addEventListener('submit', ev => {
         ev.preventDefault();
         const amount = parseMoney($('#v', el).value);
         if (!(amount > 0)) { $('#err', el).innerHTML = '<div class="error">Escreva o valor. Exemplo: 120,00</div>'; return; }
-        const data = { amount, cat, desc: $('#d', el).value.trim(), date: $('#dt', el).value || today() };
+        const data = { amount, cat, desc: $('#d', el).value.trim(), date: $('#dt', el).value || today(), fixed };
         if (e) Object.assign(e, data); else db.expenses.push({ id: uid(), createdAt: Date.now(), ...data });
         save(); toast('Despesa salva ✓'); back('#/financeiro');
       });
@@ -3648,7 +3755,7 @@ function showLogin(mode = 'entrar') {
 // Horário de atendimento (dias, almoço) guardado no celular: a agenda usa para mostrar os horários livres
 const salonKey = () => `mf.salon.${session.tenant.id}`;
 const salonHours = () => readLS(salonKey());
-function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50 }); } catch { /* ok */ } }
+function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50, goal: S.finance?.goal || 0 }); } catch { /* ok */ } }
 function refreshSalon() { api('GET', '/api/settings').then(S => { cacheSalon(S); if (!$('#app form') && parseHash().parts[0] === 'agenda') render(); }).catch(() => {}); }
 
 function refreshPush() {

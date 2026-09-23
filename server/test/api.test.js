@@ -115,3 +115,14 @@ test('minha conta: nome do salão, nome e senha', async () => {
   assert.equal((await client(app)('POST', '/api/login', { email: 'ana@exemplo.com', password: 'nova123' })).status, 200);
   await app.close();
 });
+
+test('meta do mês fica nas configurações do salão', async () => {
+  const app = buildApp();
+  const call = client(app);
+  await signup(call);
+  assert.equal((await call('GET', '/api/settings')).body.finance.goal, 0);
+  assert.equal((await call('PUT', '/api/settings', { finance: { goal: 5000.5 } })).body.finance.goal, 5000.5);
+  assert.equal((await call('PUT', '/api/settings', { finance: { goal: -1 } })).status, 400);
+  assert.equal((await call('GET', '/api/settings')).body.finance.goal, 5000.5);
+  await app.close();
+});

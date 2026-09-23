@@ -37,6 +37,9 @@ export const DEFAULTS = {
       decline: 'Olá, {nome}. Infelizmente não conseguimos atender {dia} às {hora} no *{salao}*. 😕\nEscolha outro horário aqui: {link}',
     },
   },
+  finance: {
+    goal: 0,                // meta de entradas do mês (R$; 0 = sem meta)
+  },
 };
 
 function merge(base, over) {
@@ -114,6 +117,13 @@ export function updateSettings(current, input) {
         if (w.templates[k] !== undefined) s.whatsapp.templates[k] = text(w.templates[k], 1000).trim() || DEFAULTS.whatsapp.templates[k];
       }
     }
+  }
+
+  const f = input.finance;
+  if (isObj(f) && f.goal !== undefined) {
+    const g = Number(f.goal);
+    if (!Number.isFinite(g) || g < 0 || g > 10_000_000) fail(400, 'Meta inválida.');
+    s.finance.goal = Math.round(g * 100) / 100;
   }
   return s;
 }
