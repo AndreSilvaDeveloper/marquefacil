@@ -426,3 +426,6 @@ details.more summary small { display: block; font-weight: 400; color: var(--mute
 .note.empty-note { background: #fff; border-left-color: var(--line); }
 .jump { margin: .4rem 0 .2rem; }
 .actions3 { grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
+
+#update-bar { position: fixed; left: 1rem; right: 1rem; top: calc(4rem + env(safe-area-inset-top)); z-index: 70; border: 0; border-radius: 14px;
+  background: var(--ok); color: #fff; font: inherit; font-weight: 800; padding: .9rem; box-shadow: 0 6px 18px rgba(0,0,0,.2); cursor: pointer; }

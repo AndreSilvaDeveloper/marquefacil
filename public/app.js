@@ -3215,7 +3215,26 @@ if (session) {
 // Pede ao navegador para não apagar os dados sozinho
 navigator.storage?.persist?.();
 // Funciona sem internet depois de aberto uma vez
-if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+// Versão nova do app: confere de tempos em tempos e se atualiza sozinho
+// (no meio de um formulário, mostra um aviso para não perder o que ela está digitando)
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    const check = () => reg.update().catch(() => {});
+    setInterval(check, 10 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+  }).catch(() => {});
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; } // primeira instalação: nada a fazer
+    if (!$('#app form')) { location.reload(); return; }
+    if ($('#update-bar')) return;
+    const bar = document.createElement('button');
+    bar.id = 'update-bar';
+    bar.textContent = '✨ Versão nova do app — toque para atualizar';
+    bar.onclick = () => location.reload();
+    document.body.appendChild(bar);
+  });
+}
 // Atualiza a tela quando volta para o app (ex.: horário "passou")
 document.addEventListener('visibilitychange', () => {
   if (document.hidden || !session) return;
