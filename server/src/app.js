@@ -2,6 +2,9 @@ import Fastify from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { brandFor, brandHtml, manifestFor } from './brands.js';
 import { openDb, applyChanges, changesSince, COLLECTIONS } from './db.js';
 import { hashPassword, checkPassword, newToken, hashToken, newId, rateLimiter } from './auth.js';
 import { fail, norm, isObj } from './util.js';
@@ -288,15 +291,26 @@ export function buildApp({
 
   if (publicDir) {
     // Link de agendamento do salão. Arquivos (app.js, style.css…) também caem aqui.
+    // Páginas com a marca do domínio (nome, cores, ícones)
+    const pages = new Map();
+    const page = (file, brand) => {
+      if (!pages.has(file)) pages.set(file, fs.readFileSync(path.join(publicDir, file), 'utf8'));
+      return brandHtml(pages.get(file), brand);
+    };
+    const html = (reply, file, brand) => reply.header('Cache-Control', 'no-cache').type('text/html; charset=utf-8').send(page(file, brand));
+
+    // Link de agendamento do salão. Arquivos (app.js, style.css…) também caem aqui.
     app.get('/:slug', async (req, reply) => {
       const slug = req.params.slug;
-      if (!slug) return reply.header('Cache-Control', 'no-cache').sendFile('index.html');
+      const brand = brandFor(req.hostname);
+      if (!slug || slug === 'index.html') return html(reply, 'index.html', brand);
+      if (slug === 'manifest.json') return reply.header('Cache-Control', 'no-cache').type('application/manifest+json').send(manifestFor(brand));
+      if (brand.files?.[slug]) return reply.header('Cache-Control', 'no-cache').sendFile(brand.files[slug]);
       if (slug.includes('.')) return reply.sendFile(slug);
       if (!/^[a-z0-9-]{1,50}$/.test(slug) || !db.prepare('SELECT 1 FROM tenants WHERE slug = ?').get(slug)) {
         return reply.code(404).type('text/html').send('<meta charset="utf-8"><p style="font:18px system-ui;padding:2rem">Link não encontrado.</p>');
       }
-      reply.header('Cache-Control', 'no-cache');
-      return reply.sendFile('agendar.html');
+      return html(reply, 'agendar.html', brand);
     });
   }
 

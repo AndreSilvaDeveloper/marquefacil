@@ -2,6 +2,13 @@
 
 /* Página pública: a cliente escolhe serviço, dia e horário e deixa nome e WhatsApp. */
 
+// Marca do domínio (o servidor coloca window.BRAND no HTML)
+const BRAND = window.BRAND || {};
+if (BRAND.colors) {
+  const r = document.documentElement.style;
+  for (const [k, v] of Object.entries({ '--brand': BRAND.colors.brand, '--brand-soft': BRAND.colors.brandSoft, '--header': BRAND.colors.header, '--bg': BRAND.colors.bg, '--line': BRAND.colors.line })) if (v) r.setProperty(k, v);
+}
+
 const slug = location.pathname.split('/').filter(Boolean)[0] || '';
 const API = `/api/public/${encodeURIComponent(slug)}`;
 const $ = (s, el = document) => el.querySelector(s);
@@ -178,7 +185,8 @@ async function start() {
     return;
   }
   document.title = `Agendar — ${st.info.name}`;
-  $('#title').textContent = st.info.name;
+  if (BRAND.logo) $('#top').innerHTML = `<img class="top-logo" src="${esc(BRAND.logo)}" alt="${esc(st.info.name)}">`;
+  else $('#title').textContent = st.info.name;
   if (!st.info.enabled) {
     $('#app').innerHTML = '<div class="empty">Os agendamentos pela internet estão fechados no momento.<br>Fale com o salão pelo WhatsApp. 💬</div>';
     return;

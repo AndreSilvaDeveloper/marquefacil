@@ -1,6 +1,6 @@
 {
-  "name": "Minha Agenda",
-  "short_name": "Agenda",
+  "name": "Marque Fácil",
+  "short_name": "Marque Fácil",
   "description": "Agenda, clientes e financeiro do salão",
   "lang": "pt-BR",
   "start_url": "./#/agenda",

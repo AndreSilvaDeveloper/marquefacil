@@ -1,9 +1,23 @@
 'use strict';
 
 /* =====================================================================
-   Minha Agenda — app simples para salão de beleza.
+   Marque Fácil — app simples para salão de beleza.
    Tudo fica salvo no próprio aparelho (localStorage).
    ===================================================================== */
+
+// Marca do domínio (o servidor coloca window.BRAND no HTML)
+const BRAND = window.BRAND || { name: 'Marque Fácil', logo: null, colors: null };
+(function applyBrand() {
+  const c = BRAND.colors;
+  if (!c) return;
+  const r = document.documentElement.style;
+  if (c.brand) r.setProperty('--brand', c.brand);
+  if (c.brandSoft) r.setProperty('--brand-soft', c.brandSoft);
+  if (c.header) r.setProperty('--header', c.header);
+  if (c.bg) r.setProperty('--bg', c.bg);
+  if (c.line) r.setProperty('--line', c.line);
+  document.body.classList.add('branded');
+})();
 
 const OLD_KEY = 'agendaSalao.v1'; // dados da versão antiga (só no celular)
 const COLLS = ['clients', 'services', 'products', 'appts', 'sales'];
@@ -268,7 +282,7 @@ function render() {
   const { parts, q } = parseHash();
   const view = routes[parts[0]] || vAgenda;
   const v = view(parts[1], q) || {};
-  $('#title').textContent = v.title || 'Minha Agenda';
+  $('#title').textContent = v.title || BRAND.name;
   $('#btn-back').hidden = !v.back;
   // Troca o <main> por um novo, para não acumular eventos da tela anterior
   const main = $('#app').cloneNode(false);
@@ -1633,13 +1647,15 @@ async function resetFromServer() {
 /* ---------------------------- entrar / criar conta ---------------------------- */
 function showLogin(mode = 'entrar') {
   document.body.classList.add('logged-out');
-  $('#title').textContent = 'Marque Fácil';
+  $('#title').textContent = BRAND.name;
   $('#btn-back').hidden = true;
   const signup = mode === 'criar';
   const main = $('#app').cloneNode(false);
   main.innerHTML = `
     <div class="login">
-      <img src="icon.svg" alt="" width="72" height="72">
+      ${BRAND.logo
+        ? `<div class="brand-wrap"><img class="brand-logo" src="${esc(BRAND.logo)}" alt="${esc(BRAND.name)}"></div>`
+        : '<img src="icon.svg" alt="" width="72" height="72">'}
       <h2>${signup ? 'Criar conta do salão' : 'Entrar'}</h2>
       <form class="form" id="f" novalidate>
         <div id="err"></div>

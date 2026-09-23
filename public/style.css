@@ -12,6 +12,7 @@
   --warn-soft: #fff0dc;
   --bad: #b3261e;
   --bad-soft: #fde7e5;
+  --header: var(--brand);
   --radius: 16px;
   font-size: 18px;
 }
@@ -34,7 +35,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 #top {
   position: sticky; top: 0; z-index: 10;
   display: flex; align-items: center; gap: .5rem;
-  background: var(--brand); color: #fff;
+  background: var(--header); color: #fff;
   padding: calc(.7rem + env(safe-area-inset-top)) 1rem .7rem;
   min-height: 3.4rem;
 }
@@ -259,3 +260,9 @@ details summary::-webkit-details-marker { display: none; }
 .appt.pendente { border: 2px dashed var(--warn); }
 .pending-banner { display: block; background: var(--warn-soft); border: 2px solid var(--warn); color: var(--warn); margin-bottom: 1rem; text-decoration: none; }
 .push-card { margin-bottom: 1rem; }
+
+/* ---------- Marca do domínio (ex.: Studio Kadosh) ---------- */
+.brand-logo { display: block; max-width: min(280px, 80%); height: auto; margin: 0 auto; }
+.login .brand-logo { margin-bottom: .4rem; }
+.branded .login .brand-wrap { background: var(--header); border-radius: 20px; padding: 1.2rem 1rem; margin-bottom: .5rem; }
+#top .top-logo { height: 38px; width: auto; display: block; }

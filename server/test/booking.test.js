@@ -278,3 +278,34 @@ test('páginas: app na raiz, link do salão, arquivos e link inexistente', async
   assert.equal((await get('/nao-existe')).status, 404);
   await app.close();
 });
+
+test('marca por domínio: Studio Kadosh x Marque Fácil', async () => {
+  const publicDir = new URL('../../public/', import.meta.url).pathname;
+  const app = buildApp({ publicDir });
+  await salon(app);
+  const get = async (url, host) => { const r = await app.inject({ method: 'GET', url, headers: { host } }); return { status: r.statusCode, body: r.body, type: r.headers['content-type'] }; };
+
+  const k = await get('/', 'studiokadosh.com');
+  assert.match(k.body, /<title>Studio Kadosh<\/title>/);
+  assert.match(k.body, /window\.BRAND = \{"name":"Studio Kadosh"/);
+  assert.match(k.body, /\/brands\/kadosh\/logo\.png/);
+  assert.match((await get('/', 'www.studiokadosh.com')).body, /Studio Kadosh/, 'www também');
+
+  const m = await get('/', 'maquefacil.com.br');
+  assert.match(m.body, /<title>Marque Fácil<\/title>/);
+  assert.doesNotMatch(m.body, /Kadosh/);
+
+  const mk = JSON.parse((await get('/manifest.json', 'studiokadosh.com')).body);
+  assert.equal(mk.name, 'Studio Kadosh');
+  assert.equal(JSON.parse((await get('/manifest.json', 'maquefacil.com.br')).body).name, 'Marque Fácil');
+
+  const iconK = await get('/icon-192.png', 'studiokadosh.com');
+  const iconM = await get('/icon-192.png', 'maquefacil.com.br');
+  assert.equal(iconK.status, 200);
+  assert.notEqual(iconK.body.length, iconM.body.length, 'ícone diferente em cada domínio');
+  assert.equal((await get('/brands/kadosh/logo.png', 'studiokadosh.com')).status, 200);
+
+  const link = await get('/studio-ana', 'studiokadosh.com');
+  assert.match(link.body, /window\.BRAND = \{"name":"Studio Kadosh"/, 'página das clientes também com a marca');
+  await app.close();
+});
