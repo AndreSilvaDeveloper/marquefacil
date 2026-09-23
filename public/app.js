@@ -698,6 +698,16 @@ function vAgenda(_, q) {
 /* =====================================================================
    NOVO AGENDAMENTO / EDITAR
    ===================================================================== */
+// "25/09/2026", "25/09/26" ou "25/09" (ano atual) -> "2026-09-25" (ou null se inválido)
+function parseDateBR(v) {
+  const m = String(v || '').match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?$/);
+  if (!m) return null;
+  const y = m[3] ? (m[3].length === 2 ? 2000 + +m[3] : +m[3]) : +today().slice(0, 4);
+  const d = new Date(y, +m[2] - 1, +m[1]);
+  if (d.getFullYear() !== y || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[1]) return null;
+  return dstr(d);
+}
+
 // Aceita "12:10", "1210", "930", "9", "12h10" -> "12:10" (ou null se inválido)
 function parseTime(v) {
   const d = String(v || '').replace(/\D/g, '');
@@ -720,21 +730,6 @@ function busyList(date, exceptId) {
     `<b>${a.time}${a.duration ? '–' + hhmm(apptEnd(a)) : ''}</b> ${esc(clientName(a.clientId))}`).join(' · ')}</small>`;
 }
 
-// Horários livres de um dia para um serviço de `duration` minutos (usa o horário de atendimento guardado)
-function freeStarts(date, duration, exceptId, step = 30) {
-  const hours = salonHours();
-  const open = hours?.days?.[toDate(date).getDay()];
-  if (!open || date < today()) return [];
-  const busy = db.appts.filter(a => a.date === date && a.status !== 'cancelado' && a.id !== exceptId).map(a => [mins(a.time), apptEnd(a)]);
-  if (hours.lunch) busy.push([mins(hours.lunch[0]), mins(hours.lunch[1])]);
-  const earliest = date === today() ? Math.ceil((nowMins() + 1) / step) * step : 0;
-  const out = [];
-  for (let t = mins(open[0]); t + duration <= mins(open[1]); t += step) {
-    if (t < earliest) continue;
-    if (!busy.some(([a, b]) => t < b && a < t + duration)) out.push(hhmm(t));
-  }
-  return out;
-}
 // Clientes usadas por último (para um toque)
 function recentClients(n = 6) {
   const seen = new Set(), out = [];
@@ -806,8 +801,6 @@ function vApptForm(_, q) {
           <label for="f-client">Nome da cliente <em>*</em></label>
           <div class="ac"><input type="text" id="f-client" value="${esc(cName)}" placeholder="Digite o nome" autocapitalize="words"><div class="sug" hidden></div></div>
           <small id="h-client" class="hint"></small>
-          ${!cName && recentClients().length ? `<div class="chips mini" id="recent" style="margin-top:.5rem"><span class="muted">Recentes:</span>
-            ${recentClients().map(c => `<button type="button" class="chip" data-cid="${c.id}">${esc(c.name.split(' ').slice(0, 2).join(' '))}</button>`).join('')}</div>` : ''}
           <div id="c-info"></div>
         </div>
 
@@ -817,19 +810,17 @@ function vApptForm(_, q) {
         </div>
 
         <div class="field">
-          <span class="lbl">Dia <em>*</em></span>
-          <div class="daychips" id="days">
-            ${Array.from({ length: 7 }, (_, i) => addDays(today(), i)).map((d, i) => `<button type="button" data-day="${d}">
-              <small>${i === 0 ? 'Hoje' : i === 1 ? 'Amanhã' : fmtDate(d, { weekday: 'short' }).replace('.', '')}</small><b>${toDate(d).getDate()}</b></button>`).join('')}
-            <label class="other-day"><small>Outro</small><b>📆</b><input type="date" id="f-date" value="${a.date}"></label>
+          <label for="f-dtext">Dia <em>*</em></label>
+          <div class="datefield">
+            <input type="text" id="f-dtext" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" value="${a.date ? fmtShort(a.date) : ''}" style="font-size:1.2rem;font-weight:700">
+            <label class="btn calbtn" aria-label="Abrir calendário">📆<input type="date" id="f-date" value="${a.date}"></label>
           </div>
           <small class="hint" id="date-label"></small>
         </div>
 
         <div class="field">
           <label for="f-time">Horário <em>*</em></label>
-          <div id="free"></div>
-          <input type="text" id="f-time" inputmode="numeric" maxlength="5" value="${a.time}" placeholder="Ou digite: 12:10" style="font-size:1.3rem;font-weight:700;max-width:12rem">
+          <input type="text" id="f-time" inputmode="numeric" maxlength="5" value="${a.time}" placeholder="Ex.: 12:10" style="font-size:1.3rem;font-weight:700;max-width:12rem">
           <div id="busy">${busyList(a.date, a.id)}</div>
           <div id="conflict"></div>
         </div>
@@ -933,22 +924,14 @@ function vApptForm(_, q) {
         if (iService.value.trim()) parts.push(esc(iService.value.trim()));
         $('#sum', el).innerHTML = parts.join(' · ');
       };
-      // Horários livres do dia (botões)
-      const paintFree = () => {
-        const list = iDate.value ? freeStarts(iDate.value, dur || 30, a.id) : [];
-        const cur = parseTime(iTime.value);
-        iTime.placeholder = list.length ? 'Ou digite: 12:10' : 'Ex.: 12:10';
-        $('#free', el).innerHTML = list.length ? `<div class="chips mini" style="margin-bottom:.5rem"><span class="muted">Livres:</span>
-          ${list.slice(0, 16).map(t => `<button type="button" class="chip ${t === cur ? 'on' : ''}" data-t="${t}">${t}</button>`).join('')}</div>`
-          : (salonHours()?.days && iDate.value >= today() && !salonHours().days[toDate(iDate.value).getDay()] ? '<small class="hint">Dia fechado no seu horário de atendimento (pode agendar mesmo assim).</small>' : '');
-      };
+      const iDText = $('#f-dtext', el);
       const paintDay = () => {
-        el.querySelectorAll('#days [data-day]').forEach(b => b.classList.toggle('on', b.dataset.day === iDate.value));
-        const inWeek = [...el.querySelectorAll('#days [data-day]')].some(b => b.dataset.day === iDate.value);
-        $('.other-day', el).classList.toggle('on', !inWeek && !!iDate.value);
-        $('#date-label', el).textContent = iDate.value ? cap(fmtDate(iDate.value, { weekday: 'long', day: 'numeric', month: 'long' })) : '';
+        const v = iDate.value;
+        const closed = v && salonHours()?.days && v >= today() && !salonHours().days[toDate(v).getDay()];
+        $('#date-label', el).textContent = v ? cap(fmtDate(v, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))
+          + (v === today() ? ' (hoje)' : v === addDays(today(), 1) ? ' (amanhã)' : '') + (closed ? ' · dia fechado no seu horário (pode agendar mesmo assim)' : '') : '';
       };
-      const refreshTimes = () => { $('#busy', el).innerHTML = busyList(iDate.value, a.id); checkConflict(); paintRep(); paintFree(); paintDay(); paintSum(); };
+      const refreshTimes = () => { $('#busy', el).innerHTML = busyList(iDate.value, a.id); checkConflict(); paintRep(); paintDay(); paintSum(); };
 
       // Repetição: datas que vão ser marcadas
       let every = '';
@@ -984,7 +967,7 @@ function vApptForm(_, q) {
 
       // Serviço já conhecido: completa tempo e valor (sem apagar o que ela já escreveu)
       const fillFromService = s => {
-        if (s?.duration && !dur) { dur = s.duration; paintDur(); checkConflict(); paintFree(); }
+        if (s?.duration && !dur) { dur = s.duration; paintDur(); checkConflict(); }
         paintSum();
       };
       const onService = () => {
@@ -1013,20 +996,22 @@ function vApptForm(_, q) {
         const c = e.target.closest('.chip[data-m]');
         if (!c) return;
         dur = dur === +c.dataset.m ? null : +c.dataset.m;
-        paintDur(); checkConflict(); paintFree(); paintSum();
+        paintDur(); checkConflict(); paintSum();
       });
-      iDur.addEventListener('input', () => { const n = parseInt(iDur.value, 10); dur = n > 0 ? n : null; paintDur(); checkConflict(); paintFree(); paintSum(); });
+      iDur.addEventListener('input', () => { const n = parseInt(iDur.value, 10); dur = n > 0 ? n : null; paintDur(); checkConflict(); paintSum(); });
 
-      $$('[data-day]', el).forEach(b => b.onclick = () => { iDate.value = b.dataset.day; refreshTimes(); });
-      iDate.addEventListener('change', refreshTimes);
-      maskTime(iTime);
-      iTime.addEventListener('input', () => { checkConflict(); paintFree(); paintSum(); });
-      $('#free', el).addEventListener('click', e => {
-        const b = e.target.closest('[data-t]');
-        if (!b) return;
-        iTime.value = b.dataset.t;
-        checkConflict(); paintFree(); paintSum();
+      // Data digitada (dd/mm/aaaa, dd/mm ou dd/mm/aa) ou escolhida no calendário
+      iDText.addEventListener('input', () => {
+        const dg = iDText.value.replace(/\D/g, '').slice(0, 8);
+        iDText.value = dg.length > 4 ? `${dg.slice(0, 2)}/${dg.slice(2, 4)}/${dg.slice(4)}` : dg.length > 2 ? `${dg.slice(0, 2)}/${dg.slice(2)}` : dg;
+        const d = parseDateBR(iDText.value);
+        if (d) { iDate.value = d; refreshTimes(); }
+        else if (dg.length >= 8) $('#date-label', el).innerHTML = '<b style="color:var(--bad)">Essa data não existe. Confira o dia e o mês.</b>';
       });
+      iDText.addEventListener('blur', () => { const d = parseDateBR(iDText.value); if (d) iDText.value = fmtShort(d); });
+      iDate.addEventListener('change', () => { if (iDate.value) iDText.value = fmtShort(iDate.value); refreshTimes(); });
+      maskTime(iTime);
+      iTime.addEventListener('input', () => { checkConflict(); paintSum(); });
       // Clientes recentes e informações da cliente
       const paintClient = () => {
         const c = findByName(db.clients, iClient.value);
@@ -1039,14 +1024,6 @@ function vApptForm(_, q) {
         bits.unshift(`<small class="hint">${line}</small>`);
         $('#c-info', el).innerHTML = bits.join('');
       };
-      $('#recent', el)?.addEventListener('click', e => {
-        const b = e.target.closest('[data-cid]');
-        const c = b && client(b.dataset.cid);
-        if (!c) return;
-        iClient.value = c.name;
-        iClient.dispatchEvent(new Event('change'));
-        $('#recent', el).remove();
-      });
       iClient.addEventListener('input', () => { paintClient(); paintSum(); });
       iClient.addEventListener('change', () => { paintClient(); paintSum(); });
       $('#svc-chips', el)?.addEventListener('click', e => {
@@ -1142,7 +1119,7 @@ function vApptForm(_, q) {
       $('#f-later', el).onclick = e => { const on = !e.currentTarget.classList.contains('on'); e.currentTarget.classList.toggle('on', on); if (on) iPrice.value = ''; };
       iPrice.addEventListener('input', () => { if (iPrice.value.trim()) $('#f-later', el).classList.remove('on'); });
 
-      paintDur(); checkConflict(); paintFree(); paintDay(); paintSum();
+      paintDur(); checkConflict(); paintDay(); paintSum();
       if (cName) iClient.dispatchEvent(new Event('change'));
       if (a.service) onService();
       if (!cName) setTimeout(() => iClient.focus(), 50);
@@ -1152,7 +1129,7 @@ function vApptForm(_, q) {
         const err = msg => { $('#err', el).innerHTML = `<div class="error">${msg}</div>`; window.scrollTo(0, 0); };
         const name = iClient.value.trim();
         if (!name) { err('Escreva o nome da cliente.'); iClient.focus(); return; }
-        if (!iDate.value) { err('Escolha o dia.'); return; }
+        if (!iDate.value || parseDateBR(iDText.value) !== iDate.value) { err('Escreva o dia. Exemplo: 25/09/2026'); iDText.focus(); return; }
         if (paid && !method && parseMoney(iPrice.value) > 0) $('details.more', el).open = true;
         const time = parseTime(iTime.value);
         if (!time) { err(iTime.value.trim() ? 'O horário não está certo. Exemplo: 12:10' : 'Escreva o horário. Exemplo: 12:10'); iTime.focus(); return; }
