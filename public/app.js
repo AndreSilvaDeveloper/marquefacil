@@ -482,6 +482,9 @@ function pkgPos(a) {
   const i = pkgAppts(p).findIndex(x => x.id === a.id);
   return i >= 0 ? { p, n: pkgBefore(p) + i + 1, total: p.total } : null;
 }
+// Serviço que é pacote: service.package = { total: 4, every: '7' | '14' | 'm' | '' }
+const EVERY_LABEL = { '7': 'toda semana', '14': 'a cada 15 dias', m: 'todo mês', '': 'sem repetir' };
+const svcPackage = name => { const sv = name && findByName(db.services, name); return sv?.package?.total > 0 ? sv.package : null; };
 const clientPackages = cid => db.packages.filter(p => p.clientId === cid).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
 const pendingAppts = () => db.appts.filter(a => a.status === 'pendente').sort(byWhen);
@@ -1025,7 +1028,18 @@ function vApptForm(_, q) {
         fillFromService(s);
       }, { showOnEmpty: true });
       iService.addEventListener('input', onService);
-      iService.addEventListener('change', () => { onService(); fillFromService(findByName(db.services, iService.value)); });
+      iService.addEventListener('change', () => { onService(); fillFromService(findByName(db.services, iService.value)); applyServicePackage(); });
+      // Serviço que é pacote: se a cliente já tem esse cronograma em andamento, usa ele; senão, já monta um novo
+      function applyServicePackage() {
+        const cfg = svcPackage(iService.value);
+        if (!cfg || edit || pkgId || newPkg) return;
+        const c = findByName(db.clients, iClient.value);
+        const going = c && clientPackages(c.id).find(p => pkgActive(p) && norm(p.service || p.name) === norm(iService.value));
+        if (going && pkgLeftToBook(going) > 0) { pkgId = going.id; toast(`📦 Continuando o ${going.name}: ${pkgBefore(going) + pkgAppts(going).length + 1}ª sessão`); }
+        else if (going) return; // já tem todas as sessões marcadas: horário avulso (ela escolhe se quiser)
+        else { newPkg = { total: cfg.total, seq: 1, preset: true }; every = cfg.every || ''; }
+        paintPkg(); paintRep(); paintSum();
+      }
 
       $('#durs', el).addEventListener('click', e => {
         const c = e.target.closest('.chip[data-m]');
@@ -1118,7 +1132,7 @@ function vApptForm(_, q) {
           <div class="chips mini" id="np-total">${[2, 3, 4, 5, 6, 8, 10].map(t => `<button type="button" class="chip ${t === n.total ? 'on' : ''}" data-t="${t}">${t}</button>`).join('')}</div>
           <span class="lbl" style="margin-top:.7rem">Este horário é a…</span>
           <div class="chips mini" id="np-seq">${Array.from({ length: n.total }, (_, i) => `<button type="button" class="chip ${i + 1 === n.seq ? 'on' : ''}" data-s="${i + 1}">${i + 1}ª</button>`).join('')}</div>
-          <small class="hint">${n.seq > 1 ? `Ela já fez ${n.seq - 1} ${n.seq - 1 === 1 ? 'sessão' : 'sessões'} antes. ` : ''}A cliente vai ver "<b>${n.seq}ª sessão de ${n.total}</b>" na confirmação e no lembrete.</small>
+          <small class="hint">${n.preset ? '✨ Pré-configurado pelo serviço — pode mudar. ' : ''}${n.seq > 1 ? `Ela já fez ${n.seq - 1} ${n.seq - 1 === 1 ? 'sessão' : 'sessões'} antes. ` : ''}A cliente vai ver "<b>${n.seq}ª sessão de ${n.total}</b>" na confirmação e no lembrete.</small>
           ${n.total - n.seq > 0 ? `<div class="chips mini" id="pkg-rep" style="margin-top:.6rem"><span class="muted">Marcar também as ${n.total - n.seq + 1} sessões:</span>
             ${[['', 'Só esta'], ['7', 'Toda semana'], ['14', 'A cada 15 dias'], ['m', 'Todo mês']].map(([r, t]) => `<button type="button" class="chip ${every === r ? 'on' : ''}" data-r="${r}">${t}</button>`).join('')}</div>
             ${every ? `<small class="hint">Vai marcar ${repDates().length} horários, de ${fmtShort(repDates()[0])} até ${fmtShort(repDates().at(-1))}.</small>` : ''}` : ''}
@@ -1152,7 +1166,7 @@ function vApptForm(_, q) {
         const r = e.target.closest('#pkg-rep [data-r]');
         if (r) { every = r.dataset.r; paintPkg(); paintRep(); }
       });
-      iClient.addEventListener('change', paintPkg);
+      iClient.addEventListener('change', () => { paintPkg(); applyServicePackage(); });
       iClient.addEventListener('input', paintPkg);
       paintPkg();
       // veio de "marcar a próxima sessão": o serviço é o do pacote
@@ -1879,7 +1893,19 @@ function vPackageForm(_, q) {
         const n = parseInt(e.target.value, 10);
         if (n > 0) { total = n; el.querySelectorAll('#counts .chip').forEach(x => x.classList.toggle('on', !x.dataset.n)); paintBefore(); }
       });
-      $('#svc-chips', el)?.addEventListener('click', e => { const b = e.target.closest('[data-svc]'); if (b) $('#pn', el).value = b.dataset.svc; });
+      $('#svc-chips', el)?.addEventListener('click', e => {
+        const b = e.target.closest('[data-svc]');
+        if (!b) return;
+        $('#pn', el).value = b.dataset.svc;
+        const cfg = svcPackage(b.dataset.svc);
+        if (cfg) {
+          total = cfg.total; $('#pt', el).value = '';
+          el.querySelectorAll('#counts .chip').forEach(x => x.classList.toggle('on', +x.dataset.n === total));
+          if (!el.querySelector(`#counts [data-n="${total}"]`)) { $('#pt', el).value = total; }
+          paintBefore();
+          toast(`📦 ${cfg.total} sessões (${EVERY_LABEL[cfg.every ?? '7']}) — do serviço`);
+        }
+      });
       $('#pv', el)?.addEventListener('input', () => { $('#pay-f', el).hidden = !(parseMoney($('#pv', el).value) > 0); });
       $('#pp', el) && bindToggle2($('#pp', el), v => { paid = v; $('#pm', el).hidden = !v; });
       $('#pm', el)?.addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (!b) return; method = b.dataset.m; el.querySelectorAll('#pm button').forEach(x => x.classList.toggle('on', x === b)); });
@@ -2777,7 +2803,8 @@ function vItems(kind) {
       <div class="list">${list.length ? list.map(it => `
         <a class="card line" href="#/item/${kind}?id=${it.id}">
           <div class="grow"><b>${esc(it.name)}</b>${K.withDur
-            ? (it.description ? `<span>${esc(it.description)}</span>` : '')
+            ? (it.package?.total ? `<span>📦 Pacote · ${it.package.total} sessões · ${EVERY_LABEL[it.package.every ?? '7']}</span>` : '')
+              + (it.description ? `<span>${esc(it.description)}</span>` : '')
             : `<span>${it.price ? brl(it.price) : 'Sem valor definido'}</span>`}</div>
           ${!K.withDur && hasStock(it) ? `<span class="badge ${lowStock(it) ? 'bad' : ''}">${stockLabel(it)}</span>` : ''}
           <span class="muted">›</span></a>`).join('') : `<div class="empty">Nenhum ${K.one} ainda.</div>`}</div>`,
@@ -2798,7 +2825,16 @@ function vItemForm(kind, q) {
         <div class="field"><label for="d">Quanto tempo costuma levar? <span class="opt">(minutos — só para reservar a agenda, a cliente não vê)</span></label>
           <input type="number" id="d" inputmode="numeric" min="5" step="5" value="${it?.duration || ''}" placeholder="Ex.: 60"></div>` : ''}
         ${K.withDur ? `<div class="field"><span class="lbl">Aparece no link de agendamento?</span>
-          ${toggle2('online', it?.online !== false, '✓ Sim', 'Não')}</div>` : ''}
+          ${toggle2('online', it?.online !== false, '✓ Sim', 'Não')}</div>
+        <div class="field"><span class="lbl">📦 É um pacote (cronograma)?</span>
+          ${toggle2('ispkg', !!it?.package?.total, '✓ Sim, várias sessões', 'Não, avulso')}
+          <div id="pkg-cfg" class="card" style="margin-top:.6rem" ${it?.package?.total ? '' : 'hidden'}>
+            <span class="lbl">Quantas sessões?</span>
+            <div class="chips mini" id="pk-total">${[2, 3, 4, 5, 6, 8, 10, 12].map(n => `<button type="button" class="chip ${n === (it?.package?.total || 4) ? 'on' : ''}" data-t="${n}">${n}</button>`).join('')}</div>
+            <span class="lbl" style="margin-top:.7rem">De quanto em quanto tempo?</span>
+            <div class="chips mini" id="pk-every">${Object.entries(EVERY_LABEL).map(([k, n]) => `<button type="button" class="chip ${k === (it?.package?.every ?? '7') ? 'on' : ''}" data-e="${k}">${cap(n)}</button>`).join('')}</div>
+            <small class="hint">Ao agendar este serviço, o cronograma já vem pronto (dá para mudar na hora).</small>
+          </div></div>` : ''}
         ${!K.withDur ? `<div class="field"><label for="p">Valor <span class="opt">(se quiser)</span></label>
           <div class="money"><input type="text" id="p" inputmode="decimal" placeholder="0,00" value="${moneyVal(it?.price)}"></div></div>` : `
         <p class="muted">💰 O valor é colocado em cada atendimento (muda conforme o serviço e a cliente).</p>`}
@@ -2815,6 +2851,11 @@ function vItemForm(kind, q) {
     bind(el) {
       if (!it) $('#n', el).focus();
       $('#online', el) && bindToggle2($('#online', el), () => {});
+      // pacote pré-configurado
+      let pk = { total: it?.package?.total || 4, every: it?.package?.every ?? '7' }, isPkg = !!it?.package?.total;
+      $('#ispkg', el) && bindToggle2($('#ispkg', el), v => { isPkg = v; $('#pkg-cfg', el).hidden = !v; });
+      $('#pk-total', el)?.addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; pk.total = +b.dataset.t; el.querySelectorAll('#pk-total .chip').forEach(x => x.classList.toggle('on', x === b)); });
+      $('#pk-every', el)?.addEventListener('click', e => { const b = e.target.closest('[data-e]'); if (!b) return; pk.every = b.dataset.e; el.querySelectorAll('#pk-every .chip').forEach(x => x.classList.toggle('on', x === b)); });
       $('#st-add', el) && ($('#st-add', el).onclick = () => {
         const n = parseInt(prompt('Quantos chegaram?', '1'), 10);
         if (n > 0) { const inp = $('#st', el); inp.value = (parseInt(inp.value, 10) || 0) + n; toast(`+${n} no estoque. Toque em Salvar.`); }
@@ -2832,6 +2873,7 @@ function vItemForm(kind, q) {
           data.online = $('#online .yes', el).classList.contains('on');
           data.description = $('#ds', el).value.trim();
           data.price = null; // valor é por atendimento
+          data.package = isPkg ? { total: pk.total, every: pk.every } : null;
         } else {
           const pv = $('#p', el).value, price = parseMoney(pv);
           if (pv.trim() && price == null) { $('#err', el).innerHTML = '<div class="error">O valor não está certo. Exemplo: 50,00</div>'; return; }
