@@ -412,3 +412,83 @@ test('lembrete livre: 1 hora antes, 30 minutos, e configuração antiga em horas
   assert.equal((await call('GET', '/api/settings')).body.whatsapp.reminderMinutes, 180);
   await app.close();
 });
+
+test('meus horários: ver, remarcar (com confirmação), recusar, cancelar, pedir link', async () => {
+  const evo = fakeEvolution();
+  const pushed = [];
+  const app = buildApp({
+    evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl },
+    publicUrl: 'https://maquefacil.com.br',
+    pushSender: async (sub, body) => { pushed.push(JSON.parse(body)); },
+  });
+  const call = await salon(app);
+  const pub = client(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  await call('POST', '/api/push/subscribe', { subscription: { endpoint: 'https://push.test/1', keys: { p256dh: 'a', auth: 'b' } } });
+  const wait = () => new Promise(r => setTimeout(r, 60));
+
+  // pede um horário: recebe o link pessoal
+  const d1 = nextWeekday(2), d2 = nextWeekday(4);
+  const b = await pub('POST', '/api/public/studio-ana/book', { date: d1, time: '10:00', serviceId: 's1', name: 'Joana Lima', phone: '(11) 98888-7777' });
+  const T = b.body.meus;
+  assert.ok(T && T.length > 20);
+  assert.equal((await pub('GET', '/api/public/studio-ana/me?t=errado')).status, 401);
+
+  const orig = (await call('GET', '/api/changes?since=0')).body.changes.find(c => c.coll === 'appts');
+  await call('POST', `/api/appts/${orig.id}/decision`, { decision: 'confirm' });
+  await wait();
+  assert.match(evo.sent.find(m => m.number === '5511988887777').text, /Ver ou remarcar: https:\/\/maquefacil\.com\.br\/studio-ana#meus=/, 'link na confirmação');
+
+  let me = (await pub('GET', `/api/public/studio-ana/me?t=${T}`)).body;
+  assert.equal(me.name, 'Joana Lima');
+  assert.equal(me.upcoming.length, 1);
+  assert.equal(me.upcoming[0].canChange, true);
+
+  // horários para remarcar: o dela não conta como ocupado
+  const slots = (await pub('GET', `/api/public/studio-ana/slots?date=${d1}&dur=60&except=${orig.id}`)).body.slots;
+  assert.ok(slots.includes('10:00') && slots.includes('10:30'));
+
+  // remarca → vira pedido; o antigo continua marcado
+  const r = await pub('POST', '/api/public/studio-ana/me/reschedule', { t: T, id: orig.id, date: d2, time: '14:00' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.pending, true);
+  assert.match(pushed.at(-1).title, /remarcar/);
+  me = (await pub('GET', `/api/public/studio-ana/me?t=${T}`)).body;
+  assert.equal(me.upcoming.length, 1, 'o pedido de troca não aparece como outro horário');
+  const oldView = me.upcoming.find(a => a.id === orig.id);
+  assert.equal(oldView.status, 'marcado');
+  assert.ok(oldView.moving, 'mostra que tem remarcação esperando');
+
+  // profissional confirma a remarcação → o antigo é cancelado sozinho
+  await call('POST', `/api/appts/${oldView.moving}/decision`, { decision: 'confirm' });
+  await wait();
+  const all = (await call('GET', '/api/changes?since=0')).body.changes.filter(c => c.coll === 'appts').map(c => c.data);
+  assert.equal(all.find(a => a.id === orig.id).status, 'cancelado');
+  assert.equal(all.find(a => a.id === oldView.moving).status, 'marcado');
+
+  // remarca de novo e a profissional recusa → continua o horário de antes, com aviso
+  const moved = oldView.moving;
+  await pub('POST', '/api/public/studio-ana/me/reschedule', { t: T, id: moved, date: d2, time: '16:00' });
+  const req2 = (await pub('GET', `/api/public/studio-ana/me?t=${T}`)).body.upcoming.find(a => a.id === moved).moving;
+  await call('POST', `/api/appts/${req2}/decision`, { decision: 'decline' });
+  await wait();
+  assert.ok(evo.sent.some(m => /Não conseguimos mudar/.test(m.text)));
+  me = (await pub('GET', `/api/public/studio-ana/me?t=${T}`)).body;
+  assert.equal(me.upcoming.find(a => a.id === moved).status, 'marcado');
+
+  // cancela → profissional avisada
+  assert.equal((await pub('POST', '/api/public/studio-ana/me/cancel', { t: T, id: moved })).status, 200);
+  assert.match(pushed.at(-1).title, /cancelado pela cliente/);
+  assert.equal((await pub('GET', `/api/public/studio-ana/me?t=${T}`)).body.upcoming.length, 0);
+
+  // pedir o link pelo telefone: chega no WhatsApp; número desconhecido não revela nada
+  const before = evo.sent.length;
+  assert.deepEqual((await pub('POST', '/api/public/studio-ana/access', { phone: '11 98888 7777' })).body, { ok: true });
+  assert.deepEqual((await pub('POST', '/api/public/studio-ana/access', { phone: '11 90000 1111' })).body, { ok: true });
+  await wait();
+  const sentNow = evo.sent.slice(before);
+  assert.equal(sentNow.length, 1);
+  assert.match(sentNow[0].text, /#meus=/);
+  await app.close();
+});

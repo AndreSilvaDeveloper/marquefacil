@@ -203,7 +203,7 @@ function logoutLocal() {
 }
 
 const client = id => db.clients.find(c => c.id === id);
-const clientName = id => client(id)?.name || '(cliente apagada)';
+const clientName = id => (id ? client(id)?.name || '(cliente apagada)' : '🧍 Balcão'); // venda sem cliente = balcão
 const byName = (a, b) => a.name.localeCompare(b.name, 'pt-BR');
 const byWhen = (a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || ''));
 
@@ -341,7 +341,7 @@ function parseHash() {
 
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
-  agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: vSaleForm, financeiro: vFin, mais: vMore,
+  agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: (id, q) => (q.id ? vSaleForm(id, q) : vSell(id, q)), financeiro: vFin, mais: vMore,
   itens: vItems, item: vItemForm, link: vLink, whatsapp: vWhats, conta: vConta,
 };
 
@@ -377,7 +377,11 @@ function badgesFor(a) {
   const b = [];
   if (a.status === 'pendente') b.push('<span class="badge warn">⏳ Aguardando você confirmar</span>');
   if (a.serviceCustom && a.status === 'pendente') b.push('<span class="badge">✏️ Serviço escrito pela cliente</span>');
-  if (a.status === 'cancelado') b.push('<span class="badge bad">Cancelado</span>');
+  if (a.replaces && a.status === 'pendente') {
+    const old = db.appts.find(x => x.id === a.replaces);
+    b.push(`<span class="badge warn">🔁 Quer remarcar${old ? ` (era ${fmtShort(old.date).slice(0, 5)} ${old.time})` : ''}</span>`);
+  }
+  if (a.status === 'cancelado') b.push(`<span class="badge bad">${a.cancelledBy === 'cliente' ? 'Cancelado pela cliente' : a.cancelledBy === 'remarcado' ? '🔁 Remarcado' : 'Cancelado'}</span>`);
   else if (a.status === 'feito') b.push('<span class="badge ok">✓ Feito</span>');
   if (a.status !== 'cancelado') {
     if (a.status !== 'pendente') b.push(payBadge(a, apptDue(a) ? 'Não pago' : 'A pagar'));
@@ -479,6 +483,7 @@ function confirmSheet(a, onDone) {
   bg.innerHTML = `<div class="sheet form" role="dialog" aria-modal="true">
     <h2>✓ Confirmar pedido</h2>
     <p class="muted" style="margin-top:-.3rem">${esc(clientName(a.clientId))} — ${esc(a.service || 'Serviço')}<br>${esc(dayName(a.date))}, ${fmtShort(a.date)} às ${a.time}</p>
+    ${a.replaces && db.appts.find(x => x.id === a.replaces) ? `<p class="summary">🔁 Remarcação: o horário de ${fmtShort(db.appts.find(x => x.id === a.replaces).date)} às ${db.appts.find(x => x.id === a.replaces).time} será cancelado.</p>` : ''}
     <div class="field"><label for="cs-v">Valor deste atendimento <span class="opt">(se quiser)</span></label>
       <div class="money"><input type="text" id="cs-v" inputmode="decimal" placeholder="0,00" value="${moneyVal(a.price)}"></div></div>
     <button type="button" class="chip ${later ? 'on' : ''}" id="cs-later" style="width:100%">🔎 Avaliar o valor na hora do atendimento</button>
@@ -1708,6 +1713,187 @@ function vClientForm(_, q) {
 /* =====================================================================
    VENDA DE PRODUTO
    ===================================================================== */
+/* =====================================================================
+   VENDER (carrinho: vários produtos numa venda só)
+   ===================================================================== */
+function vSell(_, q) {
+  const fromAppt = q.a ? db.appts.find(x => x.id === q.a) : null;
+  const startClient = fromAppt?.clientId || q.c || '';
+  const cart = [];          // { name, qty, price }
+  let counter = !startClient && q.balcao === '1';
+  let method = '';          // pix | dinheiro | cartao | depois
+  const topProducts = () => {
+    const sold = {};
+    for (const x of db.sales) sold[norm(x.product)] = (sold[norm(x.product)] || 0) + (x.qty || 1);
+    return [...db.products].sort((a, b) => (sold[norm(b.name)] || 0) - (sold[norm(a.name)] || 0) || byName(a, b)).slice(0, 12);
+  };
+  return {
+    title: 'Vender', tab: 'clientes', back: true,
+    html: `
+      <form class="form" id="f" autocomplete="off" novalidate>
+        <div id="err"></div>
+        ${fromAppt ? `<div class="summary">🛍️ Junto com o atendimento de ${esc(dayName(fromAppt.date).toLowerCase())}, ${fmtShort(fromAppt.date)} às ${fromAppt.time}${fromAppt.service ? ' — ' + esc(fromAppt.service) : ''}</div>` : ''}
+
+        <div class="field">
+          <span class="lbl">Para quem?</span>
+          <div id="who">
+            <div class="ac"><input type="text" id="f-client" value="${esc(startClient ? clientName(startClient) : '')}" placeholder="Nome da cliente" autocapitalize="words"><div class="sug" hidden></div></div>
+            <small id="h-client" class="hint"></small>
+            <div class="chips mini" style="margin-top:.5rem">
+              ${!startClient ? recentClients(5).map(c => `<button type="button" class="chip" data-cid="${c.id}">${esc(c.name.split(' ').slice(0, 2).join(' '))}</button>`).join('') : ''}
+              ${fromAppt ? '' : '<button type="button" class="chip" id="counter">🧍 Balcão (sem nome)</button>'}
+            </div>
+            <input type="tel" id="f-phone" value="${esc(client(startClient)?.phone || '')}" placeholder="Telefone (se quiser)" style="margin-top:.5rem">
+          </div>
+          <div id="who-counter" hidden><div class="card line"><b class="grow">🧍 Venda de balcão</b><button type="button" class="btn small" id="uncounter">Trocar</button></div></div>
+        </div>
+
+        <div class="field">
+          <span class="lbl">O que vendeu?</span>
+          ${topProducts().length ? `<div class="prodgrid" id="prods">${topProducts().map(p => `<button type="button" data-p="${esc(p.name)}">
+            <b>${esc(p.name)}</b><small>${p.price ? brl(p.price) : 'sem preço'}${hasStock(p) ? ` · ${p.stock <= 0 ? '⚠️ sem estoque' : `tem ${p.stock}`}` : ''}</small></button>`).join('')}</div>` : ''}
+          <div class="row" style="margin-top:.5rem;align-items:flex-start">
+            <div class="ac" style="flex:2"><input type="text" id="f-prod" placeholder="${db.products.length ? 'Outro produto…' : 'Nome do produto'}" autocapitalize="sentences"><div class="sug" hidden></div></div>
+            <button type="button" class="btn small main" id="add" style="flex:0 0 auto;min-height:3.2rem">+ Pôr</button>
+          </div>
+        </div>
+
+        <div id="cart"></div>
+
+        <div class="field">
+          <span class="lbl">Como pagou?</span>
+          <div class="paygrid four" id="pay">
+            ${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}">${n}</button>`).join('')}
+            <button type="button" data-m="depois">Vai pagar depois</button>
+          </div>
+        </div>
+
+        <details class="more"><summary>➕ Mais detalhes <small>dia da venda</small></summary>
+          <div class="field"><label for="f-date">Dia da venda</label><input type="date" id="f-date" value="${fromAppt?.date || today()}"></div>
+        </details>
+
+        <div class="savebar">
+          <div class="sum" id="sum"></div>
+          <button class="btn main" id="save" type="submit">✓ Lançar venda</button>
+        </div>
+      </form>`,
+    bind(el) {
+      const iClient = $('#f-client', el), iProd = $('#f-prod', el);
+      suggest(iClient, clientItems, () => {});
+      bindClientPhone(el, iClient, $('#f-phone', el));
+      suggest(iProd, productItems, it => { addItem(it.label); iProd.value = ''; }, { showOnEmpty: false });
+
+      const setCounter = on => {
+        counter = on;
+        $('#who', el).hidden = on;
+        $('#who-counter', el).hidden = !on;
+        paint();
+      };
+      $('#counter', el)?.addEventListener('click', () => setCounter(true));
+      $('#uncounter', el)?.addEventListener('click', () => setCounter(false));
+      el.querySelectorAll('[data-cid]').forEach(b => b.onclick = () => {
+        iClient.value = client(b.dataset.cid).name;
+        iClient.dispatchEvent(new Event('change'));
+        paint();
+      });
+
+      function addItem(name) {
+        name = name.trim();
+        if (!name) return;
+        const p = findByName(db.products, name);
+        const line = cart.find(x => norm(x.name) === norm(name));
+        if (line) line.qty++;
+        else cart.push({ name: p?.name || niceName(name), qty: 1, price: p?.price ?? null });
+        paint();
+        toast(`+1 ${p?.name || name}`);
+      }
+      $('#prods', el)?.addEventListener('click', e => { const b = e.target.closest('[data-p]'); if (b) addItem(b.dataset.p); });
+      $('#add', el).onclick = () => { addItem(iProd.value); iProd.value = ''; };
+      iProd.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addItem(iProd.value); iProd.value = ''; } });
+
+      const total = () => round2(cart.reduce((t, x) => t + (x.price || 0) * x.qty, 0));
+      function paint() {
+        $('#err', el).innerHTML = '';
+        $('#cart', el).innerHTML = cart.length ? `<div class="cart">
+          ${cart.map((x, i) => {
+            const p = findByName(db.products, x.name);
+            const warn = hasStock(p) && x.qty > p.stock ? `<small class="warnline">⚠️ ${p.stock <= 0 ? 'sem estoque' : `só tem ${p.stock} em estoque`}</small>` : '';
+            return `<div class="cart-line">
+              <div class="cl-top"><b>${esc(x.name)}</b><span class="line-total">${x.price ? brl(x.price * x.qty) : '—'}</span>
+                <button type="button" class="rm" data-rm="${i}" aria-label="Tirar">✕</button></div>
+              ${warn}
+              <div class="cl-bottom">
+                <div class="money small"><input type="text" inputmode="decimal" data-price="${i}" value="${moneyVal(x.price)}" placeholder="preço de cada"></div>
+                <div class="qty"><button type="button" data-minus="${i}">−</button><b>${x.qty}</b><button type="button" data-plus="${i}">+</button></div>
+              </div>
+            </div>`;
+          }).join('')}
+          <div class="cart-total"><span>Total</span><b>${brl(total())}</b></div></div>`
+          : '<p class="muted" style="text-align:center">Toque nos produtos acima para pôr na venda.</p>';
+        el.querySelectorAll('#pay [data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === method));
+        const who = counter ? '🧍 Balcão' : iClient.value.trim() || '<span class="muted">cliente?</span>';
+        const items = cart.reduce((t, x) => t + x.qty, 0);
+        $('#sum', el).innerHTML = `${counter ? who : esc(iClient.value.trim()) || who} · ${items ? `${items} ${items === 1 ? 'item' : 'itens'}` : '<span class="muted">produtos?</span>'} · <b>${brl(total())}</b>`;
+        $('#save', el).textContent = `✓ Lançar venda${total() ? ' · ' + brl(total()) : ''}`;
+      }
+      $('#cart', el).addEventListener('click', e => {
+        const t = e.target;
+        if (t.dataset.plus) cart[+t.dataset.plus].qty++;
+        else if (t.dataset.minus) { const x = cart[+t.dataset.minus]; x.qty > 1 ? x.qty-- : cart.splice(+t.dataset.minus, 1); }
+        else if (t.dataset.rm) cart.splice(+t.dataset.rm, 1);
+        else return;
+        paint();
+      });
+      $('#cart', el).addEventListener('change', e => {
+        const i = e.target.dataset.price;
+        if (i === undefined) return;
+        cart[+i].price = parseMoney(e.target.value);
+        paint();
+      });
+      $('#pay', el).onclick = e => { const b = e.target.closest('[data-m]'); if (b) { method = b.dataset.m; paint(); } };
+      iClient.addEventListener('input', paint);
+      iClient.addEventListener('change', paint);
+      setCounter(counter);
+      if (!startClient && !counter) setTimeout(() => iClient.focus(), 50);
+
+      $('#f', el).addEventListener('submit', e => {
+        e.preventDefault();
+        const err = m => { $('#err', el).innerHTML = `<div class="error">${m}</div>`; window.scrollTo(0, 0); };
+        const name = iClient.value.trim();
+        if (!counter && !name) return err('Escreva o nome da cliente ou toque em "Balcão".');
+        if (!cart.length) return err('Ponha pelo menos um produto.');
+        if (cart.some(x => x.price == null)) return err('Coloque o preço de todos os produtos.');
+        if (!method) return err('Toque em como pagou (Pix, Dinheiro, Cartão ou Vai pagar depois).');
+        let clientId = '';
+        if (!counter) {
+          const c = findOrCreate(db.clients, name, { phone: '', notes: '' });
+          const phone = $('#f-phone', el).value.trim();
+          if (phone) c.phone = phone;
+          clientId = c.id;
+        }
+        const date = $('#f-date', el).value || today();
+        const orderId = cart.length > 1 ? uid() : null;
+        for (const x of cart) {
+          const p = findOrCreate(db.products, x.name, { price: x.price });
+          if (!p.price && x.price) p.price = x.price;
+          moveStock(p.name, -x.qty);
+          const sale = { id: uid(), createdAt: Date.now(), clientId, product: p.name, qty: x.qty, unitPrice: x.price,
+            total: round2(x.price * x.qty), date, paid: false, payments: [] };
+          if (orderId) sale.orderId = orderId;
+          if (fromAppt && fromAppt.clientId === clientId) sale.apptId = fromAppt.id;
+          if (method !== 'depois' && sale.total > 0) addPayment(sale, sale.total, method, date);
+          db.sales.push(sale);
+        }
+        save();
+        const low = cart.map(x => findByName(db.products, x.name)).filter(lowStock);
+        toast(`Venda lançada ✓ ${brl(total())}${method === 'depois' ? ' (a receber)' : ''}`);
+        if (low.length) setTimeout(() => toast(`📦 Acabando: ${low.map(p => p.name).join(', ')}`), 2300);
+        back();
+      });
+    },
+  };
+}
+
 function vSaleForm(_, q) {
   const edit = q.id ? db.sales.find(s => s.id === q.id) : null;
   const fromAppt = q.a ? db.appts.find(x => x.id === q.a) : null; // vendendo durante um atendimento

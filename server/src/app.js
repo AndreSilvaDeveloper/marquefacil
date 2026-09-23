@@ -12,6 +12,7 @@ import { nowIn, zonedEpoch } from './time.js';
 import { evolutionClient, createMessenger, registerWhatsapp } from './whatsapp.js';
 import { registerBooking } from './booking.js';
 import { createPush, registerPush } from './push.js';
+import { registerPortal } from './portal.js';
 
 const YEAR = 365 * 24 * 60 * 60;
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
@@ -64,6 +65,7 @@ export function buildApp({
 
   const limitAuth = rateLimiter({ max: 10, windowMs: 15 * 60 * 1000 });
   const limitBook = rateLimiter({ max: 10, windowMs: 60 * 60 * 1000 });
+  const limitAccess = rateLimiter({ max: 5, windowMs: 60 * 60 * 1000 });
 
   const evo = evolutionClient(evolution);
   const messenger = createMessenger({ db, evo, publicUrl, log: app.log });
@@ -197,12 +199,24 @@ export function buildApp({
   const apptNow = db.prepare("SELECT data FROM records WHERE tenant_id = ? AND coll = 'appts' AND id = ? AND deleted = 0");
   const statusOf = (tenantId, id) => { const r = apptNow.get(tenantId, id); return r ? JSON.parse(r.data).status || 'marcado' : null; };
 
-  // Pedido do link aceito ou recusado: avisa a cliente pelo WhatsApp
+  // Pedido do link aceito ou recusado: avisa a cliente pelo WhatsApp.
+  // Se era uma remarcação: aceito → cancela o horário antigo; recusado → o antigo continua.
   function afterDecision(tenantId, apptId, from, to) {
     if (from !== 'pendente' || to === 'pendente') return;
     const s = getSettings(tenantId);
-    if (to === 'cancelado') { if (s.whatsapp.declineMessage) messenger.fire(tenantId, apptId, 'decline'); }
-    else if (s.whatsapp.confirmOnline) messenger.fire(tenantId, apptId, 'confirm');
+    const r = apptNow.get(tenantId, apptId);
+    const a = r ? JSON.parse(r.data) : null;
+    if (a?.replaces && to !== 'cancelado') {
+      const oldRow = apptNow.get(tenantId, a.replaces);
+      const old = oldRow ? JSON.parse(oldRow.data) : null;
+      if (old && old.status !== 'cancelado') {
+        applyChanges(db, tenantId, [{ coll: 'appts', id: old.id, data: { ...old, status: 'cancelado', cancelledBy: 'remarcado', replacedBy: a.id } }]);
+      }
+    }
+    if (to === 'cancelado') {
+      if (a?.replaces) messenger.fire(tenantId, apptId, 'rescheduleNo');
+      else if (s.whatsapp.declineMessage) messenger.fire(tenantId, apptId, 'decline');
+    } else if (s.whatsapp.confirmOnline) messenger.fire(tenantId, apptId, 'confirm');
   }
 
   app.post('/api/sync', { preHandler: auth }, async req => {
@@ -261,6 +275,7 @@ export function buildApp({
   registerWhatsapp(app, { db, evo, messenger, auth, getSettings, saveSettings });
   registerBooking(app, { db, messenger, push, limitBook });
   registerPush(app, { db, auth, push });
+  registerPortal(app, { db, messenger, push, publicUrl, limitBook, limitAccess });
 
   // Recupera uma cópia de segurança. replace=true apaga o que tem antes.
   app.post('/api/import', { preHandler: auth }, async req => {

@@ -1,6 +1,7 @@
 import { readSettings, DEFAULTS } from './settings.js';
 import { fail, isObj, waNumber } from './util.js';
 import { nowIn, zonedEpoch, addDays, dayLabel } from './time.js';
+import { newPortalToken, portalUrl } from './portal.js';
 
 /* ------------------------- cliente da Evolution API (v2) ------------------------- */
 export function evolutionClient({ url, apikey, fetchImpl = fetch, timeoutMs = 15000 }) {
@@ -60,8 +61,11 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
   };
   const getRecord = (t, coll, id) => { const r = q.record.get(t, coll, id); return r ? JSON.parse(r.data) : null; };
 
-  function varsFor(tenant, appt, client) {
+  function varsFor(tenant, appt, client, kind) {
+    // link pessoal "ver ou remarcar" (só nas mensagens para a cliente)
+    const meus = client && kind !== 'owner' && publicUrl ? portalUrl(publicUrl, tenant.slug, newPortalToken(db, tenant.id, client.id)) : '';
     return {
+      meus_horarios: meus,
       nome: (client?.name || '').split(' ')[0],
       nome_completo: client?.name || '',
       telefone: client?.phone || '',
@@ -81,12 +85,12 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
     const s = readSettings(tenant.settings);
     if (!s.whatsapp.instance) return 'off';
     const appt = getRecord(tenantId, 'appts', apptId);
-    if (!appt || (appt.status === 'cancelado' && kind !== 'decline')) return 'skip';
+    if (!appt || (appt.status === 'cancelado' && kind !== 'decline' && kind !== 'rescheduleNo')) return 'skip';
     const client = appt.clientId ? getRecord(tenantId, 'clients', appt.clientId) : null;
 
     const phone = kind === 'owner' ? waNumber(s.whatsapp.ownerPhone || s.whatsapp.number) : waNumber(client?.phone);
     const tpl = s.whatsapp.templates[kind] || DEFAULTS.whatsapp.templates[kind];
-    const body = renderTemplate(tpl, varsFor(tenant, appt, client));
+    const body = renderTemplate(tpl, varsFor(tenant, appt, client, kind));
     const row = { tenantId, apptId, kind, phone, name: client?.name || '', body, now: Date.now() };
 
     if (!q.claim.run(row).changes && !q.reclaim.run(row).changes) return 'already';

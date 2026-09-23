@@ -2,6 +2,7 @@ import { readSettings } from './settings.js';
 import { fail, isObj, uid, TIME_RE, DATE_RE, mins, hhmm, waNumber, norm } from './util.js';
 import { nowIn, addDays, weekday, dayLabel } from './time.js';
 import { applyChanges } from './db.js';
+import { newPortalToken } from './portal.js';
 
 const DEFAULT_SLOT = 30; // horários sem duração ocupam 30 min (igual ao app)
 
@@ -47,12 +48,16 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
     // a cliente vê só nome e descrição; o tempo fica aqui dentro para reservar a agenda
     .map(s => ({ id: s.id, name: s.name, description: s.description || '', duration: s.duration || null }));
-  function durationFor(tenantId, s, serviceId) {
+  function durationFor(tenantId, s, serviceId, dur) {
+    const d = parseInt(dur, 10);
+    if (!serviceId && d >= 5 && d <= 600) return { service: null, duration: d }; // remarcar: tempo do horário
     if (!serviceId) return { service: null, duration: s.booking.defaultDuration };
     const service = onlineServices(tenantId).find(x => x.id === serviceId);
     if (!service) fail(400, 'Serviço não encontrado.');
     return { service, duration: service.duration || s.booking.defaultDuration };
   }
+  // remarcando: o próprio horário (e o pedido de troca dele) não conta como ocupado
+  const notMine = except => a => !except || (a.id !== except && a.replaces !== except);
   const needOpen = s => { if (!s.booking.enabled) fail(403, 'Os agendamentos pelo link estão fechados no momento.'); };
 
   app.get('/api/public/:slug', async req => {
@@ -68,9 +73,9 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
   app.get('/api/public/:slug/days', async req => {
     const { t, s, now } = load(req.params.slug);
     needOpen(s);
-    const { duration } = durationFor(t.id, s, req.query.service);
+    const { duration } = durationFor(t.id, s, req.query.service, req.query.dur);
     const end = addDays(now.date, s.booking.maxDays);
-    const appts = q.apptsBetween.all(t.id, now.date, end).map(r => JSON.parse(r.data));
+    const appts = q.apptsBetween.all(t.id, now.date, end).map(r => JSON.parse(r.data)).filter(notMine(req.query.except));
     const days = [];
     for (let d = now.date; d <= end; d = addDays(d, 1)) {
       days.push({ date: d, label: dayLabel(d), free: computeSlots({ booking: s.booking, appts, date: d, duration, now }).length });
@@ -83,8 +88,8 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
     needOpen(s);
     const date = String(req.query.date || '');
     if (!DATE_RE.test(date)) fail(400, 'Data inválida.');
-    const { duration } = durationFor(t.id, s, req.query.service);
-    const appts = q.apptsBetween.all(t.id, date, date).map(r => JSON.parse(r.data));
+    const { duration } = durationFor(t.id, s, req.query.service, req.query.dur);
+    const appts = q.apptsBetween.all(t.id, date, date).map(r => JSON.parse(r.data)).filter(notMine(req.query.except));
     return { date, slots: computeSlots({ booking: s.booking, appts, date, duration, now }) };
   });
 
@@ -144,6 +149,7 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
     }).catch(() => {});
     if (s.whatsapp.notifyOwner) messenger.fire(t.id, appt.id, 'owner');
     if (!pending && s.whatsapp.confirmOnline) messenger.fire(t.id, appt.id, 'confirm');
-    return { ok: true, pending, salon: t.name, date, label: dayLabel(date), time, service: appt.service };
+    // link pessoal guardado neste aparelho, para ela ver/remarcar depois
+    return { ok: true, pending, salon: t.name, date, label: dayLabel(date), time, service: appt.service, meus: newPortalToken(db, t.id, client.id) };
   });
 }

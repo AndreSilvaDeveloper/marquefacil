@@ -64,6 +64,12 @@ export function openDb(file) {
       UNIQUE (tenant_id, appt_id, kind)
     );
     CREATE INDEX IF NOT EXISTS messages_recent ON messages (tenant_id, created_at);
+    CREATE TABLE IF NOT EXISTS portal_tokens (
+      token_hash TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      client_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS kv (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL

@@ -385,3 +385,27 @@ details.more summary::-webkit-details-marker { display: none; }
 details.more summary small { display: block; font-weight: 400; color: var(--muted); }
 .savebar { position: sticky; bottom: calc(66px + env(safe-area-inset-bottom)); z-index: 8; background: var(--bg); padding: .6rem 0 .4rem; margin-top: .6rem; box-shadow: 0 -10px 12px -8px rgba(0,0,0,.12); }
 .savebar .sum { font-size: .95rem; margin-bottom: .45rem; text-align: center; }
+
+/* ---------- Vender (carrinho) ---------- */
+.prodgrid { display: grid; grid-template-columns: 1fr 1fr; gap: .45rem; }
+.prodgrid button { text-align: left; border: 2px solid var(--line); background: #fff; border-radius: 12px; padding: .55rem .7rem; cursor: pointer; font: inherit; min-height: 3.4rem; }
+.prodgrid button b { display: block; font-size: .98rem; }
+.prodgrid button small { color: var(--muted); font-size: .8rem; }
+.prodgrid button:active { background: var(--brand-soft); border-color: var(--brand); }
+.cart { background: #fff; border: 2px solid var(--brand); border-radius: var(--radius); padding: .4rem .8rem; margin-bottom: 1rem; }
+.cart-line { padding: .6rem 0; border-bottom: 1px solid var(--line); }
+.cl-top { display: flex; align-items: center; gap: .5rem; }
+.cl-top b { flex: 1; font-size: 1.02rem; }
+.cl-bottom { display: flex; align-items: center; gap: .6rem; margin-top: .4rem; }
+.cl-bottom .money.small { flex: 1; min-width: 0; }
+.cart-line .money.small input { min-height: 2.4rem; padding: .2rem .5rem .2rem 2.2rem; font-size: .95rem; width: 100%; }
+.cart-line .money.small::before { left: .6rem; font-size: .85rem; }
+.warnline { display: block; color: var(--bad); font-size: .8rem; font-weight: 700; }
+.qty { display: flex; align-items: center; gap: .3rem; }
+.qty button { width: 2.2rem; height: 2.2rem; border-radius: 50%; border: 2px solid var(--brand); background: #fff; color: var(--brand); font-weight: 800; font-size: 1.1rem; cursor: pointer; }
+.qty b { min-width: 1.4rem; text-align: center; }
+.line-total { text-align: right; font-weight: 800; font-size: 1rem; white-space: nowrap; }
+.rm { border: 0; background: none; color: var(--muted); font-size: 1.1rem; cursor: pointer; padding: .3rem; }
+.cart-total { display: flex; justify-content: space-between; align-items: baseline; padding: .7rem 0 .3rem; font-size: 1.1rem; }
+.cart-total b { font-size: 1.5rem; }
+.paygrid.four { grid-template-columns: 1fr 1fr; }
