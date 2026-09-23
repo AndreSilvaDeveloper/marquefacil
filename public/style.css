@@ -362,3 +362,7 @@ details.cancelled summary { cursor: pointer; color: var(--muted); font-weight: 7
 .menu-sub .card { width: 100%; }
 .menu-sub .btn.small { flex: 1 1 0; width: auto; white-space: nowrap; }
 .menu-sub.wide { padding-left: 1rem; flex-wrap: nowrap; }
+
+/* ---------- Buscar ---------- */
+.shortcuts { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+.shortcuts .chip { justify-content: center; min-height: 3rem; border-radius: 14px; background: #fff; }

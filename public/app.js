@@ -1161,39 +1161,129 @@ function vPedidos() {
 /* =====================================================================
    BUSCAR
    ===================================================================== */
+/* Busca: várias palavras juntas ("maria escova"), telefone, dia (15/09), dia da semana, mês,
+   situação (cancelado, pendente, feito, devendo), valor. Atalhos prontos quando está vazia. */
+const SEARCH_SHORTCUTS = {
+  hoje: ['📅 Hoje', () => db.appts.filter(a => a.date === today() && a.status !== 'cancelado').sort(byWhen)],
+  amanha: ['📆 Amanhã', () => db.appts.filter(a => a.date === addDays(today(), 1) && a.status !== 'cancelado').sort(byWhen)],
+  semana: ['🗓️ Próximos 7 dias', () => db.appts.filter(a => a.date >= today() && a.date <= addDays(today(), 7) && a.status !== 'cancelado' && !isPast(a)).sort(byWhen)],
+  pedidos: ['⏳ Pedidos', () => pendingAppts()],
+  devendo: ['💸 Quem deve', null],
+  semvalor: ['✏️ Sem valor', () => db.appts.filter(a => isPast(a) && a.status !== 'cancelado' && a.status !== 'pendente' && !(a.price > 0) && !a.paid).sort(byWhen).reverse()],
+  cancelados: ['❌ Cancelados', () => db.appts.filter(a => a.status === 'cancelado').sort(byWhen).reverse()],
+};
+const recentKey = () => `mf.buscas.${session.tenant.id}`;
+function rememberSearch(text) {
+  const t = text.trim();
+  if (t.length < 2) return;
+  const list = [t, ...(readLS(recentKey()) || []).filter(x => norm(x) !== norm(t))].slice(0, 6);
+  try { writeLS(recentKey(), list); } catch { /* ok */ }
+}
+// Texto onde cada coisa é procurada (sem acento, minúsculo)
+function dateWords(d) {
+  const x = toDate(d);
+  return [fmtShort(d), `${x.getDate()}/${x.getMonth() + 1}`, `${pad(x.getDate())}/${pad(x.getMonth() + 1)}`,
+    fmtDate(d, { weekday: 'long' }), fmtDate(d, { month: 'long' })].join(' ');
+}
+const moneyWords = v => (v > 0 ? `${moneyVal(v)} ${Math.round(v)} ${brl(v)}` : '');
+function searchText(kind, x) {
+  if (kind === 'c') return norm(`${x.name} ${x.phone || ''} ${(x.phone || '').replace(/\D/g, '')} ${x.notes || ''}`);
+  if (kind === 'a') {
+    const status = { marcado: 'marcado', feito: 'feito', cancelado: 'cancelado cancelada desmarcou', pendente: 'pendente pedido' }[x.status || 'marcado'];
+    return norm(`${clientName(x.clientId)} ${client(x.clientId)?.phone?.replace(/\D/g, '') || ''} ${x.service || ''} ${x.notes || ''} ${dateWords(x.date)} ${x.time} ${status}
+      ${apptDue(x) ? 'devendo deve nao pago' : isPaid(x) ? 'pago' : ''} ${moneyWords(x.price)} ${x.seriesId ? 'fixa' : ''} ${x.source === 'online' ? 'link online' : ''}`);
+  }
+  if (kind === 's') return norm(`${clientName(x.clientId)} ${x.product} ${dateWords(x.date)} ${saleDue(x) ? 'devendo deve nao pago' : 'pago'} ${moneyWords(x.total)} venda produto`);
+  return norm(`${x.desc || ''} ${x.cat || ''} ${dateWords(x.date)} ${moneyWords(x.amount)} despesa gasto`);
+}
+
 function vBuscar(_, q) {
+  const text = q.q || '';
+  const type = q.t || '';
+  const k = SEARCH_SHORTCUTS[q.k] ? q.k : '';
+  const url = o => '#/buscar?' + Object.entries({ q: text, t: type, k, ...o }).filter(([, v]) => v).map(([a, b]) => `${a}=${encodeURIComponent(b)}`).join('&');
+
+  const expenseRow = e => `<a class="card line" href="#/despesa?id=${e.id}"><div class="grow"><b>➖ ${esc(e.desc || e.cat || 'Despesa')}</b>
+    <span>${fmtShort(e.date)}${e.cat && e.desc ? ' · ' + esc(e.cat) : ''}</span></div><span class="amount" style="color:var(--bad)">− ${brl(e.amount)}</span></a>`;
+
+  function results() {
+    // atalho escolhido
+    if (k) {
+      const [label, fn] = SEARCH_SHORTCUTS[k];
+      if (k === 'devendo') {
+        const cs = db.clients.map(c => ({ c, owes: clientOwes(c.id) })).filter(x => x.owes > 0).sort((a, b) => b.owes - a.owes);
+        return `<h2>${label} · ${cs.length}</h2><div class="list">${cs.length ? cs.map(x => clientRow(x.c)).join('') : '<div class="empty">Ninguém devendo. 🎉</div>'}</div>`;
+      }
+      const list = fn();
+      return `<h2>${label} · ${list.length}</h2><div class="list">${list.length ? list.map(a => apptCard(a, { showDate: true })).join('') : '<div class="empty">Nada por aqui.</div>'}</div>`;
+    }
+    const words = norm(text).split(/\s+/).filter(Boolean);
+    if (!words.length) return '';
+    const hit = str => words.every(w => str.includes(w));
+    const groups = {
+      c: ['👩 Clientes', db.clients.filter(x => hit(searchText('c', x))).sort(byName), clientRow],
+      a: ['📅 Horários', db.appts.filter(x => hit(searchText('a', x))).sort((a, b) => {
+        const fa = !isPast(a), fb = !isPast(b);           // próximos primeiro, depois os mais recentes
+        return fa !== fb ? (fa ? -1 : 1) : fa ? byWhen(a, b) : byWhen(b, a);
+      }), a => apptCard(a, { showDate: true })],
+      s: ['🛍️ Vendas', db.sales.filter(x => hit(searchText('s', x))).sort(byWhen).reverse(), x => saleCard(x)],
+      e: ['➖ Despesas', db.expenses.filter(x => hit(searchText('e', x))).sort((a, b) => b.date.localeCompare(a.date)), expenseRow],
+    };
+    const total = Object.values(groups).reduce((t, g) => t + g[1].length, 0);
+    if (!total) return `<div class="empty">Nada encontrado para "<b>${esc(text)}</b>".<br><small>Tente só uma parte do nome, ou um dia como 15/09.</small></div>`;
+    const chips = `<div class="chips filters">${[['', 'Tudo', total], ...Object.entries(groups).map(([key, g]) => [key, g[0], g[1].length])]
+      .filter(([key, , n]) => !key || n).map(([key, n, c]) => `<a class="chip ${type === key ? 'on' : ''}" href="${url({ t: key })}" data-go>${n} <small>${c}</small></a>`).join('')}</div>`;
+    const show = Object.entries(groups).filter(([key, g]) => g[1].length && (!type || type === key)).map(([key, [label, list, row]]) => {
+      const lim = type ? 200 : 8;
+      return `<h2>${label} · ${list.length}</h2><div class="list">${list.slice(0, lim).map(row).join('')}</div>
+        ${list.length > lim ? `<a class="btn small" href="${url({ t: key })}" data-go style="margin-top:.6rem">Ver todos (${list.length})</a>` : ''}`;
+    }).join('');
+    return chips + show;
+  }
+
+  function idle() {
+    const recent = readLS(recentKey()) || [];
+    const next = db.appts.filter(a => !isPast(a) && a.status !== 'cancelado').sort(byWhen).slice(0, 5);
+    return `
+      <h2>Atalhos</h2>
+      <div class="shortcuts">${Object.entries(SEARCH_SHORTCUTS).map(([key, [label]]) => `<a class="chip" href="${url({ k: key, q: '', t: '' })}" data-go>${label}</a>`).join('')}</div>
+      ${recent.length ? `<h2>Buscas recentes</h2><div class="chips">${recent.map(r => `<a class="chip" href="${url({ q: r, k: '', t: '' })}" data-go>🕘 ${esc(r)}</a>`).join('')}</div>` : ''}
+      <h2>Próximos horários</h2>
+      <div class="list">${next.length ? next.map(a => apptCard(a, { showDate: true })).join('') : '<div class="muted">Nada marcado para os próximos dias.</div>'}</div>
+      <p class="muted" style="margin-top:1.5rem;font-size:.9rem">💡 Dá para buscar por nome, telefone, serviço, produto, dia (<b>15/09</b>), dia da semana (<b>sexta</b>), mês (<b>setembro</b>), <b>cancelado</b>, <b>devendo</b> ou valor (<b>60</b>). Juntar palavras também funciona: <b>maria escova</b>.</p>`;
+  }
+
   return {
     title: 'Buscar', tab: 'buscar',
     html: `
-      <div class="search"><input type="search" id="s" placeholder="Nome, serviço, produto ou data (ex.: 15/09)" value="${esc(q.q || '')}"></div>
-      <div id="res"></div>`,
+      <div class="search"><input type="search" id="s" placeholder="🔍 Nome, telefone, serviço, dia…" value="${esc(text)}" enterkeyhint="search"></div>
+      ${k ? `<a class="btn small" href="#/buscar" data-go style="margin-bottom:.8rem">✕ Limpar atalho</a>` : ''}
+      <div id="res">${k || text ? results() : idle()}</div>`,
     bind(el) {
       const s = $('#s', el);
-      const run = () => {
-        const n = norm(s.value);
-        history.replaceState(null, '', `#/buscar${s.value ? '?q=' + encodeURIComponent(s.value) : ''}`);
-        stack[stack.length - 1] = lastHash = curHash();
-        if (!n) {
-          const next = db.appts.filter(a => !isPast(a) && a.status !== 'cancelado').sort(byWhen).slice(0, 15);
-          $('#res', el).innerHTML = `<h2>Próximos horários</h2><div class="list">${next.length ? next.map(a => apptCard(a, { showDate: true })).join('') : '<div class="empty">Nada marcado para os próximos dias.</div>'}</div>`;
-          return;
-        }
-        const match = (...xs) => xs.some(x => norm(x).includes(n));
-        const cs = db.clients.filter(c => match(c.name, c.phone)).sort(byName).slice(0, 10);
-        const as = db.appts.filter(a => match(clientName(a.clientId), a.service, a.notes, fmtShort(a.date))).sort(byWhen);
-        const fut = as.filter(a => !isPast(a));
-        const past = as.filter(a => isPast(a)).reverse().slice(0, 40);
-        const ss = db.sales.filter(x => match(clientName(x.clientId), x.product, fmtShort(x.date))).sort(byWhen).reverse().slice(0, 30);
-        $('#res', el).innerHTML = `
-          ${cs.length ? `<h2>Clientes</h2><div class="list">${cs.map(clientRow).join('')}</div>` : ''}
-          ${fut.length ? `<h2>Horários marcados</h2><div class="list">${fut.map(a => apptCard(a, { showDate: true })).join('')}</div>` : ''}
-          ${past.length ? `<h2>Horários que já passaram</h2><div class="list">${past.map(a => apptCard(a, { showDate: true })).join('')}</div>` : ''}
-          ${ss.length ? `<h2>Vendas de produtos</h2><div class="list">${ss.map(x => saleCard(x)).join('')}</div>` : ''}
-          ${!cs.length && !as.length && !ss.length ? '<div class="empty">Nada encontrado.</div>' : ''}`;
-      };
-      s.addEventListener('input', run);
-      run();
-      if (!q.q) s.focus();
+      let timer;
+      s.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          const v = s.value;
+          history.replaceState(null, '', v ? `#/buscar?q=${encodeURIComponent(v)}` : '#/buscar');
+          stack[stack.length - 1] = lastHash = curHash();
+          const qq = parseHash().q;
+          const view = vBuscar(null, qq);
+          const tmp = document.createElement('div');
+          tmp.innerHTML = view.html;
+          $('#res', el).innerHTML = $('#res', tmp).innerHTML;
+          el.querySelector('a[href="#/buscar"][data-go]')?.remove();
+        }, 180);
+      });
+      s.addEventListener('change', () => rememberSearch(s.value));
+      s.addEventListener('keydown', e => { if (e.key === 'Enter') { rememberSearch(s.value); s.blur(); } });
+      el.addEventListener('click', e => {
+        const a = e.target.closest('a[data-go]');
+        if (a) { e.preventDefault(); replaceTo(a.getAttribute('href')); return; }
+        // abriu um resultado: guarda a busca nas recentes
+        if (s.value.trim() && e.target.closest('#res a')) rememberSearch(s.value);
+      });
     },
   };
 }
