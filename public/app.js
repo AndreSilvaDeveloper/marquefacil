@@ -576,12 +576,12 @@ function bindToggle2(el, onChange) {
    AGENDA DO DIA
    ===================================================================== */
 // Linha do tempo de um dia: horários + almoço + "agora" (os horários livres aparecem ao agendar)
-function dayTimeline(d, active) {
+function dayTimeline(d, active, tags = {}) {
   const hours = salonHours();
   const open = hours?.days?.[toDate(d).getDay()];
   const closedDay = hours && hours.days && open === null;
   const isToday = d === today(), now = nowMins();
-  const items = active.map(a => ({ t: mins(a.time), html: apptRow(a) }));
+  const items = active.map(a => ({ t: mins(a.time), html: apptRow(a, tags[a.id]) }));
   if (open && hours.lunch && !(isToday && mins(hours.lunch[1]) <= now)) items.push({ t: mins(hours.lunch[0]), html: `<div class="lunch">🍽️ Almoço ${hours.lunch[0]}–${hours.lunch[1]}</div>` });
   if (isToday && active.length) items.push({ t: now + 0.5, html: `<div class="nowline"><span>agora ${hhmm(now)}</span></div>` });
   items.sort((a, b) => a.t - b.t);
@@ -589,9 +589,11 @@ function dayTimeline(d, active) {
 }
 
 // Cartão do horário + botão rápido "Feito" quando já passou
-function apptRow(a) {
+function apptRow(a, tag = '') {
   const quick = a.status === 'marcado' && isPast(a) ? `<button class="quick-done" data-done="${a.id}">✓ Feito</button>` : '';
-  return quick ? `<div class="appt-wrap">${apptCard(a)}${quick}</div>` : apptCard(a);
+  let card = apptCard(a);
+  if (tag) card = card.replace('class="card appt ', 'class="card appt is-next ').replace('<div class="badges">', `<div class="badges"><span class="badge now">${tag}</span>`);
+  return quick ? `<div class="appt-wrap">${card}${quick}</div>` : card;
 }
 
 function weekStart(d) { const x = toDate(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return dstr(x); } // segunda-feira
@@ -604,14 +606,6 @@ function vAgenda(_, q) {
   const url = o => `#/agenda?${Object.entries({ d, v: view === 'semana' ? 'semana' : '', ...o }).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join('&')}`;
   const step = view === 'semana' ? 7 : 1;
 
-  const week = [];
-  for (let i = -3; i <= 3; i++) {
-    const day = addDays(d, i);
-    const n = db.appts.filter(a => a.date === day && a.status !== 'cancelado').length;
-    week.push(`<a href="${url({ d: day })}" data-nav class="${day === d ? 'on' : ''} ${day === t ? 'today' : ''}">
-      ${fmtDate(day, { weekday: 'short' }).replace('.', '')}<b>${toDate(day).getDate()}</b><i>${n || ''}</i></a>`);
-  }
-
   let body = '', title = '';
   if (view === 'dia') {
     const list = db.appts.filter(a => a.date === d).sort(byWhen);
@@ -620,29 +614,22 @@ function vAgenda(_, q) {
     const done = active.filter(a => a.status === 'feito').length;
     const expectedDay = round2(active.filter(a => a.status !== 'pendente').reduce((s, a) => s + valueOf(a), 0));
     const paidDay = round2(active.reduce((s, a) => s + paidOf(a), 0));
-    const tl = dayTimeline(d, active);
-    // Hoje: quem está sendo atendida agora e quem vem depois
+    // Hoje: marca no próprio cartão quem está sendo atendida e quem é a próxima
     const now = nowMins();
     const going = d === t ? active.filter(a => ['marcado', PRE].includes(a.status) && apptEnd(a) > now) : [];
     const cur = going.find(a => mins(a.time) <= now), next = going.find(a => mins(a.time) > now);
     const inTxt = m => (m < 60 ? `em ${m} min` : `em ${fmtDur(Math.round(m / 5) * 5)}`);
-    const upCard = (a, label) => {
-      const c = client(a.clientId), first = (c?.name || '').split(' ')[0];
-      const wa = c?.phone && waLink(c.phone, `Olá, ${first}! Tudo certo para o seu horário hoje às ${a.time}? 😊`);
-      return `<div class="card upnext">
-        <a class="line" href="#/agendamento/${a.id}"><div class="grow"><small>${label}</small>
-          <b>${a.time} · ${esc(clientName(a.clientId))}</b>${a.service ? `<span>${esc(a.service)}</span>` : ''}</div></a>
-        ${wa && a === next ? `<a class="btn small" target="_blank" rel="noopener" href="${wa}">💬 Chamar</a>` : ''}</div>`;
-    };
-    title = `<div class="label"><b>${dayName(d)}</b><span>${fmtDate(d, { day: 'numeric', month: 'long', year: 'numeric' })}</span></div>`;
+    const tags = {};
+    if (cur) tags[cur.id] = '✂️ Agora';
+    if (next) tags[next.id] = `⏭️ Próxima · ${inTxt(mins(next.time) - now)}`;
+    const tl = dayTimeline(d, active, tags);
+    title = d === t ? `Hoje, ${fmtDate(d, { day: 'numeric', month: 'long' })}` : cap(fmtDate(d, { weekday: 'long', day: 'numeric', month: 'long', year: d.slice(0, 4) !== t.slice(0, 4) ? 'numeric' : undefined }).replace('-feira', ''));
     body = `
       ${active.length ? `<div class="daysum">
         <span><b>${active.length}</b> ${active.length === 1 ? 'horário' : 'horários'}</span>
         ${done ? `<span><b>${done}</b> ${done === 1 ? 'feito' : 'feitos'}</span>` : ''}
         ${expectedDay ? `<span>💰 <b>${brl(expectedDay)}</b>${paidDay ? ` · recebido <b>${brl(paidDay)}</b>` : ''}</span>` : ''}
       </div>` : ''}
-      ${cur ? upCard(cur, `✂️ Agora (até ${hhmm(apptEnd(cur))})`) : ''}
-      ${next ? upCard(next, `⏭️ Próxima · ${inTxt(mins(next.time) - now)}`) : ''}
       ${tl.closedDay ? '<div class="muted" style="text-align:center;margin:.5rem 0">🔒 Dia fechado no seu horário de atendimento.</div>' : ''}
       <div class="list timeline">
         ${tl.html || `<div class="empty">Nenhum horário marcado neste dia.${d >= t ? `<br><a class="btn main" href="#/agendar?d=${d}" style="margin-top:1rem">📅 Agendar neste dia</a>` : ''}</div>`}
@@ -652,7 +639,7 @@ function vAgenda(_, q) {
     const ws = weekStart(d);
     const hours = salonHours();
     const days = Array.from({ length: 7 }, (_, i) => addDays(ws, i));
-    title = `<div class="label"><b>Semana</b><span>${fmtDate(ws, { day: 'numeric', month: 'short' }).replace('.', '')} a ${fmtDate(days[6], { day: 'numeric', month: 'short' }).replace('.', '')}</span></div>`;
+    title = `Semana de ${fmtDate(ws, { day: 'numeric', month: 'short' }).replace('.', '')} a ${fmtDate(days[6], { day: 'numeric', month: 'short' }).replace('.', '')}`;
     body = `<div class="weeklist">${days.map(day => {
       const list = db.appts.filter(a => a.date === day && a.status !== 'cancelado').sort(byWhen);
       const closed = hours?.days && hours.days[toDate(day).getDay()] === null;
@@ -669,20 +656,12 @@ function vAgenda(_, q) {
     title: 'Agenda', tab: 'agenda',
     html: `
       <div class="viewtoggle">
-        <a href="${url({ v: '' })}" data-nav class="${view === 'dia' ? 'on' : ''}">Dia</a>
+        <a href="${url({ d: t, v: '' })}" data-nav class="${view === 'dia' && d === t ? 'on' : ''}">Hoje</a>
         <a href="${url({ v: 'semana' })}" data-nav class="${view === 'semana' ? 'on' : ''}">Semana</a>
       </div>
-      <div class="daynav">
-        <button class="arrow" id="prev" aria-label="Anterior">‹</button>
-        ${title}
-        <button class="arrow" id="next" aria-label="Próximo">›</button>
-      </div>
-      ${view === 'dia' ? `<div class="week">${week.join('')}</div>` : ''}
-      <div class="row" style="margin-bottom:1rem">
-        ${(view === 'dia' ? d !== t : weekStart(d) !== weekStart(t)) ? `<a class="btn small" href="${url({ d: t })}" data-nav>Voltar para hoje</a>` : ''}
-        <label class="btn small" style="position:relative">📆 Escolher dia
-          <input type="date" id="pick" value="${d}" style="position:absolute;inset:0;opacity:0;min-height:0"></label>
-      </div>
+      <label class="daypick ${view === 'dia' && d !== t ? 'other' : ''}">
+        <span>📆 <b>${esc(title)}</b></span><em>Escolher dia ▾</em>
+        <input type="date" id="pick" value="${d}" aria-label="Escolher dia"></label>
       ${preAppts().length ? `<a class="card pending-banner pre" href="#/buscar?k=prereservas">💳 <b>${preAppts().length} ${preAppts().length === 1 ? 'pré-reserva' : 'pré-reservas'}</b> esperando o sinal ›</a>` : ''}
       ${pend.length ? `<a class="card pending-banner" href="#/pedidos">⏳ <b>${pend.length} ${pend.length === 1 ? 'pedido esperando' : 'pedidos esperando'}</b> você confirmar ›</a>` : ''}
       ${d === t && view === 'dia' && tomorrowList().length ? `<a class="btn" href="#/lembretes" style="margin-bottom:1rem">💬 Lembrar clientes de amanhã (${tomorrowList().filter(x => !x.remindedAt).length} de ${tomorrowList().length})</a>` : ''}
@@ -694,8 +673,6 @@ function vAgenda(_, q) {
       </div>`,
     bind(el) {
       const goDay = n => replaceTo(url({ d: addDays(d, n * step) }));
-      $('#prev', el).onclick = () => goDay(-1);
-      $('#next', el).onclick = () => goDay(1);
       $('#pick', el).onchange = e => e.target.value && replaceTo(url({ d: e.target.value }));
       el.addEventListener('click', e => {
         const nav = e.target.closest('a[data-nav]');
@@ -708,7 +685,7 @@ function vAgenda(_, q) {
       });
       // arrastar para o lado troca de dia (ou de semana)
       let x0 = null, y0 = null;
-      el.addEventListener('touchstart', e => { if (e.target.closest('.week, input, .sheet')) return; x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+      el.addEventListener('touchstart', e => { if (e.target.closest('input, .sheet')) return; x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
       el.addEventListener('touchend', e => {
         if (x0 === null) return;
         const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
