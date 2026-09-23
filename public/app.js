@@ -662,9 +662,7 @@ function vAgenda(_, q) {
       <label class="daypick ${view === 'dia' && d !== t ? 'other' : ''}">
         <span>📆 <b>${esc(title)}</b></span><em>Escolher dia ▾</em>
         <input type="date" id="pick" value="${d}" aria-label="Escolher dia"></label>
-      ${preAppts().length ? `<a class="card pending-banner pre" href="#/buscar?k=prereservas">💳 <b>${preAppts().length} ${preAppts().length === 1 ? 'pré-reserva' : 'pré-reservas'}</b> esperando o sinal ›</a>` : ''}
       ${pend.length ? `<a class="card pending-banner" href="#/pedidos">⏳ <b>${pend.length} ${pend.length === 1 ? 'pedido esperando' : 'pedidos esperando'}</b> você confirmar ›</a>` : ''}
-      ${d === t && view === 'dia' && tomorrowList().length ? `<a class="btn" href="#/lembretes" style="margin-bottom:1rem">💬 Lembrar clientes de amanhã (${tomorrowList().filter(x => !x.remindedAt).length} de ${tomorrowList().length})</a>` : ''}
       <div id="push-card"></div>
       ${body}
       <div class="fabs">
