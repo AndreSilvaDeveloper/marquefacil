@@ -342,7 +342,7 @@ function parseHash() {
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
   agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: (id, q) => (q.id ? vSaleForm(id, q) : vSell(id, q)), financeiro: vFin, mais: vMore,
-  itens: vItems, item: vItemForm, link: vLink, whatsapp: vWhats, conta: vConta, pacote: vPackageForm,
+  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vItems(kind)), item: vItemForm, link: vLink, whatsapp: vWhats, conta: vConta, pacote: vPackageForm,
 };
 
 let lastHash = '';
@@ -2937,6 +2937,83 @@ function vItems(kind) {
   };
 }
 
+// Vendas de um produto (pelo nome)
+const salesOfProduct = p => db.sales.filter(x => norm(x.product) === norm(p.name));
+const soldQty = (p, month = '') => salesOfProduct(p).filter(x => !month || x.date.startsWith(month)).reduce((t, x) => t + (x.qty || 1), 0);
+function stockBadge(p) {
+  if (!hasStock(p)) return '<span class="badge">sem controle</span>';
+  if (p.stock <= 0) return '<span class="badge bad">⚠️ sem estoque</span>';
+  if (lowStock(p)) return `<span class="badge warn">⚠️ só ${p.stock}</span>`;
+  return `<span class="badge ok">${p.stock} em estoque</span>`;
+}
+
+let productsSearch = '';
+const PRODUCT_FILTERS = {
+  '': ['Todos', () => true],
+  acabando: ['⚠️ Acabando', p => lowStock(p) && p.stock > 0],
+  sem: ['⛔ Sem estoque', p => hasStock(p) && p.stock <= 0],
+  vendidos: ['🔥 Mais vendidos', p => soldQty(p, today().slice(0, 7)) > 0],
+};
+function vProducts(kind, q) {
+  const f = PRODUCT_FILTERS[q.f] ? q.f : '';
+  const month = today().slice(0, 7);
+  const all = db.products;
+  let list = all.filter(PRODUCT_FILTERS[f][1]);
+  list = f === 'vendidos'
+    ? list.sort((a, b) => soldQty(b, month) - soldQty(a, month))
+    : list.sort((a, b) => ((lowStock(b) ? 1 : 0) - (lowStock(a) ? 1 : 0)) || byName(a, b));
+  const low = all.filter(lowStock);
+  const stockValue = round2(all.filter(hasStock).reduce((t, p) => t + Math.max(0, p.stock) * (p.cost || p.price || 0), 0));
+  const soldMonth = round2(db.sales.filter(x => x.date.startsWith(month) && !x.packageId).reduce((t, x) => t + valueOf(x), 0));
+  const shopText = `Olá! Preciso repor:\n${low.map(p => `• ${p.name}${hasStock(p) ? ` (tenho ${Math.max(0, p.stock)})` : ''}`).join('\n')}\nObrigada!`;
+  return {
+    title: 'Meus produtos', tab: 'mais', back: true,
+    html: `
+      <div class="totals">
+        <div class="total"><span>Produtos</span><b>${all.length}</b><small class="muted">${low.length ? `<span style="color:var(--warn);font-weight:700">⚠️ ${low.length} acabando</span>` : 'nenhum acabando'}</small></div>
+        <div class="total ok"><span>Vendido no mês</span><b>${brl(soldMonth)}</b></div>
+        <div class="total full"><span>Dinheiro parado no estoque</span><b>${brl(stockValue)}</b><small class="muted">${all.some(p => p.cost) ? 'pelo preço de custo (ou de venda, quando não tem custo)' : 'pelo preço de venda — coloque o custo nos produtos para ficar exato'}</small></div>
+      </div>
+      <div class="row" style="margin-bottom:.8rem">
+        <a class="btn main" href="#/item/products">+ Novo produto</a>
+        ${low.length ? `<a class="btn" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(shopText)}">🛒 Lista de compras</a>` : ''}
+      </div>
+      ${all.length ? `
+      <div class="search"><input type="search" id="s" placeholder="🔍 Procurar produto" value="${esc(productsSearch)}"></div>
+      <div class="chips filters">${Object.entries(PRODUCT_FILTERS).map(([k, [n, fn]]) => `<a class="chip ${f === k ? 'on' : ''}" href="#/itens/products${k ? '?f=' + k : ''}" data-f>${n} <small>${all.filter(fn).length}</small></a>`).join('')}</div>` : ''}
+      <div class="list" id="plist">${list.length ? list.map(p => `
+        <div class="card line prow" data-name="${esc(norm(p.name))}">
+          <a class="grow" href="#/item/products?id=${p.id}"><b>${esc(p.name)}</b>
+            <span>${p.price ? brl(p.price) : 'sem preço'}${soldQty(p, month) ? ` · vendeu ${soldQty(p, month)} este mês` : ''}</span>
+            <div class="badges">${stockBadge(p)}</div></a>
+          ${hasStock(p) ? `<button type="button" class="btn small" data-add="${p.id}" aria-label="Chegou mercadoria">📦 +</button>` : ''}
+        </div>`).join('') : `<div class="empty">${all.length ? 'Nenhum produto neste filtro.' : 'Nenhum produto ainda.<br>Eles também aparecem sozinhos quando você vende um produto novo.'}</div>`}</div>
+      <div class="empty" id="none" hidden>Nenhum produto com esse nome.</div>`,
+    bind(el) {
+      const search = () => {
+        const n = norm($('#s', el)?.value || '');
+        productsSearch = $('#s', el)?.value || '';
+        let shown = 0;
+        el.querySelectorAll('.prow').forEach(r => { const ok = r.dataset.name.includes(n); r.hidden = !ok; shown += ok; });
+        $('#none', el).hidden = !!shown || !list.length;
+      };
+      $('#s', el)?.addEventListener('input', search);
+      if (productsSearch) search();
+      el.addEventListener('click', e => {
+        const a = e.target.closest('a[data-f]');
+        if (a) { e.preventDefault(); replaceTo(a.getAttribute('href')); return; }
+        const b = e.target.closest('[data-add]');
+        if (!b) return;
+        const p = db.products.find(x => x.id === b.dataset.add);
+        const n = parseInt(prompt(`Quantos "${p.name}" chegaram?`, '1'), 10);
+        if (!(n > 0)) return;
+        p.stock = Math.max(0, p.stock) + n;
+        save(); toast(`+${n} ${p.name} · agora tem ${p.stock}`); render();
+      });
+    },
+  };
+}
+
 function vItemForm(kind, q) {
   const K = KINDS[kind] || KINDS.services;
   const it = q.id ? K.list().find(x => x.id === q.id) : null;
@@ -2961,8 +3038,11 @@ function vItemForm(kind, q) {
             <div class="chips mini" id="pk-every">${Object.entries(EVERY_LABEL).map(([k, n]) => `<button type="button" class="chip ${k === (it?.package?.every ?? '7') ? 'on' : ''}" data-e="${k}">${cap(n)}</button>`).join('')}</div>
             <small class="hint">Ao agendar este serviço, o cronograma já vem pronto (dá para mudar na hora).</small>
           </div></div>` : ''}
-        ${!K.withDur ? `<div class="field"><label for="p">Valor <span class="opt">(se quiser)</span></label>
-          <div class="money"><input type="text" id="p" inputmode="decimal" placeholder="0,00" value="${moneyVal(it?.price)}"></div></div>` : `
+        ${!K.withDur ? `<div class="field"><label for="p">Preço de venda <span class="opt">(se quiser)</span></label>
+          <div class="money"><input type="text" id="p" inputmode="decimal" placeholder="0,00" value="${moneyVal(it?.price)}"></div></div>
+        <div class="field"><label for="cost">Quanto você paga (custo) <span class="opt">(se quiser)</span></label>
+          <div class="money"><input type="text" id="cost" inputmode="decimal" placeholder="0,00" value="${moneyVal(it?.cost)}"></div>
+          <small class="hint" id="margin"></small></div>` : `
         <p class="muted">💰 O valor é colocado em cada atendimento (muda conforme o serviço e a cliente).</p>`}
         ${!K.withDur ? `
         <div class="field"><label for="st">Quantos tem em estoque? <span class="opt">(se quiser controlar)</span></label>
@@ -2972,10 +3052,28 @@ function vItemForm(kind, q) {
         <div class="field"><label for="ms">Me avisar quando tiver só</label>
           <input type="number" id="ms" inputmode="numeric" min="0" step="1" value="${it?.minStock ?? 2}"></div>` : ''}
         <button class="btn main" type="submit">✓ Salvar</button>
+        ${!K.withDur && it ? (() => {
+          const sales = salesOfProduct(it).sort((a, b) => b.date.localeCompare(a.date));
+          if (!sales.length) return '<p class="muted" style="margin-top:1.5rem">Este produto ainda não foi vendido.</p>';
+          return `<h2>🛍️ Vendas deste produto</h2>
+            <div class="stats"><div class="stat"><span>Vendidos (total)</span><b>${soldQty(it)}</b></div><div class="stat"><span>Este mês</span><b>${soldQty(it, today().slice(0, 7))}</b></div></div>
+            <div class="list">${sales.slice(0, 8).map(x => saleCard(x)).join('')}</div>`;
+        })() : ''}
         ${it ? '<button class="btn danger" type="button" id="del" style="margin-top:2rem">🗑️ Apagar</button>' : ''}
       </form>`,
     bind(el) {
       if (!it) $('#n', el).focus();
+      // lucro por unidade
+      const paintMargin = () => {
+        const p = parseMoney($('#p', el)?.value), c = parseMoney($('#cost', el)?.value);
+        if (!$('#margin', el)) return;
+        $('#margin', el).innerHTML = p > 0 && c > 0
+          ? (p > c ? `💰 Lucro de <b>${brl(p - c)}</b> por unidade · ${Math.round((p - c) / p * 100)}%` : '<span style="color:var(--bad)">⚠️ O custo está maior ou igual ao preço de venda</span>')
+          : 'Com o custo, o app mostra quanto você ganha em cada unidade.';
+      };
+      $('#p', el)?.addEventListener('input', paintMargin);
+      $('#cost', el)?.addEventListener('input', paintMargin);
+      paintMargin();
       $('#online', el) && bindToggle2($('#online', el), () => {});
       // pacote pré-configurado
       let pk = { total: it?.package?.total || 4, every: it?.package?.every ?? '7' }, isPkg = !!it?.package?.total;
@@ -3007,6 +3105,9 @@ function vItemForm(kind, q) {
           const st = $('#st', el).value.trim();
           data.stock = st === '' ? null : Math.max(0, parseInt(st, 10) || 0);
           data.minStock = Math.max(0, parseInt($('#ms', el).value, 10) || 0);
+          const cv = $('#cost', el).value, cost = parseMoney(cv);
+          if (cv.trim() && cost == null) { $('#err', el).innerHTML = '<div class="error">O custo não está certo. Exemplo: 22,00</div>'; return; }
+          data.cost = cost;
         }
         if (it) Object.assign(it, data); else K.list().push({ id: uid(), createdAt: Date.now(), ...data });
         save(); toast('Salvo ✓'); back(`#/itens/${kind}`);
