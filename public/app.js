@@ -383,6 +383,8 @@ function badgesFor(a) {
     if (conflictsFor(a.date, a.time, a.duration, a.id).length) b.push('<span class="badge warn">⚠️ Horário junto</span>');
     if (a.source === 'online') b.push('<span class="badge">🌐 Pelo link</span>');
     if (a.seriesId) b.push('<span class="badge">🔁 Fixa</span>');
+    const sold = salesOfAppt(a).reduce((t, x) => t + (x.qty || 1), 0);
+    if (sold) b.push(`<span class="badge">🛍️ +${sold} produto${sold > 1 ? 's' : ''}</span>`);
   }
   return b.join('');
 }
@@ -447,6 +449,11 @@ const stockLabel = p => !hasStock(p) ? '' : p.stock <= 0 ? '⚠️ Sem estoque' 
 
 const nextInSeries = a => db.appts.filter(x => x.seriesId && x.seriesId === a.seriesId && x.id !== a.id &&
   (x.date + x.time) > (a.date + a.time) && x.status !== 'cancelado').sort(byWhen);
+// Produtos vendidos junto com um atendimento (sale.apptId)
+const salesOfAppt = a => db.sales.filter(x => x.apptId === a.id);
+const visitTotal = a => round2(valueOf(a) + salesOfAppt(a).reduce((t, x) => t + valueOf(x), 0));
+const visitLeft = a => round2(leftOf(a) + salesOfAppt(a).reduce((t, x) => t + leftOf(x), 0));
+
 const pendingAppts = () => db.appts.filter(a => a.status === 'pendente').sort(byWhen);
 
 // Aceitar ou recusar um pedido do link (o servidor manda a mensagem para a cliente)
@@ -909,6 +916,13 @@ function vAppt(id) {
           ${valueOf(a) > 0 && leftOf(a) > 0 ? `<button class="btn ok" id="receive" style="margin-top:.6rem">💰 Receber ${brl(leftOf(a))}</button>` : ''}
           ${paymentsOf(a).length ? '<button class="btn small" id="unpay" style="margin-top:.6rem">Desfazer pagamento</button>' : ''}
         </div>
+        <div class="card">
+          <span class="lbl" style="font-weight:700;display:block;margin-bottom:.35rem">🛍️ Produtos deste atendimento</span>
+          ${salesOfAppt(a).length ? `<div class="list">${salesOfAppt(a).map(x => saleCard(x, { showClient: false })).join('')}</div>` : '<span class="muted">Nenhum produto vendido.</span>'}
+          <a class="btn" href="#/venda?c=${a.clientId}&a=${a.id}" style="margin-top:.6rem">🛍️ Vender produto para ${esc(clientName(a.clientId).split(' ')[0])}</a>
+          ${salesOfAppt(a).length ? `<div class="line" style="margin-top:.8rem;font-size:1.1rem"><b class="grow">Total do atendimento</b><b>${brl(visitTotal(a))}</b></div>
+            ${visitLeft(a) > 0 ? `<button class="btn ok" id="receive-all" style="margin-top:.6rem">💰 Receber tudo (${brl(visitLeft(a))})</button>` : '<span class="badge ok">✓ Tudo pago</span>'}` : ''}
+        </div>
         ${a.status === 'feito'
           ? '<button class="btn" id="undo-done">Desmarcar "feito"</button>'
           : '<button class="btn ok" id="done">✓ Atendimento feito</button>'}
@@ -920,22 +934,34 @@ function vAppt(id) {
         <a class="btn" href="#/agendar?id=${a.id}">✏️ Mudar dia, horário ou serviço</a>
         ${a.status === 'cancelado'
           ? '<button class="btn" id="uncancel">Desfazer cancelamento</button>'
-          : `<button class="btn danger" id="cancel">Cliente desmarcou (cancelar ${a.seriesId ? 'só este' : ''})</button>`}
+          : `<button class="btn danger" id="cancel">Cliente desmarcou (cancelar${a.seriesId ? ' só este' : ''})</button>`}
         ${a.seriesId && nextInSeries(a).length ? `<button class="btn danger" id="cancel-next">Cancelar este e os próximos (${nextInSeries(a).length + 1})</button>` : ''}
         <button class="btn danger" id="del">🗑️ Apagar de vez${a.seriesId ? ' (só este)' : ''}</button>
         ${a.seriesId && nextInSeries(a).length ? `<button class="btn danger" id="del-next">🗑️ Apagar este e os próximos (${nextInSeries(a).length + 1})</button>` : ''}
       </div>`,
     bind(el) {
-      const upd = (fn, msg) => { fn(); save(); toast(msg); render(); };
+      // msg pode ser uma função: assim a mensagem mostra os valores DEPOIS da mudança
+      const upd = (fn, msg) => { fn(); save(); toast(typeof msg === 'function' ? msg() : msg); render(); };
       $('#save-price', el) && ($('#save-price', el).onclick = () => {
         const v = $('#price', el).value;
         const p = parseMoney(v);
         if (v.trim() && p == null) { alert('O valor não está certo. Exemplo: 50,00'); return; }
         upd(() => { a.price = p; if (p > 0) a.priceLater = false; refreshPaid(a); }, 'Valor salvo ✓');
       });
-      $('#later', el) && ($('#later', el).onclick = () => upd(() => (a.priceLater = !a.priceLater), a.priceLater ? 'Pronto' : 'Valor fica para avaliar na hora'));
+      $('#later', el) && ($('#later', el).onclick = () => upd(() => (a.priceLater = !a.priceLater), () => (a.priceLater ? 'Valor fica para avaliar na hora' : 'Pronto')));
       $('#receive', el) && ($('#receive', el).onclick = () => paySheet(a, `${clientName(a.clientId)} — ${a.service || 'Serviço'}`, (v, m) =>
-        upd(() => addPayment(a, v, m), isPaid(a) ? `Pago ✓ (${PAY[m]})` : `Recebido ${brl(v)} ✓`)));
+        upd(() => addPayment(a, v, m), () => (isPaid(a) ? `Pago ✓ (${PAY[m]})` : `Recebido ${brl(v)} ✓ Falta ${brl(leftOf(a))}`))));
+      // Receber serviço + produtos de uma vez: o valor quita primeiro o serviço, depois os produtos
+      $('#receive-all', el) && ($('#receive-all', el).onclick = () => {
+        const items = [a, ...salesOfAppt(a)].filter(x => leftOf(x) > 0);
+        paySheet({ total: visitLeft(a) }, `${clientName(a.clientId)} — serviço e produtos`, (v, m) => upd(() => {
+          let rest = v;
+          for (const x of items) {
+            const part = Math.min(rest, leftOf(x));
+            if (part > 0) { addPayment(x, part, m); rest = round2(rest - part); }
+          }
+        }, () => (visitLeft(a) === 0 ? `Tudo pago ✓ (${PAY[m]})` : `Recebido ${brl(v)} ✓ Falta ${brl(visitLeft(a))}`)));
+      });
       $('#unpay', el) && ($('#unpay', el).onclick = () => confirm('Apagar os pagamentos lançados neste horário?') && upd(() => clearPayments(a), 'Pagamento desfeito'));
       $('#accept', el) && ($('#accept', el).onclick = () => confirmSheet(a, v => { decide(a, true, v); render(); }));
       $('#decline', el) && ($('#decline', el).onclick = () => { if (decide(a, false)) render(); });
@@ -1238,7 +1264,8 @@ function vClientForm(_, q) {
    ===================================================================== */
 function vSaleForm(_, q) {
   const edit = q.id ? db.sales.find(s => s.id === q.id) : null;
-  const s = edit || { clientId: q.c || '', product: '', qty: 1, unitPrice: null, date: today(), paid: false, notes: '' };
+  const fromAppt = q.a ? db.appts.find(x => x.id === q.a) : null; // vendendo durante um atendimento
+  const s = edit || { clientId: fromAppt?.clientId || q.c || '', product: '', qty: 1, unitPrice: null, date: fromAppt?.date || today(), paid: false, notes: '' };
   let qty = s.qty || 1;
   let paid = isPaid(s);
   let method = paymentsOf(s).at(-1)?.m || '';
@@ -1248,6 +1275,8 @@ function vSaleForm(_, q) {
     html: `
       <form class="form" id="f" autocomplete="off" novalidate>
         <div id="err"></div>
+        ${(() => { const ap = fromAppt || (s.apptId && db.appts.find(x => x.id === s.apptId));
+          return ap ? `<div class="summary">🛍️ Junto com o atendimento de ${esc(dayName(ap.date).toLowerCase())}, ${fmtShort(ap.date)} às ${ap.time}${ap.service ? ' — ' + esc(ap.service) : ''}</div>` : ''; })()}
         <div class="field">
           <label for="f-client">Nome da cliente <em>*</em></label>
           <div class="ac"><input type="text" id="f-client" value="${esc(s.clientId ? clientName(s.clientId) : '')}" placeholder="Digite o nome" autocapitalize="words"><div class="sug" hidden></div></div>
@@ -1343,6 +1372,8 @@ function vSaleForm(_, q) {
         const p = findOrCreate(db.products, prod, { price: unit });
         if (!p.price && unit) p.price = unit;
         const data = { clientId: c.id, product: p.name, qty, unitPrice: unit, total: Math.round((unit || 0) * qty * 100) / 100, date: $('#f-date', el).value || today() };
+        const apptId = edit ? edit.apptId : fromAppt?.id;
+        if (apptId && db.appts.find(x => x.id === apptId)?.clientId === c.id) data.apptId = apptId; else delete data.apptId;
         if (paid && data.total > 0 && !method && !isPaid({ ...s, ...data })) { err('Toque em Pix, Dinheiro ou Cartão (como pagou).'); return; }
         const setPay = x => {
           if (!paid) { if (isPaid(x) || x.paid) clearPayments(x); return; }
@@ -1352,7 +1383,7 @@ function vSaleForm(_, q) {
         };
         if (edit) moveStock(edit.product, +edit.qty); // devolve o da venda antiga…
         moveStock(data.product, -qty);                 // …e tira o da venda nova
-        if (edit) { Object.assign(edit, data); setPay(edit); }
+        if (edit) { Object.assign(edit, data); if (!data.apptId) delete edit.apptId; setPay(edit); }
         else { const n = { id: uid(), createdAt: Date.now(), ...data, paid: false }; setPay(n); db.sales.push(n); }
         const pr = findByName(db.products, data.product);
         if (lowStock(pr)) setTimeout(() => toast(`📦 ${pr.name}: ${pr.stock <= 0 ? 'acabou o estoque' : `só restam ${pr.stock}`}`), 2300);
