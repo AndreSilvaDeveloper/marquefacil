@@ -342,7 +342,7 @@ function parseHash() {
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
   agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: (id, q) => (q.id ? vSaleForm(id, q) : vSell(id, q)), financeiro: vFin, mais: vMore,
-  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vItems(kind)), item: vItemForm, link: vLink, whatsapp: vWhats, conta: vConta, pacote: vPackageForm,
+  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, conta: vConta, pacote: vPackageForm,
 };
 
 let lastHash = '';
@@ -2918,22 +2918,71 @@ const KINDS = {
   products: { title: 'Meus produtos', one: 'produto', list: () => db.products, withDur: false },
 };
 
-function vItems(kind) {
-  const K = KINDS[kind] || KINDS.services;
-  const list = [...K.list()].sort((a, b) => (kind === 'products' ? lowStock(b) - lowStock(a) : 0) || byName(a, b));
+// Atendimentos de um serviço (pelo nome): feitos = 'feito' ou marcado que já passou
+const apptsOfService = sv => db.appts.filter(a => a.status !== 'cancelado' && norm(a.service) === norm(sv.name));
+const doneOfService = (sv, month = '') => apptsOfService(sv).filter(a => (a.status === 'feito' || (a.status === 'marcado' && isPast(a))) && (!month || a.date.startsWith(month)));
+const earnedOfService = (sv, month = '') => round2(apptsOfService(sv).reduce((t, a) => t + paymentsOf(a).filter(p => !month || p.d?.startsWith(month)).reduce((u, p) => u + (p.v || 0), 0), 0));
+
+let servicesSearch = '';
+const SERVICE_FILTERS = {
+  '': ['Todos', () => true],
+  link: ['🌐 No link', sv => sv.online !== false],
+  salao: ['🔒 Só no salão', sv => sv.online === false],
+  pacotes: ['📦 Pacotes', sv => sv.package?.total > 0],
+  feitos: ['🔥 Mais feitos', sv => doneOfService(sv, today().slice(0, 7)).length > 0],
+};
+function vServices(kind, q) {
+  const f = SERVICE_FILTERS[q.f] ? q.f : '';
+  const month = today().slice(0, 7);
+  const all = db.services;
+  let list = all.filter(SERVICE_FILTERS[f][1]);
+  list = f === 'feitos' ? list.sort((a, b) => doneOfService(b, month).length - doneOfService(a, month).length) : list.sort(byName);
+  const doneMonth = all.reduce((t, sv) => t + doneOfService(sv, month).length, 0);
+  const earnedMonth = round2(all.reduce((t, sv) => t + earnedOfService(sv, month), 0));
+  const onLink = all.filter(sv => sv.online !== false).length;
   return {
-    title: K.title, tab: 'mais', back: true,
+    title: 'Meus serviços', tab: 'mais', back: true,
     html: `
-      <a class="btn main" href="#/item/${kind}" style="margin-bottom:1rem">+ Novo ${K.one}</a>
-      <p class="muted">Eles também são salvos sozinhos quando você escreve um ${K.one} novo ${kind === 'services' ? 'ao agendar' : 'ao vender'}.</p>
-      <div class="list">${list.length ? list.map(it => `
-        <a class="card line" href="#/item/${kind}?id=${it.id}">
-          <div class="grow"><b>${esc(it.name)}</b>${K.withDur
-            ? (it.package?.total ? `<span>📦 Pacote · ${it.package.total} sessões · ${EVERY_LABEL[it.package.every ?? '7']}</span>` : '')
-              + (it.description ? `<span>${esc(it.description)}</span>` : '')
-            : `<span>${it.price ? brl(it.price) : 'Sem valor definido'}</span>`}</div>
-          ${!K.withDur && hasStock(it) ? `<span class="badge ${lowStock(it) ? 'bad' : ''}">${stockLabel(it)}</span>` : ''}
-          <span class="muted">›</span></a>`).join('') : `<div class="empty">Nenhum ${K.one} ainda.</div>`}</div>`,
+      <div class="totals">
+        <div class="total"><span>Serviços</span><b>${all.length}</b><small class="muted">${onLink} no link · ${all.length - onLink} só no salão</small></div>
+        <div class="total ok"><span>Feitos no mês</span><b>${doneMonth}</b><small class="muted">renderam ${brl(earnedMonth)}</small></div>
+      </div>
+      <a class="btn main" href="#/item/services" style="margin-bottom:.8rem">+ Novo serviço</a>
+      ${all.length ? `
+      <div class="search"><input type="search" id="s" placeholder="🔍 Procurar serviço" value="${esc(servicesSearch)}"></div>
+      <div class="chips filters">${Object.entries(SERVICE_FILTERS).map(([k, [n, fn]]) => `<a class="chip ${f === k ? 'on' : ''}" href="#/itens/services${k ? '?f=' + k : ''}" data-f>${n} <small>${all.filter(fn).length}</small></a>`).join('')}</div>` : ''}
+      <div class="list" id="slist">${list.length ? list.map(sv => {
+        const n = doneOfService(sv, month).length, earned = earnedOfService(sv, month);
+        return `<div class="card line prow" data-name="${esc(norm(sv.name + ' ' + (sv.description || '')))}">
+          <a class="grow" href="#/item/services?id=${sv.id}"><b>${esc(sv.name)}</b>
+            ${sv.description ? `<span class="desc">${esc(sv.description)}</span>` : ''}
+            <span>${[sv.duration ? '⏱️ ' + fmtDur(sv.duration) : '', n ? `feito ${n}× este mês${earned ? ' · ' + brl(earned) : ''}` : ''].filter(Boolean).join(' · ') || '&nbsp;'}</span>
+            <div class="badges">${sv.package?.total ? `<span class="badge">📦 ${sv.package.total} sessões · ${EVERY_LABEL[sv.package.every ?? '7']}</span>` : ''}</div></a>
+          <button type="button" class="btn small linkbtn ${sv.online !== false ? 'on' : ''}" data-online="${sv.id}" aria-label="${sv.online !== false ? 'Tirar do link' : 'Pôr no link'}">${sv.online !== false ? '🌐 No link' : '🔒 Só salão'}</button>
+        </div>`;
+      }).join('') : `<div class="empty">${all.length ? 'Nenhum serviço neste filtro.' : 'Nenhum serviço ainda.<br>Eles também aparecem sozinhos quando você escreve um serviço novo ao agendar.'}</div>`}</div>
+      <div class="empty" id="none" hidden>Nenhum serviço com esse nome.</div>
+      <p class="muted" style="font-size:.88rem">🌐 No link = a cliente pode escolher esse serviço ao pedir horário pela internet. 🔒 Só salão = só você agenda.</p>`,
+    bind(el) {
+      const search = () => {
+        const n = norm($('#s', el)?.value || '');
+        servicesSearch = $('#s', el)?.value || '';
+        let shown = 0;
+        el.querySelectorAll('.prow').forEach(r => { const ok = r.dataset.name.includes(n); r.hidden = !ok; shown += ok; });
+        $('#none', el).hidden = !!shown || !list.length;
+      };
+      $('#s', el)?.addEventListener('input', search);
+      if (servicesSearch) search();
+      el.addEventListener('click', e => {
+        const a = e.target.closest('a[data-f]');
+        if (a) { e.preventDefault(); replaceTo(a.getAttribute('href')); return; }
+        const b = e.target.closest('[data-online]');
+        if (!b) return;
+        const sv = db.services.find(x => x.id === b.dataset.online);
+        sv.online = sv.online === false;
+        save(); toast(sv.online ? `${sv.name}: aparece no link ✓` : `${sv.name}: só no salão`); render();
+      });
+    },
   };
 }
 
@@ -3052,6 +3101,26 @@ function vItemForm(kind, q) {
         <div class="field"><label for="ms">Me avisar quando tiver só</label>
           <input type="number" id="ms" inputmode="numeric" min="0" step="1" value="${it?.minStock ?? 2}"></div>` : ''}
         <button class="btn main" type="submit">✓ Salvar</button>
+        ${K.withDur && it ? (() => {
+          const done = doneOfService(it).sort(byWhen).reverse();
+          if (!done.length) return '<p class="muted" style="margin-top:1.5rem">Este serviço ainda não foi feito.</p>';
+          const charged = done.filter(a => valueOf(a) > 0);
+          const avg = charged.length ? round2(charged.reduce((t, a) => t + valueOf(a), 0) / charged.length) : 0;
+          const durs = done.filter(a => a.duration > 0);
+          const avgDur = durs.length ? Math.round(durs.reduce((t, a) => t + a.duration, 0) / durs.length / 5) * 5 : 0;
+          const seen = new Set(), recent = [];
+          for (const a of done) { if (!seen.has(a.clientId)) { seen.add(a.clientId); recent.push(a); } if (recent.length === 6) break; }
+          return `<h2>📊 Este serviço</h2>
+            <div class="stats">
+              <div class="stat"><span>Feito (total)</span><b>${done.length}×</b></div>
+              <div class="stat"><span>Este mês</span><b>${doneOfService(it, today().slice(0, 7)).length}×</b></div>
+              <div class="stat"><span>Média cobrada</span><b>${avg ? brl(avg) : '—'}</b><small class="muted">${charged.length ? `de ${brl(Math.min(...charged.map(a => valueOf(a))))} a ${brl(Math.max(...charged.map(a => valueOf(a))))}` : ''}</small></div>
+              <div class="stat"><span>Já rendeu</span><b>${brl(earnedOfService(it))}</b></div>
+              ${avgDur ? `<div class="stat"><span>Tempo médio marcado</span><b>${fmtDur(avgDur)}</b></div>` : ''}
+            </div>
+            <h2>👩 Últimas clientes</h2>
+            <div class="list">${recent.map(a => `<a class="card line" href="#/cliente/${a.clientId}">${avatar(clientName(a.clientId))}<div class="grow"><b>${esc(clientName(a.clientId))}</b><span>${fmtShort(a.date)}${valueOf(a) > 0 ? ' · ' + brl(valueOf(a)) : ''}</span></div><span class="muted">›</span></a>`).join('')}</div>`;
+        })() : ''}
         ${!K.withDur && it ? (() => {
           const sales = salesOfProduct(it).sort((a, b) => b.date.localeCompare(a.date));
           if (!sales.length) return '<p class="muted" style="margin-top:1.5rem">Este produto ainda não foi vendido.</p>';
