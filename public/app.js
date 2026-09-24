@@ -421,6 +421,19 @@ function apptCard(a, { showDate = false, showClient = true } = {}) {
     </div></a>`;
 }
 
+// Linha enxuta de venda e de despesa (busca)
+function saleRow(x) {
+  const paid = isPaid(x);
+  return `<a class="dayrow" href="#/venda?id=${x.id}">
+    <span class="dr-time"><b>${fmtShort(x.date).slice(0, 5)}</b><small>🛍️ venda</small></span>
+    <span class="dr-info"><b>${esc(x.product)}${x.qty > 1 ? ` (${x.qty}x)` : ''}</b><span>${esc(clientName(x.clientId))}</span>${paid ? '' : `<em class="warn">Deve ${brl(leftOf(x))}</em>`}</span>
+    <span class="dr-money ${paid ? 'ok' : ''}">${paid ? '✓ ' : ''}${brl(valueOf(x)).replace(',00', '')}</span></a>`;
+}
+const expenseLine = e => `<a class="dayrow" href="#/despesa?id=${e.id}">
+  <span class="dr-time"><b>${fmtShort(e.date).slice(0, 5)}</b><small>➖ despesa</small></span>
+  <span class="dr-info"><b>${esc(e.desc || e.cat || 'Despesa')}</b>${e.cat && e.desc ? `<span>${esc(e.cat)}</span>` : ''}</span>
+  <span class="dr-money" style="color:var(--bad)">− ${brl(e.amount).replace(',00', '')}</span></a>`;
+
 function saleCard(s, { showClient = true } = {}) {
   return `<a class="card appt" href="#/venda?id=${s.id}">
     <div class="time" style="font-size:1.6rem">🛍️</div>
@@ -600,12 +613,14 @@ function dayTimeline(d, active, tags = {}) {
 }
 
 // Linha enxuta da agenda do dia: hora | cliente e serviço | valor. No máximo um aviso curto embaixo.
-function dayRow(a, tag = '') {
-  const past = isPast(a) || a.status === 'feito';
+function dayRow(a, tag = '', { date = false } = {}) {
+  const past = isPast(a) || a.status === 'feito' || a.status === 'cancelado';
   const clash = conflictsFor(a.date, a.time, a.duration, a.id);
   const pos = pkgPos(a);
   const done = a.status === 'feito' || (a.status === 'marcado' && isPast(a));
   const note = tag ? `<em class="now">${tag}</em>`
+    : a.status === 'cancelado' ? `<em class="bad">❌ ${a.cancelledBy === 'cliente' ? 'Cancelado pela cliente' : a.cancelledBy === 'remarcado' ? 'Remarcado' : 'Cancelado'}</em>`
+    : done && apptDue(a) ? `<em class="warn">✓ Feito · deve ${brl(leftOf(a))}</em>`
     : done ? '<em class="ok">✓ Feito</em>'
     : a.status === 'pendente' ? `<em class="warn">⏳ ${a.replaces ? 'Quer remarcar' : 'Pedido'} — toque para confirmar</em>`
     : a.status === PRE ? '<em class="pre">💳 Pré-reserva · esperando o sinal</em>'
@@ -614,8 +629,11 @@ function dayRow(a, tag = '') {
   const v = valueOf(a), paid = isPaid(a);
   const money = v > 0 ? `<span class="dr-money ${paid ? 'ok' : ''}">${paid ? '✓ ' : ''}${brl(v).replace(',00', '')}</span>`
     : paid ? '<span class="dr-money ok">✓ pago</span>' : '';
+  const when = date
+    ? `<span class="dr-time"><b>${fmtShort(a.date).slice(0, 5)}</b><small>${fmtDate(a.date, { weekday: 'short' }).replace('.', '')} ${a.time}</small></span>`
+    : `<span class="dr-time"><b>${a.time}</b>${a.duration ? `<small>${hhmm(apptEnd(a))}</small>` : ''}</span>`;
   return `<a class="dayrow ${past ? 'past' : ''} ${tag ? 'is-next' : ''} ${a.status}" href="#/agendamento/${a.id}">
-    <span class="dr-time"><b>${a.time}</b>${a.duration ? `<small>${hhmm(apptEnd(a))}</small>` : ''}</span>
+    ${when}
     <span class="dr-info"><b>${esc(clientName(a.clientId))}</b>${a.service ? `<span>${esc(a.service)}</span>` : ''}${note}</span>
     ${money}</a>`;
 }
@@ -1460,8 +1478,6 @@ function vBuscar(_, q) {
   const k = SEARCH_SHORTCUTS[q.k] ? q.k : '';
   const url = o => '#/buscar?' + Object.entries({ q: text, t: type, k, ...o }).filter(([, v]) => v).map(([a, b]) => `${a}=${encodeURIComponent(b)}`).join('&');
 
-  const expenseRow = e => `<a class="card line" href="#/despesa?id=${e.id}"><div class="grow"><b>➖ ${esc(e.desc || e.cat || 'Despesa')}</b>
-    <span>${fmtShort(e.date)}${e.cat && e.desc ? ' · ' + esc(e.cat) : ''}</span></div><span class="amount" style="color:var(--bad)">− ${brl(e.amount)}</span></a>`;
 
   function results() {
     // atalho escolhido
@@ -1469,34 +1485,34 @@ function vBuscar(_, q) {
       const [label, fn] = SEARCH_SHORTCUTS[k];
       if (k === 'devendo') {
         const cs = db.clients.map(c => ({ c, owes: clientOwes(c.id) })).filter(x => x.owes > 0).sort((a, b) => b.owes - a.owes);
-        return `<h2>${label} · ${cs.length} · ${brl(cs.reduce((t, x) => t + x.owes, 0))}</h2><div class="list">${cs.length ? cs.map(x => clientRow(x.c, undefined, 'devendo')).join('') : '<div class="empty">Ninguém devendo. 🎉</div>'}</div>`;
+        return `<h2>${label} · ${cs.length} · ${brl(cs.reduce((t, x) => t + x.owes, 0))}</h2><div class="list clist">${cs.length ? cs.map(x => clientRow(x.c, undefined, 'devendo')).join('') : '<div class="empty">Ninguém devendo. 🎉</div>'}</div>`;
       }
       if (k === 'aniver') {
         const cs = bdaysSoon();
-        return `<h2>${label} · próximos 7 dias</h2><div class="list">${cs.length ? cs.map(c => clientRow(c, undefined, 'aniver')).join('')
+        return `<h2>${label} · próximos 7 dias</h2><div class="list clist">${cs.length ? cs.map(c => clientRow(c, undefined, 'aniver')).join('')
           : '<div class="empty">Nenhum aniversário nos próximos 7 dias.<br><small>Coloque o aniversário na ficha da cliente (✏️ Editar).</small></div>'}</div>`;
       }
       const list = fn();
-      return `<h2>${label} · ${list.length}</h2><div class="list">${list.length ? list.map(a => apptCard(a, { showDate: true })).join('') : '<div class="empty">Nada por aqui.</div>'}</div>`;
+      return `<h2>${label} · ${list.length}</h2><div class="list clist">${list.length ? list.map(a => dayRow(a, '', { date: true })).join('') : '<div class="empty">Nada por aqui.</div>'}</div>`;
     }
     const words = norm(text).split(/\s+/).filter(Boolean);
     if (!words.length) return '';
     const hit = str => words.every(w => str.includes(w));
     const appts = db.appts.filter(x => hit(searchText('a', x)));
-    const itemRow = (kind, it) => `<a class="card line" href="#/item/${kind}?id=${it.id}"><div class="grow"><b>${esc(it.name)}</b>
+    const itemRow = (kind, it) => `<a class="dayrow" href="#/item/${kind}?id=${it.id}"><span class="dr-info"><b>${esc(it.name)}</b>
       <span>${kind === 'services' ? [it.duration ? fmtDur(it.duration) : '', it.package?.total ? `📦 ${it.package.total} sessões` : '', it.online === false ? '🔒 só no salão' : ''].filter(Boolean).join(' · ') || 'Serviço'
-        : [it.price ? brl(it.price) : '', hasStock(it) ? stockLabel(it) : ''].filter(Boolean).join(' · ') || 'Produto'}</span></div><span class="muted">›</span></a>`;
+        : [it.price ? brl(it.price) : '', hasStock(it) ? stockLabel(it) : ''].filter(Boolean).join(' · ') || 'Produto'}</span></span><span class="muted">›</span></a>`;
     const groups = {
-      c: ['👩 Clientes', db.clients.filter(x => hit(searchText('c', x))).sort(byName), clientRow],
+      c: ['👩 Clientes', db.clients.filter(x => hit(searchText('c', x))).sort(byName), x => clientRow(x)],
       a: ['📅 Horários', appts, null],
-      s: ['🛍️ Vendas', db.sales.filter(x => hit(searchText('s', x))).sort(byWhen).reverse(), x => saleCard(x)],
-      e: ['➖ Despesas', db.expenses.filter(x => hit(searchText('e', x))).sort((a, b) => b.date.localeCompare(a.date)), expenseRow],
+      s: ['🛍️ Vendas', db.sales.filter(x => hit(searchText('s', x))).sort(byWhen).reverse(), saleRow],
+      e: ['➖ Despesas', db.expenses.filter(x => hit(searchText('e', x))).sort((a, b) => b.date.localeCompare(a.date)), expenseLine],
       v: ['💇 Serviços', db.services.filter(x => hit(norm(`${x.name} ${x.description || ''} servico`))).sort(byName), it => itemRow('services', it)],
       p: ['🧴 Produtos', db.products.filter(x => hit(norm(`${x.name} produto`))).sort(byName), it => itemRow('products', it)],
     };
     const total = Object.values(groups).reduce((t, g) => t + g[1].length, 0);
     if (!total) return `<div class="empty">Nada encontrado para "<b>${esc(text)}</b>".<br><small>Tente só uma parte do nome, ou um dia como 15/09.</small></div>`;
-    const chips = `<div class="chips filters">${[['', 'Tudo', total], ...Object.entries(groups).map(([key, g]) => [key, g[0], g[1].length])]
+    const chips = `<div class="chips filters hscroll">${[['', 'Tudo', total], ...Object.entries(groups).map(([key, g]) => [key, g[0], g[1].length])]
       .filter(([key, , n]) => !key || n).map(([key, n, c]) => `<a class="chip ${type === key ? 'on' : ''}" href="${url({ t: key })}" data-go>${n} <small>${c}</small></a>`).join('')}</div>`;
     const lim = type ? 200 : 8;
     const more = (key, n) => (n > lim ? `<a class="btn small" href="${url({ t: key })}" data-go style="margin-top:.6rem">Ver todos (${n})</a>` : '');
@@ -1505,7 +1521,7 @@ function vBuscar(_, q) {
       const live = appts.filter(a => a.status !== 'cancelado');
       const sum = round2(live.reduce((t, a) => t + valueOf(a), 0)), paid = round2(live.reduce((t, a) => t + paidOf(a), 0));
       const soon = appts.filter(a => !isPast(a)).sort(byWhen), past = appts.filter(isPast).sort(byWhen).reverse();
-      const part = (title, list) => (list.length ? `<h3 class="subh">${title} · ${list.length}</h3><div class="list">${list.slice(0, lim).map(a => apptCard(a, { showDate: true })).join('')}</div>${more('a', list.length)}` : '');
+      const part = (title, list) => (list.length ? `<h3 class="subh">${title} · ${list.length}</h3><div class="list clist">${list.slice(0, lim).map(a => dayRow(a, '', { date: true })).join('')}</div>${more('a', list.length)}` : '');
       return `<h2>📅 Horários · ${appts.length}</h2>
         ${sum ? `<p class="muted sumline">Valor: <b>${brl(sum)}</b> · recebido <b style="color:var(--ok)">${brl(paid)}</b>${sum > paid ? ` · a receber <b style="color:var(--warn)">${brl(round2(sum - paid))}</b>` : ''}</p>` : ''}
         ${part('Próximos', soon)}${part('Anteriores', past)}`;
@@ -1513,7 +1529,7 @@ function vBuscar(_, q) {
     const show = Object.entries(groups).filter(([key, g]) => g[1].length && (!type || type === key)).map(([key, [label, list, row]]) => {
       if (key === 'a') return apptsHtml();
       const money = key === 's' ? brl(list.reduce((t, x) => t + (x.total || 0), 0)) : key === 'e' ? brl(list.reduce((t, x) => t + (x.amount || 0), 0)) : '';
-      return `<h2>${label} · ${list.length}${money ? ' · ' + money : ''}</h2><div class="list">${list.slice(0, lim).map(row).join('')}</div>${more(key, list.length)}`;
+      return `<h2>${label} · ${list.length}${money ? ' · ' + money : ''}</h2><div class="list clist">${list.slice(0, lim).map(row).join('')}</div>${more(key, list.length)}`;
     }).join('');
     return chips + show;
   }
@@ -1529,7 +1545,7 @@ function vBuscar(_, q) {
       }).join('')}</div>
       ${recent.length ? `<h2>Buscas recentes</h2><div class="chips">${recent.map(r => `<a class="chip" href="${url({ q: r, k: '', t: '' })}" data-go>🕘 ${esc(r)}</a>`).join('')}</div>` : ''}
       <h2>Próximos horários</h2>
-      <div class="list">${next.length ? next.map(a => apptCard(a, { showDate: true })).join('') : '<div class="muted">Nada marcado para os próximos dias.</div>'}</div>
+      <div class="list clist">${next.length ? next.map(a => dayRow(a, '', { date: true })).join('') : '<div class="empty">Nada marcado para os próximos dias.</div>'}</div>
       <p class="muted" style="margin-top:1.5rem;font-size:.9rem">💡 Dá para buscar por nome, telefone, serviço, produto, dia (<b>15/09</b>, <b>amanhã</b>), dia da semana (<b>sexta</b>), mês (<b>setembro</b>), <b>cancelado</b>, <b>devendo</b> ou valor (<b>60</b>). Juntar palavras também funciona: <b>maria escova</b>.${SpeechRec ? ' Ou toque em 🎤 e fale.' : ''}</p>`;
   }
 

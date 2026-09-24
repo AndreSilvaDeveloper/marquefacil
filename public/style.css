@@ -643,3 +643,10 @@ a.rank-row { color: inherit; text-decoration: none; }
 .change { margin-top: .7rem; background: var(--ok-soft); border-radius: 12px; padding: .7rem .8rem; }
 .change .money { flex: 1; }
 .troco { flex: 1; font-size: 1.05rem; }
+
+/* ---------- Buscar: linhas enxutas ---------- */
+.list.clist > .dayrow:first-child { border-top: 0; }
+.list.clist .dayrow.past { opacity: 1; }
+.list.clist .dayrow.cancelado { opacity: .6; }
+.dr-info em.bad { color: var(--bad); }
+.dayrow > .muted { flex: 0 0 auto; }
