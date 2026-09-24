@@ -634,3 +634,12 @@ a.rank-row { color: inherit; text-decoration: none; }
 .lowbox { flex-direction: column; align-items: stretch; }
 .lowbox .grow span { white-space: normal; }
 .lowbox .btn.small { width: 100%; }
+
+/* ---------- Vender: produto na venda e troco ---------- */
+.prodgrid button { position: relative; }
+.prodgrid button.on { border-color: var(--brand); background: var(--brand-soft); }
+.prodgrid button.out { opacity: .6; }
+.prodgrid .incart { position: absolute; top: -.45rem; right: -.35rem; min-width: 1.6rem; height: 1.6rem; padding: 0 .35rem; border-radius: 999px; background: var(--brand); color: #fff; font-style: normal; font-weight: 800; font-size: .85rem; display: grid; place-items: center; }
+.change { margin-top: .7rem; background: var(--ok-soft); border-radius: 12px; padding: .7rem .8rem; }
+.change .money { flex: 1; }
+.troco { flex: 1; font-size: 1.05rem; }

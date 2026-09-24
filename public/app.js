@@ -749,16 +749,6 @@ function busyList(date, exceptId) {
     `<b>${a.time}${a.duration ? '–' + hhmm(apptEnd(a)) : ''}</b> ${esc(clientName(a.clientId))}`).join(' · ')}</small>`;
 }
 
-// Clientes usadas por último (para um toque)
-function recentClients(n = 6) {
-  const seen = new Set(), out = [];
-  for (const a of [...db.appts].sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0))) {
-    if (seen.has(a.clientId) || !client(a.clientId)) continue;
-    seen.add(a.clientId); out.push(client(a.clientId));
-    if (out.length === n) break;
-  }
-  return out;
-}
 // Serviços mais usados
 function topServices(n = 6) {
   const count = {};
@@ -2126,21 +2116,20 @@ function vSell(_, q) {
         <div class="field">
           <span class="lbl">Para quem?</span>
           <div id="who">
-            <div class="ac"><input type="text" id="f-client" value="${esc(startClient ? clientName(startClient) : '')}" placeholder="Nome da cliente" autocapitalize="words"><div class="sug" hidden></div></div>
-            <small id="h-client" class="hint"></small>
-            <div class="chips mini" style="margin-top:.5rem">
-              ${!startClient ? recentClients(5).map(c => `<button type="button" class="chip" data-cid="${c.id}">${esc(c.name.split(' ').slice(0, 2).join(' '))}</button>`).join('') : ''}
-              ${fromAppt ? '' : '<button type="button" class="chip" id="counter">🧍 Balcão (sem nome)</button>'}
+            <div class="searchadd">
+              <div class="ac" style="flex:1;min-width:0"><input type="text" id="f-client" value="${esc(startClient ? clientName(startClient) : '')}" placeholder="Nome da cliente" autocapitalize="words"><div class="sug" hidden></div></div>
+              ${fromAppt ? '' : '<button type="button" class="btn small" id="counter" style="min-height:3.2rem">🧍 Balcão</button>'}
             </div>
-            <input type="tel" id="f-phone" value="${esc(client(startClient)?.phone || '')}" placeholder="Telefone (se quiser)" style="margin-top:.5rem">
+            <small id="h-client" class="hint"></small>
+            <input type="tel" id="f-phone" value="${esc(client(startClient)?.phone || '')}" placeholder="Telefone da cliente nova (se quiser)" style="margin-top:.5rem" hidden>
           </div>
           <div id="who-counter" hidden><div class="card line"><b class="grow">🧍 Venda de balcão</b><button type="button" class="btn small" id="uncounter">Trocar</button></div></div>
         </div>
 
         <div class="field">
           <span class="lbl">O que vendeu?</span>
-          ${topProducts().length ? `<div class="prodgrid" id="prods">${topProducts().map(p => `<button type="button" data-p="${esc(p.name)}">
-            <b>${esc(p.name)}</b><small>${p.price ? brl(p.price) : 'sem preço'}${hasStock(p) ? ` · ${p.stock <= 0 ? '⚠️ sem estoque' : `tem ${p.stock}`}` : ''}</small></button>`).join('')}</div>` : ''}
+          ${topProducts().length ? `<div class="prodgrid" id="prods">${topProducts().map(p => `<button type="button" data-p="${esc(p.name)}" class="${hasStock(p) && p.stock <= 0 ? 'out' : ''}">
+            <b>${esc(p.name)}</b><small>${p.price ? brl(p.price) : 'sem preço'}${hasStock(p) ? ` · ${p.stock <= 0 ? 'sem estoque' : `tem ${p.stock}`}` : ''}</small><i class="incart" hidden></i></button>`).join('')}</div>` : ''}
           <div class="row" style="margin-top:.5rem;align-items:flex-start">
             <div class="ac" style="flex:2"><input type="text" id="f-prod" placeholder="${db.products.length ? 'Outro produto…' : 'Nome do produto'}" autocapitalize="sentences"><div class="sug" hidden></div></div>
             <button type="button" class="btn small main" id="add" style="flex:0 0 auto;min-height:3.2rem">+ Pôr</button>
@@ -2154,6 +2143,10 @@ function vSell(_, q) {
           <div class="paygrid four" id="pay">
             ${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}">${n}</button>`).join('')}
             <button type="button" data-m="depois">Vai pagar depois</button>
+          </div>
+          <div class="change" id="change" hidden>
+            <label for="f-got">Recebeu quanto em dinheiro?</label>
+            <div class="row" style="align-items:center"><div class="money"><input type="text" id="f-got" inputmode="numeric" placeholder="0,00"></div><b id="troco" class="troco"></b></div>
           </div>
         </div>
 
@@ -2180,11 +2173,6 @@ function vSell(_, q) {
       };
       $('#counter', el)?.addEventListener('click', () => setCounter(true));
       $('#uncounter', el)?.addEventListener('click', () => setCounter(false));
-      el.querySelectorAll('[data-cid]').forEach(b => b.onclick = () => {
-        iClient.value = client(b.dataset.cid).name;
-        iClient.dispatchEvent(new Event('change'));
-        paint();
-      });
 
       function addItem(name) {
         name = name.trim();
@@ -2194,7 +2182,7 @@ function vSell(_, q) {
         if (line) line.qty++;
         else cart.push({ name: p?.name || niceName(name), qty: 1, price: p?.price ?? null });
         paint();
-        toast(`+1 ${p?.name || name}`);
+        if (!$(`#prods [data-p="${CSS.escape(p?.name || '')}"]`, el)) toast(`+1 ${p?.name || niceName(name)}`); // produto fora dos quadrados
       }
       $('#prods', el)?.addEventListener('click', e => { const b = e.target.closest('[data-p]'); if (b) addItem(b.dataset.p); });
       $('#add', el).onclick = () => { addItem(iProd.value); iProd.value = ''; };
@@ -2220,6 +2208,18 @@ function vSell(_, q) {
           <div class="cart-total"><span>Total</span><b>${brl(total())}</b></div></div>`
           : '<p class="muted" style="text-align:center">Toque nos produtos acima para pôr na venda.</p>';
         el.querySelectorAll('#pay [data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === method));
+        // quadrados dos produtos: quantos já estão na venda
+        el.querySelectorAll('#prods [data-p]').forEach(b => {
+          const q = cart.find(x => norm(x.name) === norm(b.dataset.p))?.qty || 0;
+          b.classList.toggle('on', q > 0);
+          const i = $('.incart', b); i.hidden = !q; i.textContent = q;
+        });
+        // telefone só para cliente nova; troco só no dinheiro
+        const nm = iClient.value.trim();
+        $('#f-phone', el).hidden = counter || !nm || !!findByName(db.clients, nm);
+        $('#change', el).hidden = method !== 'dinheiro';
+        const got = parseMoney($('#f-got', el).value);
+        $('#troco', el).innerHTML = method === 'dinheiro' && got ? (got >= total() ? `Troco: <span style="color:var(--ok)">${brl(round2(got - total()))}</span>` : `<span style="color:var(--bad)">Faltam ${brl(round2(total() - got))}</span>`) : '';
         const who = counter ? '🧍 Balcão' : iClient.value.trim() || '<span class="muted">cliente?</span>';
         const items = cart.reduce((t, x) => t + x.qty, 0);
         $('#sum', el).innerHTML = `${counter ? who : esc(iClient.value.trim()) || who} · ${items ? `${items} ${items === 1 ? 'item' : 'itens'}` : '<span class="muted">produtos?</span>'} · <b>${brl(total())}</b>`;
@@ -2239,7 +2239,8 @@ function vSell(_, q) {
         cart[+i].price = parseMoney(e.target.value);
         paint();
       });
-      $('#pay', el).onclick = e => { const b = e.target.closest('[data-m]'); if (b) { method = b.dataset.m; paint(); } };
+      $('#pay', el).onclick = e => { const b = e.target.closest('[data-m]'); if (b) { method = b.dataset.m; paint(); if (method === 'dinheiro') $('#f-got', el).focus(); } };
+      $('#f-got', el).addEventListener('input', paint);
       iClient.addEventListener('input', paint);
       iClient.addEventListener('change', paint);
       setCounter(counter);
