@@ -681,17 +681,35 @@ function vAgenda(_, q) {
     const ws = weekStart(d);
     const hours = salonHours();
     const days = Array.from({ length: 7 }, (_, i) => addDays(ws, i));
-    title = `Semana de ${fmtDate(ws, { day: 'numeric', month: 'short' }).replace('.', '')} a ${fmtDate(days[6], { day: 'numeric', month: 'short' }).replace('.', '')}`;
-    body = `<div class="weeklist">${days.map(day => {
+    const we = days[6];
+    title = ws.slice(5, 7) === we.slice(5, 7)
+      ? `${toDate(ws).getDate()} a ${toDate(we).getDate()} de ${MONTHS[toDate(we).getMonth()].toLowerCase()}`
+      : `${fmtShort(ws).slice(0, 5)} a ${fmtShort(we).slice(0, 5)}`;
+    const weekAppts = db.appts.filter(a => a.date >= ws && a.date <= we && a.status !== 'cancelado');
+    const wValue = round2(weekAppts.filter(a => a.status !== 'pendente').reduce((t, a) => t + valueOf(a), 0));
+    const wPend = weekAppts.filter(a => a.status === 'pendente').length;
+    const mark = a => a.status === 'pendente' ? '<i class="wmark warn" title="Pedido">⏳</i>'
+      : a.status === PRE ? '<i class="wmark pre" title="Pré-reserva">💳</i>'
+      : a.status === 'feito' || isPast(a) ? '<i class="wmark ok" title="Feito">✓</i>' : '';
+    body = `
+      ${weekAppts.length ? `<p class="csum" style="text-align:center"><b>${weekAppts.length}</b> ${weekAppts.length === 1 ? 'horário' : 'horários'} na semana${wValue ? ` · <b>${brl(wValue)}</b>` : ''}${wPend ? ` · <b style="color:var(--warn)">${wPend} ${wPend === 1 ? 'pedido' : 'pedidos'}</b>` : ''}</p>` : ''}
+      <div class="weeklist">${days.map(day => {
       const list = db.appts.filter(a => a.date === day && a.status !== 'cancelado').sort(byWhen);
       const closed = hours?.days && hours.days[toDate(day).getDay()] === null;
-      return `<div class="wday ${day === t ? 'today' : ''}">
+      const val = round2(list.filter(a => a.status !== 'pendente').reduce((t, a) => t + valueOf(a), 0));
+      const past = day < t;
+      return `<div class="wday ${day === t ? 'today' : ''} ${past ? 'past' : ''} ${!list.length ? 'noappt' : ''}">
         <a class="wday-head" href="${url({ d: day, v: '' })}" data-nav>
-          <b>${cap(fmtDate(day, { weekday: 'long' }))}</b> <span>${fmtShort(day).slice(0, 5)}</span>
-          <em>${list.length ? `${list.length} ${list.length === 1 ? 'horário' : 'horários'}` : closed ? 'Fechado' : 'Livre'} ›</em></a>
-        ${list.map(a => `<a class="wrow ${a.status}" href="#/agendamento/${a.id}"><b>${a.time}</b> ${esc(clientName(a.clientId))}${a.service ? ` <span>· ${esc(a.service)}</span>` : ''}${a.status === 'pendente' ? ' <span class="badge warn">⏳</span>' : ''}</a>`).join('')}
+          <b>${day === t ? 'Hoje' : cap(fmtDate(day, { weekday: 'long' }).replace('-feira', ''))}</b> <span>${fmtShort(day).slice(0, 5)}</span>
+          <em>${list.length ? `${list.length} ${list.length === 1 ? 'horário' : 'horários'}${val ? ` · ${brl(val).replace(',00', '')}` : ''}` : closed ? 'Fechado' : 'Livre'} ›</em></a>
+        ${list.map(a => `<a class="wrow ${a.status}" href="#/agendamento/${a.id}"><b>${a.time}</b><span class="wname">${esc(clientName(a.clientId))}${a.service ? ` <small>· ${esc(a.service)}</small>` : ''}</span>${mark(a)}</a>`).join('')}
+        ${!list.length && !closed && !past ? `<a class="wrow wadd" href="#/agendar?d=${day}">+ Agendar neste dia</a>` : ''}
       </div>`;
-    }).join('')}</div>`;
+    }).join('')}</div>
+      <div class="row" style="margin-top:1rem">
+        <a class="btn small" href="${url({ d: addDays(ws, -7) })}" data-nav>‹ Anterior</a>
+        <a class="btn small" href="${url({ d: addDays(ws, 7) })}" data-nav>Próxima ›</a>
+      </div>`;
   }
 
   return {
