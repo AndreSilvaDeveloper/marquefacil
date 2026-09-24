@@ -617,3 +617,20 @@ a.rank-row { color: inherit; text-decoration: none; }
 /* ---------- Serviços: botão pequeno do link ---------- */
 .linkpill { flex: 0 0 auto; border: 1.5px solid var(--line); background: #fff; color: var(--muted); border-radius: 999px; padding: .35rem .65rem; font-size: .8rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
 .linkpill.on { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
+
+/* ---------- Produtos: estoque na linha ---------- */
+.lowbox { display: flex; align-items: center; gap: .6rem; border-color: var(--warn); background: var(--warn-soft); margin-bottom: .7rem; padding: .7rem .8rem; }
+.lowbox .grow { display: flex; flex-direction: column; min-width: 0; }
+.lowbox .grow b { color: var(--warn); }
+.lowbox .grow span { font-size: .85rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lowbox .btn.small { flex: 0 0 auto; }
+.stk { flex: 0 0 auto; font-weight: 800; font-size: .85rem; color: var(--ok); white-space: nowrap; }
+.stk.warn { color: var(--warn); }
+.stk.bad { color: var(--bad); }
+.addstk { flex: 0 0 2.6rem; width: 2.6rem; height: 2.6rem; border-radius: 50%; border: 2px solid var(--brand); background: #fff; color: var(--brand); font-size: 1.4rem; font-weight: 800; line-height: 1; cursor: pointer; }
+.qtyrow { display: flex; gap: .5rem; align-items: center; justify-content: center; }
+.qtyrow input { max-width: 6rem; text-align: center; font-size: 1.5rem; font-weight: 800; }
+.qbtn { width: 3.2rem; height: 3.2rem; border-radius: 50%; border: 2px solid var(--brand); background: #fff; color: var(--brand); font-size: 1.6rem; font-weight: 800; cursor: pointer; }
+.lowbox { flex-direction: column; align-items: stretch; }
+.lowbox .grow span { white-space: normal; }
+.lowbox .btn.small { width: 100%; }

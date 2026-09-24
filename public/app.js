@@ -3267,26 +3267,26 @@ function vProducts(kind, q) {
   return {
     title: 'Meus produtos', tab: 'mais', back: true,
     html: `
-      <div class="totals">
-        <div class="total"><span>Produtos</span><b>${all.length}</b><small class="muted">${low.length ? `<span style="color:var(--warn);font-weight:700">⚠️ ${low.length} acabando</span>` : 'nenhum acabando'}</small></div>
-        <div class="total ok"><span>Vendido no mês</span><b>${brl(soldMonth)}</b></div>
-        <div class="total full"><span>Dinheiro parado no estoque</span><b>${brl(stockValue)}</b><small class="muted">${all.some(p => p.cost) ? 'pelo preço de custo (ou de venda, quando não tem custo)' : 'pelo preço de venda — coloque o custo nos produtos para ficar exato'}</small></div>
-      </div>
-      <div class="row" style="margin-bottom:.8rem">
-        <a class="btn main" href="#/item/products">+ Novo produto</a>
-        ${low.length ? `<a class="btn" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(shopText)}">🛒 Lista de compras</a>` : ''}
-      </div>
-      ${all.length ? `
-      <div class="search"><input type="search" id="s" placeholder="🔍 Procurar produto" value="${esc(productsSearch)}"></div>
-      <div class="chips filters">${Object.entries(PRODUCT_FILTERS).map(([k, [n, fn]]) => `<a class="chip ${f === k ? 'on' : ''}" href="#/itens/products${k ? '?f=' + k : ''}" data-f>${n} <small>${all.filter(fn).length}</small></a>`).join('')}</div>` : ''}
-      <div class="list" id="plist">${list.length ? list.map(p => `
-        <div class="card line prow" data-name="${esc(norm(p.name))}">
-          <a class="grow" href="#/item/products?id=${p.id}"><b>${esc(p.name)}</b>
-            <span>${p.price ? brl(p.price) : 'sem preço'}${soldQty(p, month) ? ` · vendeu ${soldQty(p, month)} este mês` : ''}</span>
-            <div class="badges">${stockBadge(p)}</div></a>
-          ${hasStock(p) ? `<button type="button" class="btn small" data-add="${p.id}" aria-label="Chegou mercadoria">📦 +</button>` : ''}
-        </div>`).join('') : `<div class="empty">${all.length ? 'Nenhum produto neste filtro.' : 'Nenhum produto ainda.<br>Eles também aparecem sozinhos quando você vende um produto novo.'}</div>`}</div>
-      <div class="empty" id="none" hidden>Nenhum produto com esse nome.</div>`,
+      <div class="search searchadd"><input type="search" id="s" placeholder="🔍 Procurar produto" value="${esc(productsSearch)}">
+        <a class="btn main small" href="#/item/products">+ Novo</a></div>
+      ${all.length ? `<p class="csum"><b>${all.length}</b> ${all.length === 1 ? 'produto' : 'produtos'}${soldMonth ? ` · vendido no mês <b style="color:var(--ok)">${brl(soldMonth)}</b>` : ''}${stockValue ? ` · <b>${brl(stockValue)}</b> no estoque` : ''}</p>` : ''}
+      ${low.length ? `<div class="card lowbox"><div class="grow"><b>⚠️ ${low.length} ${low.length === 1 ? 'produto acabando' : 'produtos acabando'}</b><span>${low.map(p => esc(p.name)).join(', ')}</span></div>
+        <a class="btn small" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(shopText)}">🛒 Lista de compras</a></div>` : ''}
+      ${all.length ? `<div class="chips filters hscroll">${Object.entries(PRODUCT_FILTERS).map(([k, [n, fn]]) => {
+        const cnt = all.filter(fn).length;
+        return !k || cnt || f === k ? `<a class="chip ${f === k ? 'on' : ''}" href="#/itens/products${k ? '?f=' + k : ''}" data-f>${n} <small>${cnt}</small></a>` : '';
+      }).join('')}</div>` : ''}
+      <div class="list clist" id="plist">${list.length ? list.map(p => {
+        const sold = soldQty(p, month);
+        const st = !hasStock(p) ? '' : p.stock <= 0 ? '<span class="stk bad">acabou</span>' : lowStock(p) ? `<span class="stk warn">só ${p.stock}</span>` : `<span class="stk">${p.stock} un</span>`;
+        return `<div class="crow prow" data-name="${esc(norm(p.name))}">
+          <a class="crow-main" href="#/item/products?id=${p.id}">
+            <span class="dr-info"><b>${esc(p.name)}</b><span>${[p.price ? brl(p.price) : 'sem preço', sold ? `vendeu ${sold} no mês` : ''].filter(Boolean).join(' · ')}</span></span>${st}</a>
+          ${hasStock(p) ? `<button type="button" class="addstk" data-add="${p.id}" aria-label="Chegou ${esc(p.name)}">+</button>` : ''}
+        </div>`;
+      }).join('') : `<div class="empty">${all.length ? 'Nenhum produto neste filtro.' : 'Nenhum produto ainda.<br>Eles também aparecem sozinhos quando você vende um produto novo.'}</div>`}</div>
+      <div class="empty" id="none" hidden>Nenhum produto com esse nome.</div>
+      ${all.some(hasStock) ? '<p class="muted" style="font-size:.85rem;margin-top:.8rem">Toque em <b>+</b> quando chegar mercadoria. O estoque baixa sozinho a cada venda.</p>' : ''}`,
     bind(el) {
       const search = () => {
         const n = norm($('#s', el)?.value || '');
@@ -3302,13 +3302,37 @@ function vProducts(kind, q) {
         if (a) { e.preventDefault(); replaceTo(a.getAttribute('href')); return; }
         const b = e.target.closest('[data-add]');
         if (!b) return;
-        const p = db.products.find(x => x.id === b.dataset.add);
-        const n = parseInt(prompt(`Quantos "${p.name}" chegaram?`, '1'), 10);
-        if (!(n > 0)) return;
-        p.stock = Math.max(0, p.stock) + n;
-        save(); toast(`+${n} ${p.name} · agora tem ${p.stock}`); render();
+        stockSheet(db.products.find(x => x.id === b.dataset.add));
       });
     },
+  };
+}
+
+// Chegou mercadoria: quantos chegaram (botões prontos ou digita)
+function stockSheet(p) {
+  let n = 1;
+  const bg = document.createElement('div');
+  bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet form" role="dialog" aria-modal="true">
+    <h2>📦 Chegou ${esc(p.name)}</h2>
+    <p class="muted" style="margin-top:-.3rem">Hoje tem <b>${Math.max(0, p.stock)}</b>. Quantos chegaram?</p>
+    <div class="qtyrow"><button type="button" class="qbtn" id="sk-m" aria-label="Menos">−</button><input type="number" id="sk-n" inputmode="numeric" min="1" value="1"><button type="button" class="qbtn" id="sk-p" aria-label="Mais">+</button></div>
+    <div class="chips mini" id="sk-quick" style="justify-content:center;margin:.7rem 0">${[1, 2, 3, 6, 12, 24].map(q => `<button type="button" class="chip" data-q="${q}">${q}</button>`).join('')}</div>
+    <button class="btn ok" id="sk-ok">✓ Somar ao estoque</button>
+    <button class="btn" id="sk-no" style="margin-top:.6rem">Cancelar</button></div>`;
+  document.body.appendChild(bg);
+  const inp = $('#sk-n', bg), set = v => { n = Math.max(1, v | 0); inp.value = n; };
+  const close = () => bg.remove();
+  bg.onclick = e => { if (e.target === bg) close(); };
+  $('#sk-no', bg).onclick = close;
+  $('#sk-m', bg).onclick = () => set(n - 1);
+  $('#sk-p', bg).onclick = () => set(n + 1);
+  inp.oninput = () => { n = parseInt(inp.value, 10) || 0; };
+  $('#sk-quick', bg).onclick = e => { const b = e.target.closest('[data-q]'); if (b) set(+b.dataset.q); };
+  $('#sk-ok', bg).onclick = () => {
+    if (!(n > 0)) { inp.focus(); return; }
+    p.stock = Math.max(0, p.stock) + n;
+    save(); close(); toast(`+${n} ${p.name} · agora tem ${p.stock}`); render();
   };
 }
 
