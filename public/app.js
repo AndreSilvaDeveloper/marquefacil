@@ -604,7 +604,9 @@ function dayRow(a, tag = '') {
   const past = isPast(a) || a.status === 'feito';
   const clash = conflictsFor(a.date, a.time, a.duration, a.id);
   const pos = pkgPos(a);
+  const done = a.status === 'feito' || (a.status === 'marcado' && isPast(a));
   const note = tag ? `<em class="now">${tag}</em>`
+    : done ? '<em class="ok">✓ Feito</em>'
     : a.status === 'pendente' ? `<em class="warn">⏳ ${a.replaces ? 'Quer remarcar' : 'Pedido'} — toque para confirmar</em>`
     : a.status === PRE ? '<em class="pre">💳 Pré-reserva · esperando o sinal</em>'
     : clash.length && !past ? `<em class="warn">⚠️ Junto com ${esc(clientName(clash[0].clientId).split(' ')[0])}</em>`
@@ -3191,26 +3193,25 @@ function vServices(kind, q) {
   return {
     title: 'Meus serviços', tab: 'mais', back: true,
     html: `
-      <div class="totals">
-        <div class="total"><span>Serviços</span><b>${all.length}</b><small class="muted">${onLink} no link · ${all.length - onLink} só no salão</small></div>
-        <div class="total ok"><span>Feitos no mês</span><b>${doneMonth}</b><small class="muted">renderam ${brl(earnedMonth)}</small></div>
-      </div>
-      <a class="btn main" href="#/item/services" style="margin-bottom:.8rem">+ Novo serviço</a>
-      ${all.length ? `
-      <div class="search"><input type="search" id="s" placeholder="🔍 Procurar serviço" value="${esc(servicesSearch)}"></div>
-      <div class="chips filters">${Object.entries(SERVICE_FILTERS).map(([k, [n, fn]]) => `<a class="chip ${f === k ? 'on' : ''}" href="#/itens/services${k ? '?f=' + k : ''}" data-f>${n} <small>${all.filter(fn).length}</small></a>`).join('')}</div>` : ''}
-      <div class="list" id="slist">${list.length ? list.map(sv => {
-        const n = doneOfService(sv, month).length, earned = earnedOfService(sv, month);
-        return `<div class="card line prow" data-name="${esc(norm(sv.name + ' ' + (sv.description || '')))}">
-          <a class="grow" href="#/item/services?id=${sv.id}"><b>${esc(sv.name)}</b>
-            ${sv.description ? `<span class="desc">${esc(sv.description)}</span>` : ''}
-            <span>${[sv.duration ? '⏱️ ' + fmtDur(sv.duration) : '', n ? `feito ${n}× este mês${earned ? ' · ' + brl(earned) : ''}` : ''].filter(Boolean).join(' · ') || '&nbsp;'}</span>
-            <div class="badges">${sv.package?.total ? `<span class="badge">📦 ${sv.package.total} sessões · ${EVERY_LABEL[sv.package.every ?? '7']}</span>` : ''}</div></a>
-          <button type="button" class="btn small linkbtn ${sv.online !== false ? 'on' : ''}" data-online="${sv.id}" aria-label="${sv.online !== false ? 'Tirar do link' : 'Pôr no link'}">${sv.online !== false ? '🌐 No link' : '🔒 Só salão'}</button>
+      <div class="search searchadd"><input type="search" id="s" placeholder="🔍 Procurar serviço" value="${esc(servicesSearch)}">
+        <a class="btn main small" href="#/item/services">+ Novo</a></div>
+      ${all.length ? `<p class="csum"><b>${all.length}</b> ${all.length === 1 ? 'serviço' : 'serviços'} · <b>${onLink}</b> no link${doneMonth ? ` · <b>${doneMonth}</b> feitos este mês · <b style="color:var(--ok)">${brl(earnedMonth)}</b>` : ''}</p>
+      <div class="chips filters hscroll">${Object.entries(SERVICE_FILTERS).map(([k, [n, fn]]) => {
+        const cnt = all.filter(fn).length;
+        return !k || cnt || f === k ? `<a class="chip ${f === k ? 'on' : ''}" href="#/itens/services${k ? '?f=' + k : ''}" data-f>${n} <small>${cnt}</small></a>` : '';
+      }).join('')}</div>` : ''}
+      <div class="list clist" id="slist">${list.length ? list.map(sv => {
+        const n = doneOfService(sv, month).length;
+        const info = [sv.duration ? '⏱️ ' + fmtDur(sv.duration) : '', n ? `${n}× no mês` : ''].filter(Boolean).join(' · ') || 'Nenhum este mês';
+        const on = sv.online !== false;
+        return `<div class="crow prow" data-name="${esc(norm(sv.name + ' ' + (sv.description || '')))}">
+          <a class="crow-main" href="#/item/services?id=${sv.id}">
+            <span class="dr-info"><b>${esc(sv.name)}</b><span>${info}</span>${sv.package?.total ? `<em>📦 Pacote · ${sv.package.total} sessões · ${EVERY_LABEL[sv.package.every ?? '7']}</em>` : ''}</span></a>
+          <button type="button" class="linkpill ${on ? 'on' : ''}" data-online="${sv.id}" aria-pressed="${on}" aria-label="${on ? 'Aparece no link. Toque para tirar' : 'Só no salão. Toque para pôr no link'}">${on ? '🌐 No link' : '🔒 Só salão'}</button>
         </div>`;
       }).join('') : `<div class="empty">${all.length ? 'Nenhum serviço neste filtro.' : 'Nenhum serviço ainda.<br>Eles também aparecem sozinhos quando você escreve um serviço novo ao agendar.'}</div>`}</div>
       <div class="empty" id="none" hidden>Nenhum serviço com esse nome.</div>
-      <p class="muted" style="font-size:.88rem">🌐 No link = a cliente pode escolher esse serviço ao pedir horário pela internet. 🔒 Só salão = só você agenda.</p>`,
+      ${all.length ? '<p class="muted" style="font-size:.85rem;margin-top:.8rem">Toque em <b>🌐 No link</b> / <b>🔒 Só salão</b> para escolher se a cliente vê o serviço ao agendar pela internet.</p>' : ''}`,
     bind(el) {
       const search = () => {
         const n = norm($('#s', el)?.value || '');
