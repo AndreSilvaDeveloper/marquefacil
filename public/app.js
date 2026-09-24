@@ -2512,19 +2512,13 @@ function vFin(_, q) {
   const isNow = m === today().slice(0, 7);
   const goal = salonHours()?.goal || 0;
 
-  const card = (key, cls, label, value, hint, full = false) => `
-    <a class="total fcard ${cls} ${full ? 'full' : ''} ${f === key ? 'on' : ''}" href="${url({ f: f === key ? '' : key, pm: '' })}" data-f>
-      <span>${label}</span><b>${value}</b><small>${f === key ? '▲ mostrando abaixo' : hint}</small></a>`;
-
-  const dueRow = ({ k, it }) => `
-    <div class="card">
-      <div class="line">
-        <a class="grow" href="${link(k, it)}"><b>${esc(clientName(it.clientId))}</b>
-          <span>${fmtShort(it.date)} · ${esc(what(k, it))}${paidOf(it) > 0 ? ` · já pagou ${brl(paidOf(it))}` : ''}</span></a>
-        <span class="amount" style="color:var(--warn)">${brl(leftOf(it))}</span>
-      </div>
-      <div class="quickprice"><button class="btn small ok" style="flex:1" data-pay="${k}:${it.id}">💰 Receber</button></div>
-    </div>`;
+  const mrow = (href, date, title, sub, amount, color, extra = '') => `<div class="dayrow mrow">
+    <a class="mrow-main" href="${href}"><span class="dr-time"><b>${fmtShort(date).slice(0, 5)}</b><small>${fmtDate(date, { weekday: 'short' }).replace('.', '')}</small></span>
+      <span class="dr-info"><b>${title}</b>${sub ? `<span>${sub}</span>` : ''}</span>
+      <span class="dr-money" style="color:${color}">${amount}</span></a>${extra}</div>`;
+  const dueRow = ({ k, it }) => mrow(link(k, it), it.date, esc(clientName(it.clientId)),
+    esc(what(k, it)) + (paidOf(it) > 0 ? ` · já pagou ${brl(paidOf(it))}` : ''), brl(leftOf(it)).replace(',00', ''), 'var(--warn)',
+    `<button class="btn small ok payin" data-pay="${k}:${it.id}">💰 Receber</button>`);
 
   // Conteúdo de cada quadro
   const views = {
@@ -2533,11 +2527,10 @@ function vFin(_, q) {
       const list = received.filter(p => (!pm || p.m === pm || p.k === pm) && (!dia || p.d === dia));
       return `<h2>Entrou ${dia ? `em ${fmtDate(dia, { weekday: 'long', day: 'numeric', month: 'long' })}` : `em ${monthLabel}`} ${list.length ? `· ${brl(sumBy(list, p => p.v))}` : ''}</h2>
         ${dia ? `<a class="btn small" href="${url({ dia: '' })}" data-f style="margin-bottom:.6rem">✕ Ver o mês todo</a>` : ''}
-        <div class="chips" style="margin-bottom:.8rem">${chips.map(([k, n]) => `<a class="chip ${pm === k ? 'on' : ''}" href="${url({ pm: k })}" data-f>${n}${k && k.length > 1 ? ' ' + brl(sumBy(received.filter(p => p.m === k), p => p.v)) : ''}</a>`).join('')}</div>
-        <div class="list">${list.length ? list.map(p => `
-          <a class="card line" href="${link(p.k, p.it)}">
-            <div class="grow"><b>${esc(clientName(p.it.clientId))}</b><span>${fmtShort(p.d)} · ${esc(what(p.k, p.it))}${PAY[p.m] ? ' · ' + PAY[p.m] : ''}</span></div>
-            <span class="amount" style="color:var(--ok)">+ ${brl(p.v)}</span></a>`).join('') : '<div class="muted">Nada recebido com esse filtro.</div>'}</div>`;
+        <div class="chips filters hscroll">${chips.map(([k, n]) => `<a class="chip ${pm === k ? 'on' : ''}" href="${url({ pm: k })}" data-f>${n}${k && k.length > 1 ? ' ' + brl(sumBy(received.filter(p => p.m === k), p => p.v)) : ''}</a>`).join('')}</div>
+        <div class="list clist">${list.length ? list.map(p => mrow(link(p.k, p.it), p.d, esc(clientName(p.it.clientId)),
+          esc(what(p.k, p.it)) + (PAY[p.m] ? ' · ' + PAY[p.m] : ''), '+ ' + brl(p.v).replace(',00', ''), 'var(--ok)')).join('')
+          : '<div class="empty">Nada recebido com esse filtro.</div>'}</div>`;
     },
     saiu: () => `<h2>Saiu em ${monthLabel} · ${brl(spent)}</h2>
       ${fixedTodo.length ? `<div class="card fixedbox"><b>📌 Despesas fixas para lançar</b>
@@ -2545,11 +2538,10 @@ function vFin(_, q) {
         ${fixedTodo.map(e => `<div class="line"><span class="grow">${esc(e.desc || e.cat || 'Despesa')}</span><b>${brl(e.amount)}</b><button class="btn small" data-fixed="${e.id}">Lançar</button></div>`).join('')}
         ${fixedTodo.length > 1 ? `<button class="btn small main" data-fixed="all" style="margin-top:.4rem">Lançar todas · ${brl(sumBy(fixedTodo, e => e.amount))}</button>` : ''}</div>` : ''}
       ${byCat.length ? `<div class="catbars">${byCat.map(([c, v]) => `<div><span>${esc(c)}</span><i style="width:${Math.max(4, Math.round(v / spent * 100))}%"></i><b>${brl(v)}</b></div>`).join('')}</div>` : ''}
-      <a class="btn" href="#/despesa" style="margin:.8rem 0">➖ Lançar despesa</a>
-      <div class="list">${expenses.length ? expenses.map(e => `
-        <a class="card line" href="#/despesa?id=${e.id}">
-          <div class="grow"><b>${esc(e.desc || e.cat || 'Despesa')}</b><span>${fmtShort(e.date)}${e.cat && e.desc ? ' · ' + esc(e.cat) : ''}${e.fixed ? ' · 📌 fixa' : ''}</span></div>
-          <span class="amount" style="color:var(--bad)">− ${brl(e.amount)}</span></a>`).join('') : '<div class="muted">Nenhuma despesa lançada neste mês.</div>'}</div>`,
+      <a class="btn small" href="#/despesa" style="margin:.8rem 0">➖ Lançar despesa</a>
+      <div class="list clist">${expenses.length ? expenses.map(e => mrow(`#/despesa?id=${e.id}`, e.date, esc(e.desc || e.cat || 'Despesa'),
+        [e.cat && e.desc ? esc(e.cat) : '', e.fixed ? '📌 fixa' : ''].filter(Boolean).join(' · '), '− ' + brl(e.amount).replace(',00', ''), 'var(--bad)')).join('')
+        : '<div class="empty">Nenhuma despesa lançada neste mês.</div>'}</div>`,
     lucro: () => `<h2>Como chegou no lucro</h2>
       <div class="card statement">
         <div class="line"><span class="grow">Serviços recebidos</span><b style="color:var(--ok)">+ ${brl(recServ)}</b></div>
@@ -2559,18 +2551,17 @@ function vFin(_, q) {
       </div>
       <p class="muted">Conta só o dinheiro que já entrou. O que falta receber (${brl(owed)}) entra no lucro quando for pago.</p>`,
     falta: () => `<h2>Falta receber de ${monthLabel} · ${brl(owed)}</h2>
-      <div class="list">${dueMonth.length ? dueMonth.map(dueRow).join('') : '<div class="muted">Ninguém devendo neste mês. 🎉</div>'}</div>
-      ${dueOld.length ? `<h2>De meses anteriores · ${brl(owedOld)}</h2><div class="list">${dueOld.map(dueRow).join('')}</div>` : ''}`,
+      <div class="list clist">${dueMonth.length ? dueMonth.map(dueRow).join('') : '<div class="empty">Ninguém devendo neste mês. 🎉</div>'}</div>
+      ${dueOld.length ? `<h2>De meses anteriores · ${brl(owedOld)}</h2><div class="list clist">${dueOld.map(dueRow).join('')}</div>` : ''}`,
     vai: () => `<h2>Ainda vai entrar · ${brl(expected)}</h2>
       ${upcomingNoPrice ? `<p class="muted" style="margin-top:-.3rem">${plural(upcomingNoPrice, 'horário ainda sem valor', 'horários ainda sem valor')} (não entra na soma).</p>` : ''}
-      <div class="list">${upcoming.length ? upcoming.map(a => apptCard(a, { showDate: true })).join('') : '<div class="muted">Nenhum horário para o resto do mês.</div>'}</div>`,
+      <div class="list clist">${upcoming.length ? upcoming.map(a => dayRow(a, '', { date: true })).join('') : '<div class="empty">Nenhum horário para o resto do mês.</div>'}</div>`,
     semvalor: () => `<h2>Atendimentos sem valor</h2>
       <p class="muted" style="margin-top:-.3rem">Coloque quanto foi cobrado:</p>
-      <div class="list">${noPrice.map(a => `<div class="card">
-        <a class="line" style="text-decoration:none" href="#/agendamento/${a.id}"><div class="grow"><b>${esc(clientName(a.clientId))}</b>
-        <span>${fmtShort(a.date)} ${a.time}${a.service ? ' · ' + esc(a.service) : ''}${a.priceLater ? ' · 🔎 avaliar na hora' : ''}</span></div></a>
-        <div class="quickprice"><div class="money"><input type="text" inputmode="numeric" placeholder="0,00" data-price="${a.id}"></div>
-        <button class="btn small main" data-saveprice="${a.id}">Salvar</button></div></div>`).join('') || '<div class="muted">Tudo com valor. 🎉</div>'}</div>`,
+      <div class="list clist">${noPrice.map(a => mrow(`#/agendamento/${a.id}`, a.date, esc(clientName(a.clientId)),
+        `${a.time}${a.service ? ' · ' + esc(a.service) : ''}${a.priceLater ? ' · 🔎 avaliar na hora' : ''}`, '', '',
+        `<div class="quickprice"><div class="money"><input type="text" inputmode="numeric" placeholder="0,00" data-price="${a.id}"></div><button class="btn small main" data-saveprice="${a.id}">Salvar</button></div>`)).join('')
+        || '<div class="empty">Tudo com valor. 🎉</div>'}</div>`,
   };
 
   // Entradas de um mês qualquer (para comparar com o anterior)
@@ -2675,9 +2666,7 @@ function vFin(_, q) {
     const svcRank = group(received.filter(p => p.k === 'a'), p => p.it.service || 'Sem serviço');
     const cliRank = group(received.filter(p => p.it.clientId), p => clientName(p.it.clientId));
     const tips = [];
-    if (dueMonth.length + dueOld.length) tips.push(`<a class="card line" href="${url({ f: 'falta' })}" data-f><div class="grow"><b>💸 ${plural(dueMonth.length + dueOld.length, 'conta para receber', 'contas para receber')}</b><span>${brl(owed + owedOld)} no total</span></div><span class="muted">›</span></a>`);
     if (fixedTodo.length) tips.push(`<a class="card line" href="${url({ f: 'saiu' })}" data-f><div class="grow"><b>📌 ${plural(fixedTodo.length, 'despesa fixa para lançar', 'despesas fixas para lançar')}</b><span>${fixedTodo.map(e => esc(e.desc || e.cat)).join(', ')} · ${brl(sumBy(fixedTodo, e => e.amount))}</span></div><span class="muted">›</span></a>`);
-    if (noPrice.length) tips.push(`<a class="card line" href="${url({ f: 'semvalor' })}" data-f><div class="grow"><b>✏️ ${plural(noPrice.length, 'atendimento sem valor', 'atendimentos sem valor')}</b><span>Coloque quanto foi cobrado</span></div><span class="muted">›</span></a>`);
     const t = today();
     // Meta do mês
     const pct = goal ? Math.min(100, Math.round(recTotal / goal * 100)) : 0;
@@ -2696,12 +2685,12 @@ function vFin(_, q) {
     return `${goalBox}
       ${tips.length ? `<h2>Precisa de atenção</h2><div class="list">${tips.join('')}</div>` : ''}
       <h2>Resumo de ${monthLabel}</h2>
-      <div class="stats">
-        <div class="stat"><span>Comparado ao mês passado</span><b>${diff === null ? '—' : `${diff >= 0 ? '↑' : '↓'} ${Math.abs(diff)}%`}</b>
-          <small class="muted">${prev ? `${brl(prev)} em ${new Date(y, mo - 2, 1).toLocaleDateString('pt-BR', { month: 'long' })}` : 'sem dados'}</small></div>
-        <div class="stat"><span>Atendimentos feitos</span><b>${doneAppts.length}</b></div>
-        <div class="stat"><span>Média por atendimento</span><b>${ticket ? brl(ticket) : '—'}</b></div>
-        <div class="stat"><span>Clientes atendidas</span><b>${people}</b></div>
+      <div class="card extrato">
+        <div class="ex-row"><span>Comparado a ${new Date(y, mo - 2, 1).toLocaleDateString('pt-BR', { month: 'long' })}${prev ? ` <small class="muted">(${brl(prev)})</small>` : ''}</span>
+          <b style="${diff === null ? '' : `color:${diff >= 0 ? 'var(--ok)' : 'var(--bad)'}`}">${diff === null ? '—' : `${diff >= 0 ? '↑' : '↓'} ${Math.abs(diff)}%`}</b></div>
+        <div class="ex-row"><span>Atendimentos feitos</span><b>${doneAppts.length}</b></div>
+        <div class="ex-row"><span>Clientes atendidas</span><b>${people}</b></div>
+        <div class="ex-row"><span>Média por atendimento</span><b>${ticket ? brl(ticket) : '—'}</b></div>
       </div>
       ${dailyChart()}
       ${monthsChart()}
@@ -2736,14 +2725,16 @@ function vFin(_, q) {
         <a class="btn small" href="#/venda">🛍️ Venda</a>
       </div>
       ${cashBox}
-      <div class="totals">
-        ${card('entrou', 'ok', 'Entrou no mês', `<span class="bignum">${brl(recTotal)}</span>`,
-          received.length ? `${plural(received.length, 'pagamento', 'pagamentos')} · Serviços ${brl(recServ)} · Produtos ${brl(recProd)}` : 'Nenhum pagamento ainda', true)}
-        ${card('saiu', 'bad', 'Saiu (despesas)', brl(spent), expenses.length ? plural(expenses.length, 'despesa', 'despesas') : 'Toque para lançar')}
-        ${card('lucro', profit >= 0 ? 'ok' : 'bad', 'Lucro do mês', brl(profit), 'Entrou − saiu')}
-        ${card('falta', 'warn', 'Falta receber', brl(owed), dueMonth.length ? plural(new Set(dueMonth.map(d => d.it.clientId)).size, 'cliente', 'clientes') : 'Ninguém devendo')}
-        ${card('vai', '', 'Ainda vai entrar', brl(expected), upcoming.length ? plural(upcoming.length, 'horário', 'horários') : 'Nada marcado')}
-        ${noPrice.length ? card('semvalor', 'warn', 'Sem valor', String(noPrice.length), 'Atendimentos sem valor lançado', true) : ''}
+      <div class="card extrato">
+        <a class="ex-top ${f === 'entrou' ? 'on' : ''}" href="${url({ f: f === 'entrou' ? '' : 'entrou', pm: '' })}" data-f>
+          <span>Entrou no mês</span><b>${brl(recTotal)}</b>
+          <small>${received.length ? `Serviços ${brl(recServ)} · Produtos ${brl(recProd)}` : 'Nenhum pagamento ainda'}</small></a>
+        ${[['saiu', '➖ Saiu (despesas)', brl(spent), 'var(--bad)'],
+          ['lucro', '📈 Lucro do mês', brl(profit), profit >= 0 ? 'var(--ok)' : 'var(--bad)'],
+          ['falta', '💸 Falta receber', brl(owed + owedOld), owed + owedOld ? 'var(--warn)' : ''],
+          ['vai', '📅 Ainda vai entrar', brl(expected), ''],
+          ...(noPrice.length ? [['semvalor', '✏️ Sem valor', plural(noPrice.length, 'atendimento', 'atendimentos'), 'var(--warn)']] : []),
+        ].map(([k, n, v, c]) => `<a class="ex-row ${f === k ? 'on' : ''}" href="${url({ f: f === k ? '' : k, pm: '' })}" data-f><span>${n}</span><b style="${c ? `color:${c}` : ''}">${v}</b><i>${f === k ? '▾' : '›'}</i></a>`).join('')}
       </div>
       <div id="fin-detail">${views[f] ? views[f]() : overview()}</div>`,
     bind(el) {
@@ -2763,7 +2754,7 @@ function vFin(_, q) {
         if (!a) return;
         e.preventDefault();
         replaceTo(a.getAttribute('href'));
-        if (a.classList.contains('fcard') || a.classList.contains('cbar')) setTimeout(() => $('#fin-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+        if (a.classList.contains('ex-row') || a.classList.contains('ex-top') || a.classList.contains('cbar')) setTimeout(() => $('#fin-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
       });
       // passar o dedo/mouse numa barra mostra o valor do dia
       el.querySelectorAll('.cbar').forEach(b => {

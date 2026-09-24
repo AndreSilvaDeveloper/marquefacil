@@ -665,3 +665,20 @@ a.rank-row { color: inherit; text-decoration: none; }
 .wmark.ok { color: var(--ok); }
 .wrow.pendente { background: none; box-shadow: inset 3px 0 0 var(--warn); }
 .wrow.wadd { color: var(--brand); font-weight: 700; font-size: .9rem; }
+
+/* ---------- Dinheiro: extrato e linhas ---------- */
+.extrato { padding: 0; overflow: hidden; margin-bottom: .8rem; }
+.ex-top { display: block; padding: .9rem 1rem .8rem; text-decoration: none; color: inherit; }
+.ex-top span { display: block; color: var(--muted); font-weight: 600; font-size: .9rem; }
+.ex-top b { display: block; font-size: 1.9rem; color: var(--ok); line-height: 1.2; }
+.ex-top small { color: var(--muted); font-size: .82rem; }
+.ex-row { display: flex; align-items: center; gap: .6rem; padding: .7rem 1rem; border-top: 1px solid var(--line); text-decoration: none; color: inherit; }
+.ex-row span { flex: 1; }
+.ex-row b { font-size: 1.05rem; }
+.ex-row i { font-style: normal; color: var(--muted); width: .8rem; text-align: center; }
+.ex-top.on, .ex-row.on { background: var(--brand-soft); }
+.mrow { flex-wrap: wrap; }
+.mrow-main { flex: 1 1 100%; display: flex; align-items: center; gap: .8rem; text-decoration: none; color: inherit; min-width: 0; }
+.mrow .payin { margin-left: 4.4rem; margin-top: .4rem; }
+.mrow .quickprice { flex: 1 1 100%; margin: .5rem 0 0 4.4rem; }
+.extrato > .ex-row:first-child { border-top: 0; }
