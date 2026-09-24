@@ -581,19 +581,30 @@ function dayTimeline(d, active, tags = {}) {
   const open = hours?.days?.[toDate(d).getDay()];
   const closedDay = hours && hours.days && open === null;
   const isToday = d === today(), now = nowMins();
-  const items = active.map(a => ({ t: mins(a.time), html: apptRow(a, tags[a.id]) }));
+  const items = active.map(a => ({ t: mins(a.time), html: dayRow(a, tags[a.id]) }));
   if (open && hours.lunch && !(isToday && mins(hours.lunch[1]) <= now)) items.push({ t: mins(hours.lunch[0]), html: `<div class="lunch">🍽️ Almoço ${hours.lunch[0]}–${hours.lunch[1]}</div>` });
-  if (isToday && active.length) items.push({ t: now + 0.5, html: `<div class="nowline"><span>agora ${hhmm(now)}</span></div>` });
+  if (isToday && active.length && active.some(a => mins(a.time) > now) && active.some(a => mins(a.time) <= now)) items.push({ t: now + 0.5, html: `<div class="nowline"><span>agora ${hhmm(now)}</span></div>` });
   items.sort((a, b) => a.t - b.t);
   return { html: items.map(x => x.html).join(''), closedDay, open };
 }
 
-// Cartão do horário + botão rápido "Feito" quando já passou
-function apptRow(a, tag = '') {
-  const quick = a.status === 'marcado' && isPast(a) ? `<button class="quick-done" data-done="${a.id}">✓ Feito</button>` : '';
-  let card = apptCard(a);
-  if (tag) card = card.replace('class="card appt ', 'class="card appt is-next ').replace('<div class="badges">', `<div class="badges"><span class="badge now">${tag}</span>`);
-  return quick ? `<div class="appt-wrap">${card}${quick}</div>` : card;
+// Linha enxuta da agenda do dia: hora | cliente e serviço | valor. No máximo um aviso curto embaixo.
+function dayRow(a, tag = '') {
+  const past = isPast(a) || a.status === 'feito';
+  const clash = conflictsFor(a.date, a.time, a.duration, a.id);
+  const pos = pkgPos(a);
+  const note = tag ? `<em class="now">${tag}</em>`
+    : a.status === 'pendente' ? `<em class="warn">⏳ ${a.replaces ? 'Quer remarcar' : 'Pedido'} — toque para confirmar</em>`
+    : a.status === PRE ? '<em class="pre">💳 Pré-reserva · esperando o sinal</em>'
+    : clash.length && !past ? `<em class="warn">⚠️ Junto com ${esc(clientName(clash[0].clientId).split(' ')[0])}</em>`
+    : pos ? `<em>📦 ${pos.n}ª sessão de ${pos.total}</em>` : '';
+  const v = valueOf(a), paid = isPaid(a);
+  const money = v > 0 ? `<span class="dr-money ${paid ? 'ok' : ''}">${paid ? '✓ ' : ''}${brl(v).replace(',00', '')}</span>`
+    : paid ? '<span class="dr-money ok">✓ pago</span>' : '';
+  return `<a class="dayrow ${past ? 'past' : ''} ${tag ? 'is-next' : ''} ${a.status}" href="#/agendamento/${a.id}">
+    <span class="dr-time"><b>${a.time}</b>${a.duration ? `<small>${hhmm(apptEnd(a))}</small>` : ''}</span>
+    <span class="dr-info"><b>${esc(clientName(a.clientId))}</b>${a.service ? `<span>${esc(a.service)}</span>` : ''}${note}</span>
+    ${money}</a>`;
 }
 
 function weekStart(d) { const x = toDate(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return dstr(x); } // segunda-feira
@@ -660,7 +671,7 @@ function vAgenda(_, q) {
         <a href="${url({ v: 'semana' })}" data-nav class="${view === 'semana' ? 'on' : ''}">Semana</a>
       </div>
       <label class="daypick ${view === 'dia' && d !== t ? 'other' : ''}">
-        <span>📆 <b>${esc(title)}</b></span><em>Escolher dia ▾</em>
+        <span><b>${esc(title)}</b></span><em>📆 Trocar dia</em>
         <input type="date" id="pick" value="${d}" aria-label="Escolher dia"></label>
       ${pend.length ? `<a class="card pending-banner" href="#/pedidos">⏳ <b>${pend.length} ${pend.length === 1 ? 'pedido esperando' : 'pedidos esperando'}</b> você confirmar ›</a>` : ''}
       <div id="push-card"></div>
@@ -674,12 +685,7 @@ function vAgenda(_, q) {
       $('#pick', el).onchange = e => e.target.value && replaceTo(url({ d: e.target.value }));
       el.addEventListener('click', e => {
         const nav = e.target.closest('a[data-nav]');
-        if (nav) { e.preventDefault(); replaceTo(nav.getAttribute('href')); return; }
-        const done = e.target.closest('[data-done]');
-        if (done) {
-          const a = db.appts.find(x => x.id === done.dataset.done);
-          if (a) { a.status = 'feito'; save(); toast(`${clientName(a.clientId)}: atendimento feito ✓`); render(); }
-        }
+        if (nav) { e.preventDefault(); replaceTo(nav.getAttribute('href')); }
       });
       // arrastar para o lado troca de dia (ou de semana)
       let x0 = null, y0 = null;

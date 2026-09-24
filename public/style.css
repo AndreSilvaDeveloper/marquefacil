@@ -562,3 +562,30 @@ a.rank-row { color: inherit; text-decoration: none; }
 .mbar em { font-style: normal; font-size: .8rem; font-weight: 700; text-transform: capitalize; }
 .mbar.on em { color: var(--ok); }
 .finactions .btn.small { flex-direction: row; white-space: nowrap; font-size: .88rem; padding: .35rem .3rem; }
+
+/* ---------- Agenda do dia: lista enxuta ---------- */
+.list.timeline { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.list.timeline > * + * { margin-top: 0; }
+.list.timeline > .empty { border: 0; }
+.dayrow { display: flex; align-items: center; gap: .8rem; padding: .8rem .9rem; text-decoration: none; color: inherit; border-top: 1px solid var(--line); }
+.list.timeline > .dayrow:first-child { border-top: 0; }
+.dr-time { flex: 0 0 3.6rem; display: flex; flex-direction: column; line-height: 1.15; }
+.dr-time b { font-size: 1.2rem; color: var(--brand); }
+.dr-time small { color: var(--muted); font-size: .78rem; }
+.dr-info { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.dr-info b { font-size: 1.05rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dr-info > span { color: var(--muted); font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dr-info em { font-style: normal; font-size: .82rem; font-weight: 700; margin-top: .2rem; color: var(--muted); }
+.dr-info em.now { color: var(--brand); }
+.dr-info em.warn { color: var(--warn); }
+.dr-info em.pre { color: #7a3fa0; }
+.dr-money { flex: 0 0 auto; font-weight: 800; font-size: .95rem; color: var(--muted); }
+.dr-money.ok { color: var(--ok); }
+.dayrow.past { opacity: .55; }
+.dayrow.is-next { background: var(--brand-soft); box-shadow: inset 4px 0 0 var(--brand); }
+.dayrow.pendente { box-shadow: inset 4px 0 0 var(--warn); }
+.list.timeline .nowline { height: 0; border-top: 2px solid var(--bad); }
+.list.timeline .nowline::before { display: none; }
+.list.timeline .nowline span { position: relative; top: -.65rem; }
+.list.timeline .lunch { border-top: 1px solid var(--line); border-radius: 0; }
+.daypick b { font-size: 1rem; } .daypick em { font-size: .85rem; }
