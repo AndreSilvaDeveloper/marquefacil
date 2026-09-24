@@ -39,6 +39,17 @@ function parseMoney(s) {
 }
 const moneyVal = v => (v == null ? '' : Number(v).toFixed(2).replace('.', ','));
 
+// Campo de valor: digita só números e a vírgula aparece sozinha (5000 → 50,00; 123456 → 1.234,56).
+// Vale para todo campo dentro de .money; roda antes dos outros "input" da página (captura).
+function maskMoney(inp) {
+  const dg = inp.value.replace(/\D/g, '').replace(/^0+/, '').slice(0, 9);
+  if (!dg) { inp.value = ''; return; }
+  const n = dg.padStart(3, '0');
+  inp.value = `${n.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, '.')},${n.slice(-2)}`;
+}
+document.addEventListener('input', e => { if (e.target.matches?.('.money input')) maskMoney(e.target); }, true);
+document.addEventListener('focusin', e => { if (e.target.matches?.('.money input')) e.target.setAttribute('inputmode', 'numeric'); }, true);
+
 const pad = n => String(n).padStart(2, '0');
 const dstr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const today = () => dstr(new Date());
@@ -288,7 +299,7 @@ function paySheet(x, title, onDone) {
     <p class="muted" style="margin-top:-.3rem">${esc(title)}</p>
     ${paidOf(x) > 0 ? `<p>Valor ${brl(total)} · já pagou ${brl(paidOf(x))} · <b>falta ${brl(leftOf(x))}</b></p>` : ''}
     <div class="field"><label for="ps-v">Quanto recebeu agora?</label>
-      <div class="money"><input type="text" id="ps-v" inputmode="decimal" value="${moneyVal(left)}"></div>
+      <div class="money"><input type="text" id="ps-v" inputmode="numeric" value="${moneyVal(left)}"></div>
       <small class="hint">Se ela pagou só uma parte, troque o valor.</small></div>
     <div class="field"><span class="lbl">Como pagou?</span>
       <div class="paygrid" id="ps-m">${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}">${n}</button>`).join('')}</div></div>
@@ -512,7 +523,7 @@ function confirmSheet(a, onDone) {
     <p class="muted" style="margin-top:-.3rem">${esc(clientName(a.clientId))} — ${esc(a.service || 'Serviço')}<br>${esc(dayName(a.date))}, ${fmtShort(a.date)} às ${a.time}</p>
     ${a.replaces && db.appts.find(x => x.id === a.replaces) ? `<p class="summary">🔁 Remarcação: o horário de ${fmtShort(db.appts.find(x => x.id === a.replaces).date)} às ${db.appts.find(x => x.id === a.replaces).time} será cancelado.</p>` : ''}
     <div class="field"><label for="cs-v">Valor deste atendimento <span class="opt">(se quiser)</span></label>
-      <div class="money"><input type="text" id="cs-v" inputmode="decimal" placeholder="0,00" value="${moneyVal(a.price)}"></div></div>
+      <div class="money"><input type="text" id="cs-v" inputmode="numeric" placeholder="0,00" value="${moneyVal(a.price)}"></div></div>
     <button type="button" class="chip ${later ? 'on' : ''}" id="cs-later" style="width:100%">🔎 Avaliar o valor na hora do atendimento</button>
     <small class="hint">A cliente recebe a confirmação no WhatsApp com o valor (ou "avaliado na hora"). Pode deixar em branco e colocar depois.</small>
     <div id="cs-err" style="margin-top:.6rem"></div>
@@ -874,7 +885,7 @@ function vApptForm(_, q) {
 
         <div class="field">
           <label for="f-price">Valor deste atendimento <span class="opt">(se quiser)</span></label>
-          <div class="money"><input type="text" id="f-price" inputmode="decimal" placeholder="0,00" value="${moneyVal(a.price)}"></div>
+          <div class="money"><input type="text" id="f-price" inputmode="numeric" placeholder="0,00" value="${moneyVal(a.price)}"></div>
           <button type="button" class="chip ${a.priceLater && !(a.price > 0) ? 'on' : ''}" id="f-later" style="margin-top:.5rem">🔎 Avaliar na hora</button>
         </div>
 
@@ -1246,7 +1257,7 @@ function vAppt(id) {
       <div class="stack">
         <div class="form">
           <label for="price">Valor deste atendimento</label>
-          <div class="quickprice"><div class="money"><input type="text" id="price" inputmode="decimal" placeholder="${a.priceLater ? 'Avaliar na hora' : '0,00'}" value="${moneyVal(a.price)}"></div>
+          <div class="quickprice"><div class="money"><input type="text" id="price" inputmode="numeric" placeholder="${a.priceLater ? 'Avaliar na hora' : '0,00'}" value="${moneyVal(a.price)}"></div>
           <button class="btn small main" id="save-price">Salvar</button></div>
           ${!(a.price > 0) ? `<button type="button" class="chip ${a.priceLater ? 'on' : ''}" id="later" style="margin-top:.5rem">🔎 Avaliar na hora</button>` : ''}
         </div>
@@ -1632,20 +1643,20 @@ function clientWaText(c, st, f) {
   return `Olá, ${n}! 😊`;
 }
 
+// Linha enxuta da cliente: nome, uma informação curta e no máximo um aviso. 💬 pequeno à direita.
 function clientRow(c, st = clientStats(c), f = '') {
-  const lines = [];
-  lines.push(st.last ? `Última vez ${daysAgo(st.last.date)}${st.last.service ? ' · ' + esc(st.last.service) : ''}` : 'Ainda não veio');
-  if (st.next) lines.push(`📅 ${st.next.status === 'pendente' ? 'Pedido' : 'Próximo'}: ${esc(fmtDate(st.next.date, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', ''))} ${st.next.time}`);
+  const info = st.next
+    ? `📅 ${st.next.status === 'pendente' ? 'Pedido' : 'Marcada'}: ${esc(fmtDate(st.next.date, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', '').replace('.', ''))} ${st.next.time}`
+    : st.last ? `Última vez ${daysAgo(st.last.date)}${st.last.service ? ' · ' + esc(st.last.service) : ''}` : 'Ainda não veio';
   const bd = bdayIn(c.birthday);
-  const badges = [
-    st.owes > 0 ? `<span class="badge warn">Deve ${brl(st.owes)}</span>` : '',
-    bd === 0 ? '<span class="badge warn">🎂 Hoje!</span>' : bd <= 7 ? `<span class="badge">🎂 ${bd === 1 ? 'amanhã' : 'em ' + bd + ' dias'}</span>` : '',
-    st.visits >= LOYAL ? `<span class="badge ok">⭐ ${st.visits} visitas</span>` : '',
-  ].filter(Boolean).join('');
-  return `<div class="card line client-row" data-name="${esc(norm(c.name + ' ' + (c.phone || '').replace(/\D/g, '') + ' ' + (c.phone || '')))}">
-    <a class="line" href="#/cliente/${c.id}">${avatar(c.name)}
-      <div class="grow"><b>${esc(c.name)}</b>${lines.map(l => `<span>${l}</span>`).join('')}${badges ? `<div class="badges">${badges}</div>` : ''}</div></a>
-    ${c.phone ? `<a class="wa-btn" target="_blank" rel="noopener" href="${waLink(c.phone, clientWaText(c, st, f))}" aria-label="WhatsApp de ${esc(c.name)}">💬</a>` : ''}
+  const note = st.owes > 0 ? `<em class="warn">Deve ${brl(st.owes)}</em>`
+    : bd === 0 ? '<em class="warn">🎂 Aniversário hoje!</em>'
+    : bd <= 7 ? `<em>🎂 Aniversário ${bd === 1 ? 'amanhã' : 'em ' + bd + ' dias'}</em>`
+    : st.visits >= LOYAL ? `<em class="ok">⭐ ${st.visits} visitas</em>` : '';
+  return `<div class="crow client-row" data-name="${esc(norm(c.name + ' ' + (c.phone || '').replace(/\D/g, '') + ' ' + (c.phone || '')))}">
+    <a class="crow-main" href="#/cliente/${c.id}">${avatar(c.name)}
+      <span class="dr-info"><b>${esc(c.name)}</b><span>${info}</span>${note}</span></a>
+    ${c.phone ? `<a class="wa-mini" target="_blank" rel="noopener" href="${waLink(c.phone, clientWaText(c, st, f))}" aria-label="WhatsApp de ${esc(c.name)}">💬</a>` : ''}
   </div>`;
 }
 
@@ -1685,7 +1696,7 @@ function vClients(_, q) {
   let letter = '';
   const rows = list.map(({ c, st }) => {
     let head = '';
-    if (order === 'nome' && f !== 'aniver') {
+    if (order === 'nome' && f !== 'aniver' && list.length > 15) {
       const L = norm(c.name)[0]?.toUpperCase() || '#';
       if (L !== letter) { letter = L; head = `<div class="letter" data-letter>${esc(L)}</div>`; }
     }
@@ -1695,21 +1706,18 @@ function vClients(_, q) {
   return {
     title: 'Clientes', tab: 'clientes',
     html: `
-      <div class="search"><input type="search" id="s" placeholder="🔍 Nome ou telefone" value="${esc(clientsSearch)}"></div>
-      <div class="row" style="margin-bottom:.8rem">
-        <a class="btn main" href="#/cliente-editar">+ Nova cliente</a>
-      </div>
-      ${all.length ? `<div class="totals">
-        <div class="total"><span>Clientes</span><b>${all.length}</b><small class="muted">${newMonth ? `${newMonth} ${newMonth === 1 ? 'nova' : 'novas'} este mês` : 'nenhuma nova este mês'}</small></div>
-        <div class="total ok"><span>Vieram este mês</span><b>${cameMonth}</b><small class="muted">${owing.length ? `<b style="color:var(--warn)">${owing.length} devendo ${brl(owing.reduce((t, x) => t + x.st.owes, 0))}</b>` : 'ninguém devendo'}</small></div>
-      </div>` : ''}
+      <div class="search searchadd"><input type="search" id="s" placeholder="🔍 Nome ou telefone" value="${esc(clientsSearch)}">
+        <a class="btn main small" href="#/cliente-editar">+ Nova</a></div>
+      ${all.length ? `<p class="csum"><b>${all.length}</b> ${all.length === 1 ? 'cliente' : 'clientes'} · <b>${cameMonth}</b> vieram este mês${newMonth ? ` · <b>${newMonth}</b> ${newMonth === 1 ? 'nova' : 'novas'}` : ''}${owing.length ? ` · <a href="${url({ f: 'devendo' })}" data-f style="color:var(--warn)"><b>${owing.length}</b> devendo ${brl(owing.reduce((t, x) => t + x.st.owes, 0))}</a>` : ''}</p>` : ''}
       ${bdToday.map(({ c }) => `<a class="card line bday-card" href="#/cliente/${c.id}">🎂<div class="grow"><b>Hoje é aniversário da ${esc(firstName(c))}!</b><span>${c.phone ? 'Toque para abrir e mandar parabéns' : esc(c.name)}</span></div></a>`).join('')}
-      ${all.length ? `<div class="chips filters">${Object.entries(CLIENT_FILTERS).map(([k, [n, fn]]) =>
-        `<a class="chip ${f === k ? 'on' : ''}" href="${url({ f: k })}" data-f>${n} <small>${all.filter(x => fn(x.st, x.c)).length}</small></a>`).join('')}</div>
-      ${hints[f] ? `<p class="muted" style="margin:-.2rem 0 .6rem;font-size:.9rem">${hints[f]}</p>` : ''}
-      <div class="sortrow"><label for="ord">Ordenar:</label>
+      ${all.length ? `<div class="chips filters hscroll">${Object.entries(CLIENT_FILTERS).map(([k, [n, fn]]) => {
+        const cnt = all.filter(x => fn(x.st, x.c)).length;
+        return !k || cnt || f === k ? `<a class="chip ${f === k ? 'on' : ''}" href="${url({ f: k })}" data-f>${n} <small>${cnt}</small></a>` : '';
+      }).join('')}</div>
+      ${hints[f] ? `<p class="muted" style="margin:0 0 .6rem;font-size:.9rem">${hints[f]}</p>` : ''}
+      <div class="sortrow"><label for="ord">Ordem:</label>
         <select id="ord">${[['nome', 'Nome (A–Z)'], ['ultima', 'Última visita'], ['visitas', 'Quem mais vem']].map(([k, n]) => `<option value="${k}" ${order === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>` : ''}
-      <div class="list" id="list">${rows || (all.length ? '<div class="empty">Nenhuma cliente neste filtro.</div>' : '<div class="empty">Nenhuma cliente ainda.<br>Elas aparecem aqui sozinhas quando você agenda.</div>')}</div>
+      <div class="list clist" id="list">${rows || (all.length ? '<div class="empty">Nenhuma cliente neste filtro.</div>' : '<div class="empty">Nenhuma cliente ainda.<br>Elas aparecem aqui sozinhas quando você agenda.</div>')}</div>
       <div class="empty" id="none" hidden>Nenhuma cliente com esse nome.</div>`,
     bind(el) {
       const search = () => {
@@ -1911,7 +1919,7 @@ function vPackageForm(_, q) {
           <div class="chips" id="befores"></div></div>
         ${p ? '' : `
         <div class="field"><label for="pv">Valor do pacote <span class="opt">(se quiser — entra como venda)</span></label>
-          <div class="money"><input type="text" id="pv" inputmode="decimal" placeholder="0,00"></div></div>
+          <div class="money"><input type="text" id="pv" inputmode="numeric" placeholder="0,00"></div></div>
         <div class="field" id="pay-f" hidden><span class="lbl">Já pagou o pacote?</span>
           ${toggle2('pp', true, '✓ Já pagou', 'Vai pagar depois')}
           <div class="paygrid" id="pm" style="margin-top:.5rem">${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}">${n}</button>`).join('')}</div></div>`}
@@ -1996,7 +2004,7 @@ function historyRow({ k, it }) {
   const price = k === 'a' ? it.price : it.total;
   let extra = '';
   if (k === 'a' && !(price > 0)) {
-    extra = `<div class="quickprice"><div class="money"><input type="text" inputmode="decimal" placeholder="Quanto custou?" data-price="${it.id}"></div>
+    extra = `<div class="quickprice"><div class="money"><input type="text" inputmode="numeric" placeholder="Quanto custou?" data-price="${it.id}"></div>
       <button class="btn small main" data-saveprice="${it.id}">Salvar</button></div>`;
   } else if (leftOf(it) > 0) {
     extra = `<div class="quickprice"><button class="btn small ok" style="flex:1" data-pay="${k}:${it.id}">💰 Receber ${brl(leftOf(it))}</button></div>`;
@@ -2202,7 +2210,7 @@ function vSell(_, q) {
                 <button type="button" class="rm" data-rm="${i}" aria-label="Tirar">✕</button></div>
               ${warn}
               <div class="cl-bottom">
-                <div class="money small"><input type="text" inputmode="decimal" data-price="${i}" value="${moneyVal(x.price)}" placeholder="preço de cada"></div>
+                <div class="money small"><input type="text" inputmode="numeric" data-price="${i}" value="${moneyVal(x.price)}" placeholder="preço de cada"></div>
                 <div class="qty"><button type="button" data-minus="${i}">−</button><b>${x.qty}</b><button type="button" data-plus="${i}">+</button></div>
               </div>
             </div>`;
@@ -2312,7 +2320,7 @@ function vSaleForm(_, q) {
         </div>
         <div class="field">
           <label for="f-price">Valor de cada um</label>
-          <div class="money"><input type="text" id="f-price" inputmode="decimal" placeholder="0,00" value="${moneyVal(s.unitPrice)}"></div>
+          <div class="money"><input type="text" id="f-price" inputmode="numeric" placeholder="0,00" value="${moneyVal(s.unitPrice)}"></div>
           <small class="hint" id="h-total"></small>
         </div>
         <div class="field">
@@ -2524,7 +2532,7 @@ function vFin(_, q) {
       <div class="list">${noPrice.map(a => `<div class="card">
         <a class="line" style="text-decoration:none" href="#/agendamento/${a.id}"><div class="grow"><b>${esc(clientName(a.clientId))}</b>
         <span>${fmtShort(a.date)} ${a.time}${a.service ? ' · ' + esc(a.service) : ''}${a.priceLater ? ' · 🔎 avaliar na hora' : ''}</span></div></a>
-        <div class="quickprice"><div class="money"><input type="text" inputmode="decimal" placeholder="0,00" data-price="${a.id}"></div>
+        <div class="quickprice"><div class="money"><input type="text" inputmode="numeric" placeholder="0,00" data-price="${a.id}"></div>
         <button class="btn small main" data-saveprice="${a.id}">Salvar</button></div></div>`).join('') || '<div class="muted">Tudo com valor. 🎉</div>'}</div>`,
   };
 
@@ -2759,7 +2767,7 @@ function goalSheet(current) {
   bg.innerHTML = `<div class="sheet form" role="dialog" aria-modal="true">
     <h2>🎯 Meta do mês</h2>
     <p class="muted" style="margin-top:-.3rem">Quanto você quer que entre por mês? A página mostra quanto falta.</p>
-    <div class="field"><div class="money"><input type="text" id="gs-v" inputmode="decimal" placeholder="0,00" value="${moneyVal(current || '')}"></div></div>
+    <div class="field"><div class="money"><input type="text" id="gs-v" inputmode="numeric" placeholder="0,00" value="${moneyVal(current || '')}"></div></div>
     <div id="gs-err"></div>
     <button class="btn main" id="gs-ok">✓ Salvar meta</button>
     ${current ? '<button class="btn" id="gs-off" style="margin-top:.6rem">Tirar a meta</button>' : ''}
@@ -2790,7 +2798,7 @@ function vExpenseForm(_, q) {
       <form class="form" id="f" autocomplete="off" novalidate>
         <div id="err"></div>
         <div class="field"><label for="v">Quanto saiu? <em>*</em></label>
-          <div class="money"><input type="text" id="v" inputmode="decimal" placeholder="0,00" value="${moneyVal(e?.amount)}"></div></div>
+          <div class="money"><input type="text" id="v" inputmode="numeric" placeholder="0,00" value="${moneyVal(e?.amount)}"></div></div>
         <div class="field"><span class="lbl">Com o quê?</span>
           <div class="chips" id="cats">${EXP_CATS.map(c => `<button type="button" class="chip ${cat === c ? 'on' : ''}" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div></div>
         <div class="field"><label for="d">Descrição <span class="opt">(se quiser)</span></label>
@@ -3328,9 +3336,9 @@ function vItemForm(kind, q) {
             <small class="hint">Ao agendar este serviço, o cronograma já vem pronto (dá para mudar na hora).</small>
           </div></div>` : ''}
         ${!K.withDur ? `<div class="field"><label for="p">Preço de venda <span class="opt">(se quiser)</span></label>
-          <div class="money"><input type="text" id="p" inputmode="decimal" placeholder="0,00" value="${moneyVal(it?.price)}"></div></div>
+          <div class="money"><input type="text" id="p" inputmode="numeric" placeholder="0,00" value="${moneyVal(it?.price)}"></div></div>
         <div class="field"><label for="cost">Quanto você paga (custo) <span class="opt">(se quiser)</span></label>
-          <div class="money"><input type="text" id="cost" inputmode="decimal" placeholder="0,00" value="${moneyVal(it?.cost)}"></div>
+          <div class="money"><input type="text" id="cost" inputmode="numeric" placeholder="0,00" value="${moneyVal(it?.cost)}"></div>
           <small class="hint" id="margin"></small></div>` : `
         <p class="muted">💰 O valor é colocado em cada atendimento (muda conforme o serviço e a cliente).</p>`}
         ${!K.withDur ? `
