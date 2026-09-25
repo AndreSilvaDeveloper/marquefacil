@@ -353,7 +353,7 @@ function parseHash() {
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
   agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: (id, q) => (q.id ? vSaleForm(id, q) : vSell(id, q)), financeiro: vFin, mais: vMore,
-  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, conta: vConta, pacote: vPackageForm,
+  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, ajuda: vAjuda, conta: vConta, pacote: vPackageForm,
 };
 
 let lastHash = '';
@@ -2911,14 +2911,14 @@ function vMore() {
   return {
     title: 'Mais', tab: 'mais',
     html: `
-      <div class="card profile">
+      <a class="card profile" href="#/conta">
         ${avatar(session.tenant.name, true)}
         <div class="grow">
           <b style="font-size:1.15rem">${esc(session.tenant.name)}</b>
           <div class="muted">${esc(session.user.name)} · ${esc(session.user.email)}</div>
           <div id="sync" class="sync"></div>
-        </div>
-      </div>
+        </div><span class="mi-go">›</span>
+      </a>
 
       <div id="ready"></div>
 
@@ -2965,29 +2965,14 @@ function vMore() {
           <span class="mi-text"><b>Fazer cópia de segurança</b><small>${lastBk ? `Última cópia: ${lastBk}` : 'Nunca fez · os dados já ficam guardados na internet'}</small></span><span class="mi-go">›</span></button>
         <button type="button" class="menu-item" id="csv"><span class="mi-icon">📇</span>
           <span class="mi-text"><b>Baixar lista de clientes</b><small>Planilha com nome, telefone, visitas e última vez (${db.clients.length})</small></span><span class="mi-go">›</span></button>
-        <label class="menu-item"><span class="mi-icon">📥</span>
-          <span class="mi-text"><b>Recuperar de uma cópia</b><small>Troca tudo pelo que está no arquivo</small></span><span class="mi-go">›</span>
-          <input type="file" id="imp" accept=".json,application/json" hidden></label>
-      </div>
-
-      <h2>❓ Ajuda</h2>
-      <div class="menu help">
-        ${[
-          ['Como a cliente agenda sozinha?', 'Ligue o <b>Link para as clientes</b> e mande o link (ou o QR code) para elas. Elas escolhem o serviço, o dia e o horário livre. Você recebe um aviso e confirma — aí ela recebe a confirmação no WhatsApp.'],
-          ['O que é pré-reserva?', 'Ao agendar, escolha <b>💳 Pré-reserva</b>: o horário fica segurado e a cliente recebe a mensagem pedindo o sinal. Quando ela pagar, abra o horário e toque em <b>Recebi o sinal — confirmar</b>.'],
-          ['Como funcionam os pacotes (cronogramas)?', 'Em <b>Serviços</b>, marque que o serviço é um pacote (ex.: 4 sessões, toda semana). Ao agendar esse serviço, as sessões já vêm prontas e a cliente sempre sabe em qual está ("2ª sessão de 4").'],
-          ['A cliente quer remarcar ou cancelar', 'Ela mesma pode, pelo link "Ver ou remarcar" que vai nas mensagens. Remarcação vira pedido para você confirmar; o horário antigo vale até você aceitar.'],
-          ['Troquei de celular. Perco tudo?', 'Não. Tudo fica guardado na sua conta. É só entrar com o mesmo e-mail e senha no celular novo.'],
-          ['Quais avisos chegam no celular?', 'Pedidos pelo link, horário chegando, pedido sem confirmar, pré-reserva sem sinal, bom dia com o resumo do dia, aniversariantes e WhatsApp desconectado. Ligue em <b>Avisos no celular</b> e escolha quais quer receber.'],
-          ['Como vejo quem faz aniversário?', 'Coloque o aniversário na ficha da cliente (<b>✏️ Editar</b>). No dia você recebe um aviso, e em <b>Clientes → 🎂 Aniversário</b> tem o botão para mandar parabéns.'],
-          ['Dá para buscar falando?', 'Sim. Em <b>Buscar</b>, toque no 🎤 e fale, por exemplo "Maria escova" ou "amanhã".'],
-          ['O WhatsApp parou de mandar mensagens', 'Abra <b>WhatsApp automático</b> e veja se está "Conectado". Se não estiver, conecte de novo com o código. As últimas mensagens e erros aparecem no fim daquela tela.'],
-        ].map(([q, a]) => `<details class="menu-item faq"><summary><span class="mi-text"><b>${q}</b></span></summary><p>${a}</p></details>`).join('')}
+        <details class="menu-item faq"><summary><span class="mi-icon">⚙️</span><span class="mi-text"><b>Mais opções</b><small>Recuperar de uma cópia</small></span></summary>
+          <label class="btn small danger" style="margin-top:.6rem">📥 Recuperar de uma cópia (troca tudo)
+            <input type="file" id="imp" accept=".json,application/json" hidden></label></details>
       </div>
 
       <h2>Conta</h2>
       <div class="menu">
-        ${item('#/conta', '👤', 'Minha conta', 'Nome do salão, seu nome e senha')}
+        ${item('#/ajuda', '❓', 'Ajuda', 'Perguntas mais comuns')}
         <button type="button" class="menu-item danger" id="logout"><span class="mi-icon">🚪</span><span class="mi-text"><b>Sair da conta</b><small>Neste aparelho</small></span></button>
       </div>
 
@@ -3039,6 +3024,26 @@ function vMore() {
   };
 }
 
+// Ajuda: perguntas mais comuns
+function vAjuda() {
+  return {
+    title: 'Ajuda', tab: 'mais', back: true,
+    html: `<div class="menu help">
+        ${[
+          ['Como a cliente agenda sozinha?', 'Ligue o <b>Link para as clientes</b> e mande o link (ou o QR code) para elas. Elas escolhem o serviço, o dia e o horário livre. Você recebe um aviso e confirma — aí ela recebe a confirmação no WhatsApp.'],
+          ['O que é pré-reserva?', 'Ao agendar, escolha <b>💳 Pré-reserva</b>: o horário fica segurado e a cliente recebe a mensagem pedindo o sinal. Quando ela pagar, abra o horário e toque em <b>Recebi o sinal — confirmar</b>.'],
+          ['Como funcionam os pacotes (cronogramas)?', 'Em <b>Serviços</b>, marque que o serviço é um pacote (ex.: 4 sessões, toda semana). Ao agendar esse serviço, as sessões já vêm prontas e a cliente sempre sabe em qual está ("2ª sessão de 4").'],
+          ['A cliente quer remarcar ou cancelar', 'Ela mesma pode, pelo link "Ver ou remarcar" que vai nas mensagens. Remarcação vira pedido para você confirmar; o horário antigo vale até você aceitar.'],
+          ['Troquei de celular. Perco tudo?', 'Não. Tudo fica guardado na sua conta. É só entrar com o mesmo e-mail e senha no celular novo.'],
+          ['Quais avisos chegam no celular?', 'Pedidos pelo link, horário chegando, pedido sem confirmar, pré-reserva sem sinal, bom dia com o resumo do dia, aniversariantes e WhatsApp desconectado. Ligue em <b>Avisos no celular</b> e escolha quais quer receber.'],
+          ['Como vejo quem faz aniversário?', 'Coloque o aniversário na ficha da cliente (<b>✏️ Editar</b>). No dia você recebe um aviso, e em <b>Clientes → 🎂 Aniversário</b> tem o botão para mandar parabéns.'],
+          ['Dá para buscar falando?', 'Sim. Em <b>Buscar</b>, toque no 🎤 e fale, por exemplo "Maria escova" ou "amanhã".'],
+          ['O WhatsApp parou de mandar mensagens', 'Abra <b>WhatsApp automático</b> e veja se está "Conectado". Se não estiver, conecte de novo com o código. As últimas mensagens e erros aparecem no fim daquela tela.'],
+        ].map(([q, a]) => `<details class="menu-item faq"><summary><span class="mi-text"><b>${q}</b></span></summary><p>${a}</p></details>`).join('')}
+      </div>`,
+  };
+}
+
 // Avisos no celular: ligar neste aparelho e escolher quais chegam
 function vAvisos() {
   return {
@@ -3063,12 +3068,11 @@ async function paintReady(box) {
   ];
   const draw = () => {
     const done = items.filter(i => i[1]).length;
-    if (done === items.length) { box.innerHTML = '<div class="card ready-ok">✅ <b>Seu salão está todo configurado.</b></div>'; return; }
-    box.innerHTML = `<div class="card ready">
-      <div class="line"><b class="grow">🚀 Seu salão está pronto?</b><span class="muted">${done} de ${items.length}</span></div>
+    if (done === items.length) { box.innerHTML = ''; return; }
+    box.innerHTML = `<details class="card ready"><summary class="line"><b class="grow">🚀 Falta configurar</b><span class="muted">${done} de ${items.length} ›</span></summary>
       <div class="pkg"><div class="bar"><i style="width:${Math.round(done / items.length * 100)}%"></i></div></div>
       <ul>${items.map(([t, ok, href]) => `<li class="${ok ? 'ok' : ''}">${ok ? '✅' : ok === null ? '⏳' : '⬜'} ${href && !ok ? `<a href="${href}">${t} ›</a>` : t}</li>`).join('')}</ul>
-    </div>`;
+    </details>`;
   };
   draw();
   // itens que ficam nesta mesma página: rola até lá (a cópia já começa a ser feita)

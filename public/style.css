@@ -682,3 +682,13 @@ a.rank-row { color: inherit; text-decoration: none; }
 .mrow .payin { margin-left: 4.4rem; margin-top: .4rem; }
 .mrow .quickprice { flex: 1 1 100%; margin: .5rem 0 0 4.4rem; }
 .extrato > .ex-row:first-child { border-top: 0; }
+
+/* ---------- Mais: perfil clicável e "falta configurar" ---------- */
+a.card.profile { color: inherit; text-decoration: none; }
+a.card.profile .mi-go { color: var(--muted); font-size: 1.3rem; }
+details.ready { margin-bottom: .5rem; }
+details.ready > summary { list-style: none; cursor: pointer; }
+details.ready > summary::-webkit-details-marker { display: none; }
+details.ready[open] > summary .muted { visibility: hidden; }
+.menu-item.faq > summary { display: flex; align-items: center; gap: .8rem; }
+details.ready { padding: .7rem 1rem; }
