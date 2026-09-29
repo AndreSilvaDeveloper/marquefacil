@@ -50,6 +50,21 @@ function maskMoney(inp) {
 document.addEventListener('input', e => { if (e.target.matches?.('.money input')) maskMoney(e.target); }, true);
 document.addEventListener('focusin', e => { if (e.target.matches?.('.money input')) e.target.setAttribute('inputmode', 'numeric'); }, true);
 
+// Telefone: "11977776666" → "(11) 97777-6666" enquanto digita (e para mostrar)
+function fmtPhone(v) {
+  let d = String(v || '').replace(/\D/g, '');
+  if (d.length > 11 && d.startsWith('55')) d = d.slice(2);
+  d = d.slice(0, 11);
+  if (d.length <= 2) return d ? `(${d}` : '';
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  const n = d.length === 11 ? 5 : 4;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 2 + n)}-${d.slice(2 + n)}`;
+}
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.matches?.('input[type=tel]') && !e.inputType?.startsWith('delete')) t.value = fmtPhone(t.value);
+}, true);
+
 const pad = n => String(n).padStart(2, '0');
 const dstr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const today = () => dstr(new Date());
@@ -1948,7 +1963,7 @@ function vClient(id, q) {
         ${avatar(c.name, true)}
         <div class="grow">
           <p class="big">${esc(c.name)}</p>
-          ${c.phone ? `<p>📞 ${esc(c.phone)}</p>` : '<p class="muted">Sem telefone · <a href="#/cliente-editar?id=' + c.id + '">colocar</a></p>'}
+          ${c.phone ? `<p>📞 ${esc(fmtPhone(c.phone))}</p>` : '<p class="muted">Sem telefone · <a href="#/cliente-editar?id=' + c.id + '">colocar</a></p>'}
           <div class="badges">${c.birthday ? `<span class="badge ${bdayIn(c.birthday) === 0 ? 'warn' : ''}">🎂 ${bdayIn(c.birthday) === 0 ? 'Aniversário hoje!' : bdayLabel(c.birthday)}</span>` : ''}${st.online ? '<span class="badge">🌐 Veio pelo link</span>' : ''}${appts.some(a => a.seriesId && !a.packageId && !isPast(a) && a.status !== 'cancelado') ? '<span class="badge">🔁 Cliente fixa</span>' : ''}${activePkgs.length ? '<span class="badge">📦 Pacote</span>' : ''}</div>
         </div>
       </div>
@@ -2046,7 +2061,8 @@ function vPackageForm(_, q) {
         <div id="err"></div>
         <p class="muted" style="margin-top:0">Cliente: <b>${esc(c.name)}</b></p>
         <div class="field"><label for="pn">Nome do pacote</label>
-          ${!p && topServices().length ? `<div class="chips mini" id="svc-chips" style="margin-bottom:.5rem">${topServices().map(sv => `<button type="button" class="chip" data-svc="${esc(sv.name)}">${esc(sv.name)}</button>`).join('')}</div>` : ''}
+          ${!p && db.services.length ? `<div class="chips mini" id="svc-chips" style="margin-bottom:.5rem">${[...db.services.filter(sv => sv.package?.total).sort(byName), ...topServices().filter(sv => !sv.package?.total)].slice(0, 8)
+            .map(sv => `<button type="button" class="chip" data-svc="${esc(sv.name)}">${sv.package?.total ? '📦 ' : ''}${esc(sv.name)}${sv.package?.total ? ` · ${sv.package.total}x` : ''}</button>`).join('')}</div>` : ''}
           <input type="text" id="pn" value="${esc(p?.name || '')}" placeholder="Ex.: Cronograma capilar" autocapitalize="sentences"></div>
         <div class="field"><span class="lbl">Quantas sessões?</span>
           <div class="chips" id="counts">${counts.map(n => `<button type="button" class="chip ${n === total ? 'on' : ''}" data-n="${n}">${n}</button>`).join('')}
@@ -2213,8 +2229,10 @@ function vClientForm(_, q) {
         <div id="err"></div>
         <div class="field"><label for="n">Nome <em>*</em></label>
           <input type="text" id="n" value="${esc(c?.name || '')}" autocapitalize="words"></div>
+        ${!c && 'contacts' in navigator && 'ContactsManager' in window ? '<button type="button" class="btn small" id="pick-contact" style="margin-bottom:1rem">📇 Pegar da agenda do celular</button>' : ''}
         <div class="field"><label for="p">Telefone / WhatsApp <span class="opt">(se quiser)</span></label>
-          <input type="tel" id="p" value="${esc(c?.phone || '')}" placeholder="(11) 99999-9999"></div>
+          <input type="tel" id="p" value="${esc(c?.phone ? fmtPhone(c.phone) : '')}" placeholder="(11) 99999-9999">
+          <small class="hint" id="dup"></small></div>
         <div class="field"><span class="lbl">🎂 Aniversário <span class="opt">(se quiser — você recebe um aviso no dia)</span></span>
           <div class="row">
             <select id="bd-d" aria-label="Dia"><option value="">Dia</option>${Array.from({ length: 31 }, (_, i) => `<option value="${pad(i + 1)}" ${c?.birthday?.slice(3) === pad(i + 1) ? 'selected' : ''}>${i + 1}</option>`).join('')}</select>
@@ -2227,6 +2245,24 @@ function vClientForm(_, q) {
       </form>`,
     bind(el) {
       if (!c) $('#n', el).focus();
+      // mesmo telefone de outra cliente: avisa (evita cadastrar a mesma pessoa duas vezes)
+      const checkDup = () => {
+        const d = $('#p', el).value.replace(/\D/g, '').slice(-9);
+        const other = d.length >= 8 && db.clients.find(x => x !== c && (x.phone || '').replace(/\D/g, '').slice(-9) === d);
+        $('#dup', el).innerHTML = other ? `⚠️ Esse telefone já é da <a href="#/cliente/${other.id}"><b>${esc(other.name)}</b></a> — toque para abrir a ficha dela.` : '';
+        $('#dup', el).className = other ? 'hint new' : 'hint';
+      };
+      $('#p', el).addEventListener('input', checkDup);
+      checkDup();
+      $('#pick-contact', el) && ($('#pick-contact', el).onclick = async () => {
+        try {
+          const [ct] = await navigator.contacts.select(['name', 'tel'], { multiple: false });
+          if (!ct) return;
+          if (ct.name?.[0]) $('#n', el).value = niceName(ct.name[0]);
+          if (ct.tel?.[0]) $('#p', el).value = fmtPhone(ct.tel[0]);
+          checkDup();
+        } catch { /* cancelou */ }
+      });
       $('#f', el).addEventListener('submit', e => {
         e.preventDefault();
         const name = niceName($('#n', el).value);
