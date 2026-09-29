@@ -2777,7 +2777,7 @@ function vFin(_, q) {
   const isNow = m === today().slice(0, 7);
   const goal = salonHours()?.goal || 0;
 
-  const mrow = (href, date, title, sub, amount, color, extra = '') => `<div class="dayrow mrow">
+  const mrow = (href, date, title, sub, amount, color, extra = '') => `<div class="dayrow mrow ${extra.includes('quickprice') ? 'wrap' : ''}">
     <a class="mrow-main" href="${href}"><span class="dr-time"><b>${fmtShort(date).slice(0, 5)}</b><small>${fmtDate(date, { weekday: 'short' }).replace('.', '')}</small></span>
       <span class="dr-info"><b>${title}</b>${sub ? `<span>${sub}</span>` : ''}</span>
       <span class="dr-money" style="color:${color}">${amount}</span></a>${extra}</div>`;
@@ -2785,11 +2785,11 @@ function vFin(_, q) {
     if (k === 's') { // compra: pode ter vários produtos e parcelas
       const o = orderOf(it), p = nextInstallment(o);
       return mrow(link(k, it), it.date, esc(clientName(it.clientId)), `🛍️ ${esc(productsText(o))}${p ? ` · <b style="color:${p.date < today() ? 'var(--bad)' : 'inherit'}">${dueText(p)}</b>` : ''}`,
-        brl(dueNowOf(o)).replace(',00', ''), 'var(--warn)', `<button class="btn small ok payin" data-pay="s:${it.id}">💰 Receber${p ? ' ' + brl(p.left).replace(',00', '') : ''}</button>`);
+        '', '', `<button class="btn small ok payin" data-pay="s:${it.id}">💰 ${brl(dueNowOf(o)).replace(',00', '')}</button>`);
     }
     return mrow(link(k, it), it.date, esc(clientName(it.clientId)),
-      esc(what(k, it)) + (paidOf(it) > 0 ? ` · já pagou ${brl(paidOf(it))}` : ''), brl(leftOf(it)).replace(',00', ''), 'var(--warn)',
-      `<button class="btn small ok payin" data-pay="${k}:${it.id}">💰 Receber</button>`);
+      esc(what(k, it)) + (paidOf(it) > 0 ? ` · já pagou ${brl(paidOf(it))}` : ''), '', '',
+      `<button class="btn small ok payin" data-pay="${k}:${it.id}">💰 ${brl(leftOf(it)).replace(',00', '')}</button>`);
   };
 
   // Conteúdo de cada quadro
@@ -2800,9 +2800,21 @@ function vFin(_, q) {
       return `<h2>Entrou ${dia ? `em ${fmtDate(dia, { weekday: 'long', day: 'numeric', month: 'long' })}` : `em ${monthLabel}`} ${list.length ? `· ${brl(sumBy(list, p => p.v))}` : ''}</h2>
         ${dia ? `<a class="btn small" href="${url({ dia: '' })}" data-f style="margin-bottom:.6rem">✕ Ver o mês todo</a>` : ''}
         <div class="chips filters hscroll">${chips.map(([k, n]) => `<a class="chip ${pm === k ? 'on' : ''}" href="${url({ pm: k })}" data-f>${n}${k && k.length > 1 ? ' ' + brl(sumBy(received.filter(p => p.m === k), p => p.v)) : ''}</a>`).join('')}</div>
-        <div class="list clist">${list.length ? list.map(p => mrow(link(p.k, p.it), p.d, esc(clientName(p.it.clientId)),
-          esc(what(p.k, p.it)) + (PAY[p.m] ? ' · ' + PAY[p.m] : ''), '+ ' + brl(p.v).replace(',00', ''), 'var(--ok)')).join('')
-          : '<div class="empty">Nada recebido com esse filtro.</div>'}</div>`;
+        <div class="list clist">${list.length ? (() => {
+          const icon = { pix: '💠', dinheiro: '💵', cartao: '💳' };
+          let day = '';
+          return list.map(p => {
+            let head = '';
+            if (p.d !== day) {
+              day = p.d;
+              const tot = sumBy(list.filter(x => x.d === day), x => x.v);
+              head = `<div class="letter dayhead"><span>${day === today() ? 'Hoje' : day === addDays(today(), -1) ? 'Ontem' : cap(fmtDate(day, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', ',').replace('.', ''))}</span><b>${brl(tot).replace(',00', '')}</b></div>`;
+            }
+            return head + `<a class="dayrow" href="${link(p.k, p.it)}"><span class="dr-time pay-ic" title="${PAY[p.m] || ''}">${icon[p.m] || '•'}</span>
+              <span class="dr-info"><b>${esc(clientName(p.it.clientId))}</b><span>${esc(what(p.k, p.it))}${PAY[p.m] ? ' · ' + PAY[p.m] : ''}</span></span>
+              <span class="dr-money ok">+ ${brl(p.v).replace(',00', '')}</span></a>`;
+          }).join('');
+        })() : '<div class="empty">Nada recebido com esse filtro.</div>'}</div>`;
     },
     saiu: () => `<h2>Saiu em ${monthLabel} · ${brl(spent)}</h2>
       ${fixedTodo.length ? `<div class="card fixedbox"><b>📌 Despesas fixas para lançar</b>
@@ -2823,6 +2835,10 @@ function vFin(_, q) {
       </div>
       <p class="muted">Conta só o dinheiro que já entrou. O que falta receber (${brl(owed)}) entra no lucro quando for pago.</p>`,
     falta: () => `<h2>Falta receber de ${monthLabel} · ${brl(owed)}</h2>
+      ${(() => {
+        const ids = [...new Set([...dueMonth, ...dueOld].map(d => d.it.clientId))].map(client).filter(c => c?.phone);
+        return ids.length ? `<button type="button" class="btn small" id="cobrar-todas" style="margin-bottom:.7rem">📣 Cobrar pelo WhatsApp (${ids.length})</button>` : '';
+      })()}
       <div class="list clist">${dueMonth.length ? dueMonth.map(dueRow).join('') : '<div class="empty">Ninguém devendo neste mês. 🎉</div>'}</div>
       ${dueOld.length ? `<h2>De meses anteriores · ${brl(owedOld)}</h2><div class="list clist">${dueOld.map(dueRow).join('')}</div>` : ''}`,
     vai: () => `<h2>Ainda vai entrar · ${brl(expected)}</h2>
@@ -3024,6 +3040,11 @@ function vFin(_, q) {
       el.addEventListener('click', e => {
         if (e.target.closest('[data-goal]')) { goalSheet(goal); return; }
         if (e.target.closest('#fin-csv')) { exportCsv(); return; }
+        if (e.target.closest('#cobrar-todas')) {
+          const ids = [...new Set([...dueMonth, ...dueOld].map(d => d.it.clientId))].map(client).filter(c => c?.phone);
+          bulkSheet(ids.map(c => ({ c, st: clientStats(c) })), 'devendo');
+          return;
+        }
         const tb = e.target.closest('[data-tab]');
         if (tb) {
           finTab = tb.dataset.tab;

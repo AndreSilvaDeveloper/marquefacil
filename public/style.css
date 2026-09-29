@@ -735,3 +735,13 @@ details.ready { padding: .7rem 1rem; }
 .sortrow { gap: .5rem; }
 .sortrow select { width: auto; }
 .sortrow select { flex: 0 1 10rem; min-width: 0; max-width: 10rem; }
+
+/* ---------- Dinheiro: entrou por dia e receber ao lado ---------- */
+.list.clist .dayhead { display: flex; justify-content: space-between; color: var(--muted); }
+.list.clist .dayhead b { color: var(--ok); }
+.pay-ic { flex: 0 0 2.2rem; font-size: 1.3rem; text-align: center; }
+.mrow { flex-wrap: nowrap; }
+.mrow.wrap { flex-wrap: wrap; }
+.mrow:not(.wrap) .mrow-main { flex: 1 1 auto; }
+.mrow .payin { margin: 0 0 0 .2rem; padding: .35rem .6rem; flex: 0 0 auto; }
+.mrow .dr-money:empty { display: none; }
