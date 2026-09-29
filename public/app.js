@@ -270,7 +270,8 @@ function refreshPaid(x) { if (x.payments?.length) x.paid = leftOf(x) === 0; } //
 const methodsOf = x => [...new Set(paymentsOf(x).map(p => PAY[p.m]).filter(Boolean))].join(' + ');
 
 const apptDue = a => a.status !== 'cancelado' && a.status !== 'pendente' && a.status !== 'prereserva' && valueOf(a) > 0 && leftOf(a) > 0 && (a.status === 'feito' || isPast(a));
-const saleDue = s => valueOf(s) > 0 && leftOf(s) > 0;
+// Venda: está devendo se tem valor em aberto; a prazo, só quando alguma parcela já venceu (ou vence hoje)
+const saleDue = s => valueOf(s) > 0 && leftOf(s) > 0 && (!s.plan?.dates?.length || orderDueNow(orderOf(s)) > 0);
 
 /* Compra paga depois (de uma vez ou parcelada). Os produtos da mesma compra têm o mesmo orderId e o mesmo
    plano: plan = { entrada, dates: ['AAAA-MM-DD', …] } (uma data por parcela). O que ela paga cobre as
@@ -295,6 +296,7 @@ function installmentsOf(o) {
   });
 }
 const nextInstallment = o => installmentsOf(o).find(p => p.left > 0) || null;
+const orderDueNow = o => (o.plan ? round2(installmentsOf(o).filter(p => p.date <= today()).reduce((t, p) => t + p.left, 0)) : o.left);
 const productsText = o => { const n = o.lines.map(x => `${x.product}${x.qty > 1 ? ` (${x.qty}x)` : ''}`); return n.length > 1 ? `${n.slice(0, -1).join(', ')} e ${n.at(-1)}` : n[0] || 'Compra'; };
 // Recebeu um valor da compra: vai cobrindo os produtos em ordem
 function payOrder(o, v, m, d = today()) {
@@ -307,8 +309,25 @@ function payOrder(o, v, m, d = today()) {
 // "parcela 2 de 3 · vence 05/10" (ou "vence 05/10" quando é de uma vez)
 const dueText = p => `${p.of > 1 ? `parcela ${p.n} de ${p.of} · ` : ''}${p.date < today() ? '⚠️ venceu' : p.date === today() ? 'vence hoje' : 'vence'} ${p.date === today() ? '' : fmtShort(p.date).slice(0, 5)}`.trim();
 function clientOwes(id) {
-  return round2(db.appts.filter(a => a.clientId === id && apptDue(a)).reduce((t, a) => t + leftOf(a), 0) +
-    db.sales.filter(s => s.clientId === id && saleDue(s)).reduce((t, s) => t + leftOf(s), 0));
+  const seen = new Set();
+  let t = db.appts.filter(a => a.clientId === id && apptDue(a)).reduce((sum, a) => sum + leftOf(a), 0);
+  for (const s of db.sales.filter(x => x.clientId === id && valueOf(x) > 0 && leftOf(x) > 0)) {
+    if (!s.plan?.dates?.length) { t += leftOf(s); continue; }
+    if (seen.has(orderKey(s))) continue;
+    seen.add(orderKey(s)); t += orderDueNow(orderOf(s));
+  }
+  return round2(t);
+}
+// Parcelas de compras que ainda vão vencer (não é dívida ainda)
+function clientToCome(id) {
+  const seen = new Set();
+  let t = 0;
+  for (const s of db.sales.filter(x => x.clientId === id && x.plan?.dates?.length)) {
+    if (seen.has(orderKey(s))) continue;
+    seen.add(orderKey(s));
+    t += installmentsOf(orderOf(s)).filter(p => p.date > today()).reduce((sum, p) => sum + p.left, 0);
+  }
+  return round2(t);
 }
 function clientPaid(id) {
   return round2(db.appts.filter(a => a.clientId === id && a.status !== 'cancelado').reduce((t, a) => t + paidOf(a), 0) +
@@ -1896,6 +1915,7 @@ function vClient(id, q) {
         ${st.fav ? `<div class="ex-row"><span>Serviço preferido</span><b>${esc(st.fav)}</b></div>` : ''}
         ${st.since ? `<div class="ex-row"><span>Cliente desde</span><b>${fmtDate(st.since, { month: 'short', year: 'numeric' }).replace('.', '')}</b></div>` : ''}
         <div class="ex-row"><span>Já pagou</span><b style="color:var(--ok)">${brl(st.paid)}</b></div>
+        ${clientToCome(c.id) ? `<div class="ex-row"><span>Parcelas a vencer</span><b>${brl(clientToCome(c.id))}</b></div>` : ''}
         <a class="ex-row ${hf === 'deve' ? 'on' : ''}" href="${url(hf === 'deve' ? '' : 'deve')}" data-f><span>Falta pagar</span><b style="${st.owes > 0 ? 'color:var(--warn)' : ''}">${st.owes > 0 ? brl(st.owes) : 'nada 🎉'}</b><i>${st.owes > 0 ? (hf === 'deve' ? '▾' : '›') : ''}</i></a>
       </div>
       ${st.owes > 0 ? `<div class="row" style="margin-bottom:.7rem">
@@ -2630,6 +2650,7 @@ function vSaleForm(_, q) {
 /* =====================================================================
    FINANCEIRO
    ===================================================================== */
+let finTab = 'dia'; // aba escolhida em "Números do mês"
 function vFin(_, q) {
   const m = q.m || today().slice(0, 7);
   const f = q.f || '';          // quadro escolhido (filtro)
@@ -2665,8 +2686,11 @@ function vFin(_, q) {
   const monthSales = db.sales.filter(x => x.date.startsWith(m));
   // uma linha por compra (os produtos da mesma compra viram um item só)
   const oneOrder = list => { const seen = new Set(); return list.filter(d => d.k !== 's' || (!seen.has(orderKey(d.it)) && seen.add(orderKey(d.it)))); };
-  const dueOf = list => oneOrder(list).sort((a, b) => (a.it.date + (a.it.time || '')).localeCompare(b.it.date + (b.it.time || '')));
-  const leftOfDue = d => (d.k === 's' ? orderOf(d.it).left : leftOf(d.it));
+  const dueOf = list => oneOrder(list).filter(d => leftOfDue(d) > 0).sort((a, b) => (a.it.date + (a.it.time || '')).localeCompare(b.it.date + (b.it.time || '')));
+  // compra a prazo: só conta o que já venceu (ou vence hoje); as parcelas futuras vão em "Ainda vai entrar"
+  const t0 = today();
+  const dueNowOf = orderDueNow;
+  const leftOfDue = d => (d.k === 's' ? dueNowOf(orderOf(d.it)) : leftOf(d.it));
   const dueMonth = dueOf([...monthAppts.filter(apptDue).map(it => ({ k: 'a', it })), ...monthSales.filter(saleDue).map(it => ({ k: 's', it }))]);
   const dueOld = dueOf([...db.appts.filter(a => a.date < m + '-01' && apptDue(a)).map(it => ({ k: 'a', it })),
                         ...db.sales.filter(x => x.date < m + '-01' && saleDue(x)).map(it => ({ k: 's', it }))]);
@@ -2675,7 +2699,16 @@ function vFin(_, q) {
 
   // AINDA VAI ENTRAR: horários do mês que ainda vão acontecer
   const upcoming = monthAppts.filter(a => !isPast(a) && a.status === 'marcado' && !isPaid(a)).sort(byWhen);
-  const expected = sumBy(upcoming, leftOf);
+  const upcomingParts = [];
+  { const seen = new Set();
+    for (const x of db.sales) {
+      if (!x.plan?.dates?.length || seen.has(orderKey(x))) continue;
+      seen.add(orderKey(x));
+      const o = orderOf(x);
+      for (const p of installmentsOf(o)) if (p.left > 0 && p.date > t0 && p.date.startsWith(m)) upcomingParts.push({ o, p, it: o.lines[0] });
+    }
+    upcomingParts.sort((a, b) => a.p.date.localeCompare(b.p.date)); }
+  const expected = round2(sumBy(upcoming, leftOf) + sumBy(upcomingParts, u => u.p.left));
   const upcomingNoPrice = upcoming.filter(a => !(a.price > 0)).length;
 
   // SEM VALOR: atendimentos que já aconteceram sem valor lançado
@@ -2693,7 +2726,7 @@ function vFin(_, q) {
     if (k === 's') { // compra: pode ter vários produtos e parcelas
       const o = orderOf(it), p = nextInstallment(o);
       return mrow(link(k, it), it.date, esc(clientName(it.clientId)), `🛍️ ${esc(productsText(o))}${p ? ` · <b style="color:${p.date < today() ? 'var(--bad)' : 'inherit'}">${dueText(p)}</b>` : ''}`,
-        brl(o.left).replace(',00', ''), 'var(--warn)', `<button class="btn small ok payin" data-pay="s:${it.id}">💰 Receber${p ? ' ' + brl(p.left).replace(',00', '') : ''}</button>`);
+        brl(dueNowOf(o)).replace(',00', ''), 'var(--warn)', `<button class="btn small ok payin" data-pay="s:${it.id}">💰 Receber${p ? ' ' + brl(p.left).replace(',00', '') : ''}</button>`);
     }
     return mrow(link(k, it), it.date, esc(clientName(it.clientId)),
       esc(what(k, it)) + (paidOf(it) > 0 ? ` · já pagou ${brl(paidOf(it))}` : ''), brl(leftOf(it)).replace(',00', ''), 'var(--warn)',
@@ -2735,7 +2768,12 @@ function vFin(_, q) {
       ${dueOld.length ? `<h2>De meses anteriores · ${brl(owedOld)}</h2><div class="list clist">${dueOld.map(dueRow).join('')}</div>` : ''}`,
     vai: () => `<h2>Ainda vai entrar · ${brl(expected)}</h2>
       ${upcomingNoPrice ? `<p class="muted" style="margin-top:-.3rem">${plural(upcomingNoPrice, 'horário ainda sem valor', 'horários ainda sem valor')} (não entra na soma).</p>` : ''}
-      <div class="list clist">${upcoming.length ? upcoming.map(a => dayRow(a, '', { date: true })).join('') : '<div class="empty">Nenhum horário para o resto do mês.</div>'}</div>`,
+      ${upcomingParts.length ? `<h3 class="subh">📅 Horários · ${brl(sumBy(upcoming, leftOf))}</h3>` : ''}
+      <div class="list clist">${upcoming.length ? upcoming.map(a => dayRow(a, '', { date: true })).join('') : '<div class="empty">Nenhum horário para o resto do mês.</div>'}</div>
+      ${upcomingParts.length ? `<h3 class="subh">🛍️ Parcelas de compras · ${brl(sumBy(upcomingParts, u => u.p.left))}</h3>
+        <div class="list clist">${upcomingParts.map(({ o, p, it }) => mrow(link('s', it), p.date, esc(clientName(o.clientId)),
+          `🛍️ ${esc(productsText(o))}${p.of > 1 ? ` · parcela ${p.n} de ${p.of}` : ''}`, brl(p.left).replace(',00', ''), 'inherit',
+          `<button class="btn small payin" data-pay="s:${it.id}">💰 Receber antes</button>`)).join('')}</div>` : ''}`,
     semvalor: () => `<h2>Atendimentos sem valor</h2>
       <p class="muted" style="margin-top:-.3rem">Coloque quanto foi cobrado:</p>
       <div class="list clist">${noPrice.map(a => mrow(`#/agendamento/${a.id}`, a.date, esc(clientName(a.clientId)),
@@ -2780,10 +2818,10 @@ function vFin(_, q) {
   };
 
   // Rankings: serviços que mais renderam e clientes que mais gastaram (pelo que entrou no mês)
-  const ranking = (title, rows) => {
+  const ranking = rows => {
     if (!rows.length) return '';
     const top = rows[0][1];
-    return `<h2>${title}</h2><div class="card rank">${rows.map(([n, v]) => `
+    return `<div class="card rank">${rows.map(([n, v]) => `
       <div class="rank-row"><span class="rank-name">${esc(n)}</span><span class="rank-bar"><i style="width:${Math.max(4, v / top * 100)}%"></i></span><b>${brl(v)}</b></div>`).join('')}</div>`;
   };
   const group = (list, key) => Object.entries(list.reduce((acc, p) => { const k = key(p); acc[k] = (acc[k] || 0) + p.v; return acc; }, {}))
@@ -2859,7 +2897,7 @@ function vFin(_, q) {
       : '';
     // Formas de pagamento do mês
     const methods = Object.entries(PAY).map(([k, n]) => [k, n, sumBy(received.filter(p => p.m === k), p => p.v)]).filter(r => r[2] > 0);
-    const methodBox = methods.length ? `<h2>💳 Como você recebeu</h2><div class="card rank">${methods.sort((a, b) => b[2] - a[2]).map(([k, n, v]) => `
+    const methodBox = methods.length ? `<div class="card rank">${methods.sort((a, b) => b[2] - a[2]).map(([k, n, v]) => `
       <a class="rank-row" href="${url({ f: 'entrou', pm: k })}" data-f><span class="rank-name">${n}</span><span class="rank-bar"><i style="width:${Math.max(4, v / methods[0][2] * 100)}%"></i></span><b>${brl(v)} <small class="muted">${Math.round(v / recTotal * 100)}%</small></b></a>`).join('')}</div>` : '';
     const people = new Set(doneAppts.map(a => a.clientId)).size;
     return `${goalBox}
@@ -2872,11 +2910,15 @@ function vFin(_, q) {
         <div class="ex-row"><span>Clientes atendidas</span><b>${people}</b></div>
         <div class="ex-row"><span>Média por atendimento</span><b>${ticket ? brl(ticket) : '—'}</b></div>
       </div>
-      ${dailyChart()}
-      ${monthsChart()}
-      ${methodBox}
-      ${ranking('💇 Serviços que mais renderam', svcRank)}
-      ${ranking('👩 Clientes que mais gastaram', cliRank)}
+      ${(() => {
+        const tabs = [['dia', '📈 Por dia', dailyChart()], ['meses', '📅 6 meses', monthsChart()], ['formas', '💳 Formas', methodBox],
+          ['serv', '💇 Serviços', ranking(svcRank)], ['cli', '👩 Clientes', ranking(cliRank)]].filter(x => x[2]);
+        if (!tabs.length) return '';
+        const on = tabs.some(x => x[0] === finTab) ? finTab : tabs[0][0];
+        return `<h2>📊 Números do mês</h2>
+          <div class="chips filters hscroll" id="ana-tabs">${tabs.map(([k, n]) => `<button type="button" class="chip ${k === on ? 'on' : ''}" data-tab="${k}">${n}</button>`).join('')}</div>
+          ${tabs.map(([k, , h]) => `<div data-pane="${k}" ${k === on ? '' : 'hidden'}>${h}</div>`).join('')}`;
+      })()}
       ${!tips.length && !received.length ? '<div class="empty">Nenhum dinheiro lançado neste mês ainda.</div>' : ''}
       ${received.length || expenses.length ? `<h2>📤 Levar os números</h2>
         <a class="btn" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(shareText(diff, prev))}">💬 Enviar resumo pelo WhatsApp</a>
@@ -2923,6 +2965,13 @@ function vFin(_, q) {
       el.addEventListener('click', e => {
         if (e.target.closest('[data-goal]')) { goalSheet(goal); return; }
         if (e.target.closest('#fin-csv')) { exportCsv(); return; }
+        const tb = e.target.closest('[data-tab]');
+        if (tb) {
+          finTab = tb.dataset.tab;
+          el.querySelectorAll('#ana-tabs .chip').forEach(x => x.classList.toggle('on', x === tb));
+          el.querySelectorAll('[data-pane]').forEach(x => { x.hidden = x.dataset.pane !== finTab; });
+          return;
+        }
         const fx = e.target.closest('[data-fixed]');
         if (fx) {
           const list = fx.dataset.fixed === 'all' ? fixedTodo : fixedTodo.filter(x => x.id === fx.dataset.fixed);

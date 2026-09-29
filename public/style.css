@@ -719,3 +719,4 @@ details.ready { padding: .7rem 1rem; }
 .cl-bottom .line-total { margin-left: auto; min-width: 4.2rem; }
 .cart-line { padding: .5rem 0; }
 .linkish { border: 0; background: none; color: var(--brand); font-weight: 700; padding: .3rem 0; cursor: pointer; font: inherit; font-weight: 700; }
+#ana-tabs { margin-top: -.2rem; }
