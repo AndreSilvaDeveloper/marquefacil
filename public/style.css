@@ -745,3 +745,16 @@ details.ready { padding: .7rem 1rem; }
 .mrow:not(.wrap) .mrow-main { flex: 1 1 auto; }
 .mrow .payin { margin: 0 0 0 .2rem; padding: .35rem .6rem; flex: 0 0 auto; }
 .mrow .dr-money:empty { display: none; }
+
+/* ---------- Tela do horário ---------- */
+.appt-hero .big { display: block; font-size: 1.45rem; font-weight: 800; color: var(--brand); text-decoration: none; margin-bottom: .2rem; }
+.appt-hero p { margin: .25rem 0; }
+.appt-hero .when { font-size: 1.15rem; }
+.appt-hero .status-line { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .5rem; }
+.moneybox { margin-top: .9rem; }
+.moneybox .ex-row { gap: .6rem; }
+.moneybox .ex-row > span { flex: 1; }
+.moneybox .quickprice { flex: 0 1 13rem; margin: 0; }
+.moneybox .paid-how { display: block; font-size: .8rem; margin-top: .15rem; }
+.moneybox .dayrow { border-top: 1px solid var(--line); }
+.moneybox + .btn { margin-top: .8rem; }

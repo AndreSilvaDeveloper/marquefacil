@@ -1335,19 +1335,24 @@ function vAppt(id) {
   if (!a) return { title: 'Horário', back: true, html: '<div class="empty">Esse horário não existe mais.</div>' };
   const c = client(a.clientId);
   const conflicts = a.status !== 'cancelado' ? conflictsFor(a.date, a.time, a.duration, a.id) : [];
+  const pos = pkgPos(a);
+  const done = a.status === 'feito' || (a.status === 'marcado' && isPast(a));
+  const statusPill = a.status === 'cancelado' ? `<span class="badge bad">❌ ${a.cancelledBy === 'cliente' ? 'Cancelado pela cliente' : a.cancelledBy === 'remarcado' ? 'Remarcado' : 'Cancelado'}</span>`
+    : a.status === 'pendente' ? `<span class="badge warn">⏳ ${a.replaces ? 'Quer remarcar' : 'Pedido pelo link'}</span>`
+    : a.status === PRE ? '<span class="badge pre">💳 Pré-reserva</span>'
+    : done ? '<span class="badge ok">✓ Feito</span>' : '<span class="badge">📅 Marcado</span>';
   const msg = `Olá ${c?.name?.split(' ')[0] || ''}! Passando para lembrar do seu horário ${dayName(a.date) === 'Hoje' ? 'hoje' : dayName(a.date) === 'Amanhã' ? 'amanhã' : 'dia ' + fmtShort(a.date)} às ${a.time}${a.service ? ' (' + a.service + ')' : ''}. Até lá! 💖`;
 
   return {
     title: 'Horário', tab: 'agenda', back: true,
     html: `
-      <div class="hero">
-        <p class="big"><a href="#/cliente/${a.clientId}">${esc(clientName(a.clientId))} ›</a></p>
-        <p style="font-size:1.15rem"><b style="text-transform:capitalize">${dayName(a.date)}</b>, ${fmtShort(a.date)} às <b>${a.time}</b>${a.duration ? ` até ${hhmm(apptEnd(a))}` : ''}</p>
-        ${a.service ? `<p>💇 ${esc(a.service)}${a.duration ? ' · ' + fmtDur(a.duration) : ''}</p>` : ''}
+      <div class="hero appt-hero">
+        <a class="big" href="#/cliente/${a.clientId}">${esc(clientName(a.clientId))} ›</a>
+        <p class="when"><b>${cap(dayName(a.date))}</b>, ${fmtShort(a.date).slice(0, 5)} · <b>${a.time}</b>${a.duration ? ` até ${hhmm(apptEnd(a))}` : ''}</p>
+        ${a.service || pos ? `<p>💇 ${esc(a.service || pos.p.name)}${a.duration ? ' · ' + fmtDur(a.duration) : ''}${pos ? ` · <a href="#/cliente/${a.clientId}">📦 ${pos.n}ª sessão de ${pos.total}</a>` : ''}</p>` : ''}
+        <p class="status-line">${statusPill}${a.seriesId && !a.packageId ? ` <span class="badge">🔁 Fixa · ${seriesLabel(a.seriesEvery)}</span>` : ''}${a.source === 'online' && a.status !== 'pendente' ? ' <span class="badge">🌐 Pelo link</span>' : ''}</p>
         ${a.notes ? `<p class="muted">📝 ${esc(a.notes)}</p>` : ''}
-        ${a.seriesId && !a.packageId ? `<p>🔁 Cliente fixa · ${seriesLabel(a.seriesEvery)}</p>` : ''}
-        ${pkgPos(a) ? `<p>📦 ${esc(pkgPos(a).p.name)} · <b>${pkgPos(a).n}ª de ${pkgPos(a).total}</b> · <a href="#/cliente/${a.clientId}">ver pacote</a></p>` : ''}
-        <div class="badges">${badgesFor(a)}</div>
+        ${c?.notes ? `<p class="muted">👩 ${esc(c.notes)}</p>` : ''}
         ${conflicts.length ? `<div class="conflict-box">⚠️ Junto com: ${conflicts.map(x => `<b>${esc(clientName(x.clientId))}</b> ${x.time}`).join(', ')}</div>` : ''}
       </div>
 
@@ -1355,8 +1360,8 @@ function vAppt(id) {
       <div class="stack prebox">
         <p style="margin:0">💳 <b>Pré-reserva</b> — o horário está segurado esperando o sinal${a.price > 0 ? ` de <b>${brl(depositOf(a))}</b> (${depositPct()}% de ${brl(a.price)})` : ''}.</p>
         <button class="btn ok" id="pre-pay">💰 Recebi o sinal — confirmar horário</button>
-        <button class="btn" id="pre-ok">✓ Confirmar sem sinal</button>
-        ${c?.phone ? `<a class="btn" target="_blank" rel="noopener" href="${waLink(c.phone, `Olá, ${c.name.split(' ')[0]}! Para confirmar o seu horário de ${dayName(a.date).toLowerCase()} (${fmtShort(a.date)}) às ${a.time}, falta o sinal${a.price > 0 ? ' de ' + brl(depositOf(a)) : ''}. 😊`)}">💬 Lembrar do sinal pelo WhatsApp</a>` : ''}
+        <button class="btn small" id="pre-ok">✓ Confirmar sem sinal</button>
+        ${c?.phone ? `<a class="btn small" target="_blank" rel="noopener" href="${waLink(c.phone, `Olá, ${c.name.split(' ')[0]}! Para confirmar o seu horário de ${dayName(a.date).toLowerCase()} (${fmtShort(a.date)}) às ${a.time}, falta o sinal${a.price > 0 ? ' de ' + brl(depositOf(a)) : ''}. 😊`)}">💬 Lembrar do sinal pelo WhatsApp</a>` : ''}
       </div>` : ''}
 
       ${a.status === 'pendente' ? `
@@ -1367,42 +1372,31 @@ function vAppt(id) {
       </div>` : ''}
 
       ${a.status !== 'cancelado' && a.status !== 'pendente' ? `
-      <div class="stack">
-        <div class="form">
-          <label for="price">Valor deste atendimento</label>
-          <div class="quickprice"><div class="money"><input type="text" id="price" inputmode="numeric" placeholder="${a.priceLater ? 'Avaliar na hora' : '0,00'}" value="${moneyVal(a.price)}"></div>
-          <button class="btn small main" id="save-price">Salvar</button></div>
-          ${!(a.price > 0) ? `<button type="button" class="chip ${a.priceLater ? 'on' : ''}" id="later" style="margin-top:.5rem">🔎 Avaliar na hora</button>` : ''}
-        </div>
-        <div class="card">
-          <span class="lbl" style="font-weight:700;display:block;margin-bottom:.35rem">Pagamento</span>
-          ${payBadge(a, 'Não pagou') || '<span class="muted">Coloque o valor para lançar o pagamento.</span>'}
-          ${paymentsOf(a).length ? `<ul class="paylist">${paymentsOf(a).map(p => `<li>${brl(p.v)}${PAY[p.m] ? ' · ' + PAY[p.m] : ''} · ${fmtShort(p.d)}</li>`).join('')}</ul>` : ''}
-          ${valueOf(a) > 0 && leftOf(a) > 0 ? `<button class="btn ok" id="receive" style="margin-top:.6rem">💰 Receber ${brl(leftOf(a))}</button>` : ''}
-          ${paymentsOf(a).length ? '<button class="btn small" id="unpay" style="margin-top:.6rem">Desfazer pagamento</button>' : ''}
-        </div>
-        <div class="card">
-          <span class="lbl" style="font-weight:700;display:block;margin-bottom:.35rem">🛍️ Produtos deste atendimento</span>
-          ${salesOfAppt(a).length ? `<div class="list">${salesOfAppt(a).map(x => saleCard(x, { showClient: false })).join('')}</div>` : '<span class="muted">Nenhum produto vendido.</span>'}
-          <a class="btn" href="#/venda?c=${a.clientId}&a=${a.id}" style="margin-top:.6rem">🛍️ Vender produto para ${esc(clientName(a.clientId).split(' ')[0])}</a>
-          ${salesOfAppt(a).length ? `<div class="line" style="margin-top:.8rem;font-size:1.1rem"><b class="grow">Total do atendimento</b><b>${brl(visitTotal(a))}</b></div>
-            ${visitLeft(a) > 0 ? `<button class="btn ok" id="receive-all" style="margin-top:.6rem">💰 Receber tudo (${brl(visitLeft(a))})</button>` : '<span class="badge ok">✓ Tudo pago</span>'}` : ''}
-        </div>
-        ${a.status === 'feito'
-          ? '<button class="btn" id="undo-done">Desmarcar "feito"</button>'
-          : '<button class="btn ok" id="done">✓ Atendimento feito</button>'}
-      </div>` : ''}
+      <div class="card extrato moneybox">
+        <div class="ex-row form"><span>Valor</span>
+          <div class="quickprice"><div class="money"><input type="text" id="price" inputmode="numeric" placeholder="${a.priceLater ? 'Avaliar' : '0,00'}" value="${moneyVal(a.price)}"></div>
+          <button class="btn small main" id="save-price">Salvar</button></div></div>
+        ${!(a.price > 0) ? `<div class="ex-row"><span class="muted" style="font-size:.9rem">Ainda não sabe o valor?</span><button type="button" class="chip ${a.priceLater ? 'on' : ''}" id="later">🔎 Avaliar na hora</button></div>` : ''}
+        ${valueOf(a) > 0 ? `<div class="ex-row"><span>Pagamento${paymentsOf(a).length ? `<small class="muted paid-how">${paymentsOf(a).map(p => `${brl(p.v)}${PAY[p.m] ? ' ' + PAY[p.m] : ''} · ${fmtShort(p.d).slice(0, 5)}`).join('<br>')}</small>` : ''}</span>
+          ${leftOf(a) <= 0 ? '<b style="color:var(--ok)">✓ Pago</b>' : a.status === PRE ? `<b style="color:var(--warn)">falta ${brl(leftOf(a))}</b>` : `<button class="btn small ok" id="receive">💰 Receber ${brl(leftOf(a)).replace(',00', '')}</button>`}</div>` : ''}
+        <div class="ex-row"><span>🛍️ Produtos</span><a class="btn small" href="#/venda?c=${a.clientId}&a=${a.id}">+ Vender</a></div>
+        ${salesOfAppt(a).map(x => saleRow(x, { who: false })).join('')}
+        ${salesOfAppt(a).length ? `<div class="ex-row"><span><b>Total do atendimento</b></span><b>${brl(visitTotal(a))}</b></div>
+          ${visitLeft(a) > 0 ? `<div class="ex-row"><span></span><button class="btn small ok" id="receive-all">💰 Receber tudo (${brl(visitLeft(a))})</button></div>` : ''}` : ''}
+      </div>
+      ${a.status === 'marcado' && a.date <= today() ? '<button class="btn ok" id="done">✓ Atendimento feito</button>' : ''}` : ''}
 
-      <h2>Outras opções</h2>
-      <div class="stack">
-        ${c?.phone ? `<a class="btn" target="_blank" rel="noopener" href="${waLink(c.phone, msg)}">💬 Lembrar pelo WhatsApp</a>` : ''}
-        <a class="btn" href="#/agendar?id=${a.id}">✏️ Mudar dia, horário ou serviço</a>
-        ${a.status === 'cancelado'
-          ? '<button class="btn" id="uncancel">Desfazer cancelamento</button>'
-          : `<button class="btn danger" id="cancel">Cliente desmarcou (cancelar${a.seriesId ? ' só este' : ''})</button>`}
-        ${a.seriesId && nextInSeries(a).length ? `<button class="btn danger" id="cancel-next">Cancelar este e os próximos (${nextInSeries(a).length + 1})</button>` : ''}
-        <button class="btn danger" id="del">🗑️ Apagar de vez${a.seriesId ? ' (só este)' : ''}</button>
-        ${a.seriesId && nextInSeries(a).length ? `<button class="btn danger" id="del-next">🗑️ Apagar este e os próximos (${nextInSeries(a).length + 1})</button>` : ''}
+      <div class="menu" style="margin-top:1rem">
+        ${c?.phone && a.status !== 'cancelado' && a.status !== 'pendente' ? `<a class="menu-item" target="_blank" rel="noopener" href="${waLink(c.phone, msg)}"><span class="mi-icon">💬</span><span class="mi-text"><b>Lembrar pelo WhatsApp</b></span><span class="mi-go">›</span></a>` : ''}
+        <a class="menu-item" href="#/agendar?id=${a.id}"><span class="mi-icon">✏️</span><span class="mi-text"><b>Mudar dia, horário ou serviço</b></span><span class="mi-go">›</span></a>
+        ${a.status === 'feito' ? '<button type="button" class="menu-item" id="undo-done"><span class="mi-icon">↩️</span><span class="mi-text"><b>Desmarcar "feito"</b></span></button>' : ''}
+        ${paymentsOf(a).length ? '<button type="button" class="menu-item" id="unpay"><span class="mi-icon">↩️</span><span class="mi-text"><b>Desfazer pagamento</b></span></button>' : ''}
+        ${a.status === 'pendente' ? '' : a.status === 'cancelado'
+          ? '<button type="button" class="menu-item" id="uncancel"><span class="mi-icon">↩️</span><span class="mi-text"><b>Desfazer cancelamento</b></span></button>'
+          : `<button type="button" class="menu-item danger" id="cancel"><span class="mi-icon">❌</span><span class="mi-text"><b>Cliente desmarcou</b><small>Cancelar${a.seriesId ? ' só este' : ''}</small></span></button>`}
+        ${a.seriesId && nextInSeries(a).length ? `<button type="button" class="menu-item danger" id="cancel-next"><span class="mi-icon">❌</span><span class="mi-text"><b>Cancelar este e os próximos</b><small>${nextInSeries(a).length + 1} horários</small></span></button>` : ''}
+        <button type="button" class="menu-item danger" id="del"><span class="mi-icon">🗑️</span><span class="mi-text"><b>Apagar de vez</b>${a.seriesId ? '<small>Só este</small>' : ''}</span></button>
+        ${a.seriesId && nextInSeries(a).length ? `<button type="button" class="menu-item danger" id="del-next"><span class="mi-icon">🗑️</span><span class="mi-text"><b>Apagar este e os próximos</b><small>${nextInSeries(a).length + 1} horários</small></span></button>` : ''}
       </div>`,
     bind(el) {
       // msg pode ser uma função: assim a mensagem mostra os valores DEPOIS da mudança
