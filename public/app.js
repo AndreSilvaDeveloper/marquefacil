@@ -456,12 +456,22 @@ function apptCard(a, { showDate = false, showClient = true } = {}) {
     </div></a>`;
 }
 
+// Aviso curto da venda: parcela seguinte (a prazo) ou quanto deve
+function saleNote(x) {
+  if (x.plan?.dates?.length) {
+    const o = orderOf(x), p = nextInstallment(o);
+    if (!p) return '<em class="ok">✓ Compra paga</em>';
+    return o.lines[0].id === x.id ? `<em class="${p.date < today() ? 'bad' : 'warn'}">${dueText(p)} · ${brl(p.left)}</em>` : '<em>mesma compra ↑</em>';
+  }
+  return isPaid(x) ? '' : `<em class="warn">Deve ${brl(leftOf(x))}</em>`;
+}
+
 // Linha enxuta de venda e de despesa (busca)
-function saleRow(x) {
+function saleRow(x, { who = true } = {}) {
   const paid = isPaid(x);
   return `<a class="dayrow" href="#/venda?id=${x.id}">
     <span class="dr-time"><b>${fmtShort(x.date).slice(0, 5)}</b><small>🛍️ venda</small></span>
-    <span class="dr-info"><b>${esc(x.product)}${x.qty > 1 ? ` (${x.qty}x)` : ''}</b><span>${esc(clientName(x.clientId))}</span>${paid ? '' : `<em class="warn">Deve ${brl(leftOf(x))}</em>`}</span>
+    <span class="dr-info"><b>${esc(x.product)}${x.qty > 1 ? ` (${x.qty}x)` : ''}</b>${who ? `<span>${esc(clientName(x.clientId))}</span>` : ''}${saleNote(x)}</span>
     <span class="dr-money ${paid ? 'ok' : ''}">${paid ? '✓ ' : ''}${brl(valueOf(x)).replace(',00', '')}</span></a>`;
 }
 const expenseLine = e => `<a class="dayrow" href="#/despesa?id=${e.id}">
@@ -649,7 +659,7 @@ function dayTimeline(d, active, tags = {}) {
 }
 
 // Linha enxuta da agenda do dia: hora | cliente e serviço | valor. No máximo um aviso curto embaixo.
-function dayRow(a, tag = '', { date = false } = {}) {
+function dayRow(a, tag = '', { date = false, who = true } = {}) {
   const past = isPast(a) || a.status === 'feito' || a.status === 'cancelado';
   const clash = conflictsFor(a.date, a.time, a.duration, a.id);
   const pos = pkgPos(a);
@@ -670,7 +680,7 @@ function dayRow(a, tag = '', { date = false } = {}) {
     : `<span class="dr-time"><b>${a.time}</b>${a.duration ? `<small>${hhmm(apptEnd(a))}</small>` : ''}</span>`;
   return `<a class="dayrow ${past ? 'past' : ''} ${tag ? 'is-next' : ''} ${a.status}" href="#/agendamento/${a.id}">
     ${when}
-    <span class="dr-info"><b>${esc(clientName(a.clientId))}</b>${a.service ? `<span>${esc(a.service)}</span>` : ''}${note}</span>
+    <span class="dr-info">${who ? `<b>${esc(clientName(a.clientId))}</b>${a.service ? `<span>${esc(a.service)}</span>` : ''}` : `<b>${esc(a.service || 'Atendimento')}</b>`}${note}</span>
     ${money}</a>`;
 }
 
@@ -1858,8 +1868,6 @@ function vClient(id, q) {
     return head + historyRow(h);
   }).join('');
 
-  const stat = (label, value) => `<div class="stat"><span>${label}</span><b>${value}</b></div>`;
-  const jump = [next.length && ['#c-next', `📅 Próximos (${next.length})`], pkgs.length && ['#c-pkgs', `📦 Pacotes (${activePkgs.length})`], allHistory.length && ['#hist', `🕘 Histórico (${allHistory.length})`]].filter(Boolean);
 
   return {
     title: c.name, tab: 'clientes', back: true,
@@ -1883,29 +1891,23 @@ function vClient(id, q) {
       <div class="note ${c.notes ? '' : 'empty-note'}" id="note">📝 ${c.notes ? `<b>Observação:</b> ${esc(c.notes)}` : '<span class="muted">Sem observação (alergias, preferências…)</span>'}
         <button type="button" class="btn small" id="edit-note">${c.notes ? '✏️' : '+ Escrever'}</button></div>
 
-      <div class="stats">
-        ${stat('Visitas', st.visits)}
-        ${stat('Última vez', st.last ? daysAgo(st.last.date) : '—')}
-        ${stat('Cliente desde', st.since ? fmtDate(st.since, { month: 'short', year: 'numeric' }).replace('.', '') : '—')}
-        ${stat('Serviço preferido', st.fav ? esc(st.fav) : '—')}
-      </div>
-      <div class="totals">
-        <div class="total ok"><span>Já pagou (total)</span><b>${brl(st.paid)}</b></div>
-        <a class="total fcard ${st.owes > 0 ? 'warn' : ''} ${hf === 'deve' ? 'on' : ''}" href="${url(hf === 'deve' ? '' : 'deve')}" data-f>
-          <span>Falta pagar</span><b>${brl(st.owes)}</b><small>${st.owes > 0 ? (hf === 'deve' ? '▲ mostrando abaixo' : 'Toque para ver') : 'Tudo pago'}</small></a>
+      <div class="card extrato">
+        <div class="ex-row"><span>Visitas</span><b>${st.visits}${st.last ? ` <small class="muted">· última ${daysAgo(st.last.date)}</small>` : ''}</b></div>
+        ${st.fav ? `<div class="ex-row"><span>Serviço preferido</span><b>${esc(st.fav)}</b></div>` : ''}
+        ${st.since ? `<div class="ex-row"><span>Cliente desde</span><b>${fmtDate(st.since, { month: 'short', year: 'numeric' }).replace('.', '')}</b></div>` : ''}
+        <div class="ex-row"><span>Já pagou</span><b style="color:var(--ok)">${brl(st.paid)}</b></div>
+        <a class="ex-row ${hf === 'deve' ? 'on' : ''}" href="${url(hf === 'deve' ? '' : 'deve')}" data-f><span>Falta pagar</span><b style="${st.owes > 0 ? 'color:var(--warn)' : ''}">${st.owes > 0 ? brl(st.owes) : 'nada 🎉'}</b><i>${st.owes > 0 ? (hf === 'deve' ? '▾' : '›') : ''}</i></a>
       </div>
       ${st.owes > 0 ? `<div class="row" style="margin-bottom:.7rem">
         <button class="btn ok" id="pay-all">💰 Receber ${brl(st.owes)}</button>
         ${c.phone ? `<a class="btn" target="_blank" rel="noopener" href="${waLink(c.phone, `Olá, ${first}! Tudo bem? 😊 Passando para lembrar que ficou um valor em aberto de ${brl(st.owes)} aqui no ${session.tenant.name}. Pode ser por Pix, dinheiro ou cartão. Obrigada! 💖`)}">💸 Cobrar</a>` : ''}
       </div>` : ''}
 
-      ${jump.length > 1 ? `<div class="chips mini jump">${jump.map(([h, n]) => `<a class="chip" href="${h}" data-jump>${n}</a>`).join('')}</div>` : ''}
-
       ${pres.length ? `<h2>💳 Pré-reservas esperando o sinal</h2>
-        <div class="list">${pres.map(a => apptCard(a, { showDate: true, showClient: false })).join('')}</div>` : ''}
+        <div class="list clist">${pres.map(a => dayRow(a, '', { date: true, who: false })).join('')}</div>` : ''}
 
       <h2 id="c-next">Próximos horários</h2>
-      <div class="list">${next.filter(a => a.status !== PRE).length ? next.filter(a => a.status !== PRE).map(a => apptCard(a, { showDate: true, showClient: false })).join('') : '<div class="muted">Nenhum horário marcado.</div>'}</div>
+      <div class="list clist">${next.filter(a => a.status !== PRE).length ? next.filter(a => a.status !== PRE).map(a => dayRow(a, '', { date: true, who: false })).join('') : `<div class="empty">Nenhum horário marcado.<br><a class="btn small main" href="#/agendar?c=${c.id}" style="margin-top:.6rem">📅 Agendar</a></div>`}</div>
 
       <h2 id="c-pkgs">📦 Pacotes</h2>
       <div class="list">${activePkgs.map(packageCard).join('') || '<p class="muted" style="margin:0">Faz cronograma ou vende sessões em pacote? Crie um pacote e cada horário mostra "2ª de 4".</p>'}</div>
@@ -1913,9 +1915,11 @@ function vClient(id, q) {
       ${donePkgs.length ? `<details class="cancelled"><summary>Pacotes concluídos (${donePkgs.length})</summary><div class="list">${donePkgs.map(packageCard).join('')}</div></details>` : ''}
 
       <h2 id="hist">Histórico</h2>
-      ${allHistory.length ? `<div class="chips filters">${Object.entries(hFilters).map(([k, [n, fn]]) =>
-        `<a class="chip ${hf === k ? 'on' : ''}" href="${url(k)}" data-f>${n} <small>${allHistory.filter(fn).length}</small></a>`).join('')}</div>` : ''}
-      <div class="list">${historyHtml || `<div class="muted">${allHistory.length ? 'Nada neste filtro.' : 'Ainda não tem histórico.'}</div>`}</div>
+      ${allHistory.length ? `<div class="chips filters hscroll">${Object.entries(hFilters).map(([k, [n, fn]]) => {
+        const cnt = allHistory.filter(fn).length;
+        return !k || cnt || hf === k ? `<a class="chip ${hf === k ? 'on' : ''}" href="${url(k)}" data-f>${n} <small>${cnt}</small></a>` : '';
+      }).join('')}</div>` : ''}
+      <div class="list clist">${historyHtml || `<div class="muted">${allHistory.length ? 'Nada neste filtro.' : 'Ainda não tem histórico.'}</div>`}</div>
 
       <div class="row" style="margin-top:2rem">
         <a class="btn" href="#/cliente-editar?id=${c.id}">✏️ Editar dados</a>
@@ -1925,8 +1929,6 @@ function vClient(id, q) {
       bindQuickPay(el);
       $('#del-client', el).onclick = () => deleteClient(c);
       el.addEventListener('click', e => {
-        const j = e.target.closest('a[data-jump]');
-        if (j) { e.preventDefault(); $(j.getAttribute('href'))?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
         const a = e.target.closest('a[data-f]');
         if (!a) return;
         e.preventDefault();
@@ -2059,22 +2061,21 @@ function vPackageForm(_, q) {
   };
 }
 
-// Linha do histórico com botões rápidos para lançar valor e marcar como pago
+// Linha do histórico (enxuta) + ação rápida embaixo: colocar o valor ou receber
 function historyRow({ k, it }) {
-  const card = k === 'a' ? apptCard(it, { showDate: true, showClient: false }) : saleCard(it, { showClient: false });
-  if (k === 'a' && it.status === 'cancelado') return card;
-  const price = k === 'a' ? it.price : it.total;
+  const row = k === 'a' ? dayRow(it, '', { date: true, who: false }) : saleRow(it, { who: false });
+  if (k === 'a' && it.status === 'cancelado') return row;
   let extra = '';
-  if (k === 'a' && !(price > 0)) {
+  if (k === 'a' && !(it.price > 0) && !it.packageId && !it.paid) {
     extra = `<div class="quickprice"><div class="money"><input type="text" inputmode="numeric" placeholder="Quanto custou?" data-price="${it.id}"></div>
       <button class="btn small main" data-saveprice="${it.id}">Salvar</button></div>`;
-  } else if (k === 's' && it.orderId && leftOf(it) >= 0) {
+  } else if (k === 's' && it.orderId) {
     const o = orderOf(it), p = nextInstallment(o);
-    if (o.left > 0 && o.lines[0].id === it.id) extra = `<div class="quickprice"><button class="btn small ok" style="flex:1" data-pay="s:${it.id}">💰 Receber ${brl(p ? p.left : o.left)}${p ? ` · ${dueText(p)}` : ''}</button></div>`;
+    if (o.left > 0 && o.lines[0].id === it.id) extra = `<button class="btn small ok" data-pay="s:${it.id}">💰 Receber ${brl(p ? p.left : o.left)}</button>`;
   } else if (leftOf(it) > 0) {
-    extra = `<div class="quickprice"><button class="btn small ok" style="flex:1" data-pay="${k}:${it.id}">💰 Receber ${brl(leftOf(it))}</button></div>`;
+    extra = `<button class="btn small ok" data-pay="${k}:${it.id}">💰 Receber ${brl(leftOf(it))}</button>`;
   }
-  return extra ? `<div>${card}${extra}</div>` : card;
+  return extra ? `<div class="hrow">${row}<div class="hrow-x">${extra}</div></div>` : row;
 }
 
 // Receber de uma compra (a parcela que vence primeiro já vem preenchida)

@@ -703,3 +703,11 @@ details.ready { padding: .7rem 1rem; }
 .lt-list > div.late { color: var(--bad); font-weight: 700; }
 .planbox { margin-bottom: 1rem; border-color: var(--brand); }
 .planbox .warnline { color: var(--bad); font-weight: 700; }
+
+/* ---------- Ficha da cliente: histórico enxuto ---------- */
+.hrow { border-top: 1px solid var(--line); }
+.list.clist > .hrow:first-child { border-top: 0; }
+.hrow > .dayrow { border-top: 0; }
+.hrow-x { padding: 0 .9rem .7rem 5.3rem; }
+.hrow-x .quickprice { margin: 0; }
+.list.clist .letter + .hrow, .list.clist .letter + .dayrow { border-top: 1px solid var(--line); }
