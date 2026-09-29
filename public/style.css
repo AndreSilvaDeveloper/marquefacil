@@ -692,3 +692,14 @@ details.ready > summary::-webkit-details-marker { display: none; }
 details.ready[open] > summary .muted { visibility: hidden; }
 .menu-item.faq > summary { display: flex; align-items: center; gap: .8rem; }
 details.ready { padding: .7rem 1rem; }
+
+/* ---------- Venda a prazo: parcelas ---------- */
+.later { margin-top: .8rem; background: var(--brand-soft); border-radius: 14px; padding: .8rem; }
+.later .datefield { max-width: none; }
+.lt-list { margin-top: .7rem; background: #fff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.lt-list > div { display: flex; justify-content: space-between; gap: .5rem; padding: .5rem .8rem; border-top: 1px solid var(--line); font-size: .95rem; }
+.lt-list > div:first-child { border-top: 0; }
+.lt-list > div.ok { color: var(--ok); }
+.lt-list > div.late { color: var(--bad); font-weight: 700; }
+.planbox { margin-bottom: 1rem; border-color: var(--brand); }
+.planbox .warnline { color: var(--bad); font-weight: 700; }

@@ -1,7 +1,8 @@
 import { readSettings, DEFAULTS } from './settings.js';
 import { fail, isObj, waNumber } from './util.js';
-import { nowIn, zonedEpoch, addDays, dayLabel } from './time.js';
+import { nowIn, zonedEpoch, addDays, dayLabel, weekday } from './time.js';
 import { newPortalToken, portalUrl } from './portal.js';
+import { groupOrders, installments, productsText } from './sales.js';
 
 /* ------------------------- cliente da Evolution API (v2) ------------------------- */
 // O WhatsApp do salão não pode parecer "aberto" nem marcar mensagens como lidas: se a conta
@@ -184,6 +185,92 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
     }
     return sent;
   }
+  /* Vendas pagas depois: cobrança pelo WhatsApp (a partir das 9h, no fuso do salão)
+     - no 1º dia útil do mês: resumo do que a cliente ainda deve de compras;
+     - no dia de cada vencimento: lembrete da parcela (ou do pagamento único).
+     No 1º dia útil o resumo já cita o que vence no dia, então não manda os dois. */
+  const salesOf = db.prepare("SELECT data FROM records WHERE tenant_id = ? AND coll = 'sales' AND deleted = 0");
+  const DAY_START = 9 * 60;
+  function firstBusinessDay(ym, closed = []) {
+    for (let d = 1; d <= 7; d++) {
+      const date = `${ym}-${String(d).padStart(2, '0')}`;
+      if (weekday(date) !== 0 && weekday(date) !== 6 && !closed.includes(date)) return date;
+    }
+    return `${ym}-01`;
+  }
+  async function sendSale(t, s, { apptId, kind, client, body }) {
+    const phone = waNumber(client?.phone);
+    const row = { tenantId: t.id, apptId, kind, phone, name: client?.name || '', body, now: Date.now() };
+    if (!q.claim.run(row).changes && !q.reclaim.run(row).changes) return 'already';
+    if (!phone) { q.doneBy.run('skipped', 'sem telefone', t.id, apptId, kind); return 'skip'; }
+    try {
+      await evo.send(s.whatsapp.instance, phone, body);
+      q.doneBy.run('sent', null, t.id, apptId, kind);
+      return 'sent';
+    } catch (e) {
+      q.doneBy.run('error', String(e.message).slice(0, 300), t.id, apptId, kind);
+      log.warn?.({ err: e.message, tenantId: t.id, kind }, 'whatsapp: falha ao enviar cobrança');
+      return 'error';
+    }
+  }
+  async function runSaleReminders(now = Date.now()) {
+    let sent = 0;
+    for (const t of tenantsOn.all()) {
+      const s = readSettings(t.settings);
+      if (!s.whatsapp.saleReminders) continue;
+      const here = nowIn(s.timezone, now);
+      if (here.minutes < DAY_START) continue;
+      const orders = groupOrders(salesOf.all(t.id).map(r => JSON.parse(r.data))).filter(o => o.clientId && o.left > 0);
+      if (!orders.length) continue;
+      const tenant = { ...t, ...q.tenant.get(t.id) };
+      const clientOf = id => getRecord(t.id, 'clients', id);
+      const base = { salao: tenant.name, pix: s.whatsapp.pixKey || '' };
+      const tplOf = k => s.whatsapp.templates[k] || DEFAULTS.whatsapp.templates[k];
+      const monthDay = here.date === firstBusinessDay(here.date.slice(0, 7), s.booking.closedDates);
+
+      // 1º dia útil: um resumo por cliente
+      const summarized = new Set();
+      if (monthDay) {
+        const byClient = new Map();
+        for (const o of orders) byClient.set(o.clientId, [...(byClient.get(o.clientId) || []), o]);
+        for (const [clientId, list] of byClient) {
+          const client = clientOf(clientId);
+          if (!client) continue;
+          const lines = list.map(o => {
+            const open = installments(o).filter(p => p.left > 0);
+            const next = open[0];
+            return next
+              ? `• ${productsText(o)} — ${next.of > 1 ? `parcela ${next.n} de ${next.of}: ` : ''}${brl(next.left)} (vence ${next.date === here.date ? 'hoje' : next.date.slice(8, 10) + '/' + next.date.slice(5, 7)})`
+              : `• ${productsText(o)} — ${brl(o.left)}`;
+          });
+          const body = renderTemplate(tplOf('saleMonth'), { ...base, nome: (client.name || '').split(' ')[0], lista: lines.join('\n'),
+            total: brl(list.reduce((t2, o) => t2 + o.left, 0)) });
+          const r = await sendSale(t, s, { apptId: `client:${clientId}`, kind: `salemonth:${here.date.slice(0, 7)}`, client, body });
+          if (r === 'sent') sent++;
+          if (r !== 'error') summarized.add(clientId);
+        }
+      }
+
+      // Dia do vencimento
+      for (const o of orders) {
+        for (const p of installments(o)) {
+          if (p.date !== here.date || p.left <= 0) continue;
+          const apptId = `sale:${o.key}`, kind = `saledue:${p.date}`;
+          const client = clientOf(o.clientId);
+          if (summarized.has(o.clientId)) { // já foi no resumo do mês
+            if (q.claim.run({ tenantId: t.id, apptId, kind, phone: '', name: client?.name || '', body: '', now }).changes) q.doneBy.run('skipped', 'já foi no resumo do mês', t.id, apptId, kind);
+            continue;
+          }
+          const body = renderTemplate(tplOf('saleDue'), { ...base, nome: (client?.name || '').split(' ')[0],
+            parcela: p.of > 1 ? `a parcela ${p.n} de ${p.of}` : 'o pagamento', produtos: productsText(o), valor: brl(p.left),
+            vencimento: dayLabel(p.date), total: brl(o.left) });
+          if (await sendSale(t, s, { apptId, kind, client, body }) === 'sent') sent++;
+        }
+      }
+    }
+    return sent;
+  }
+
   // Deixa cada WhatsApp conectado "offline" (as notificações continuam chegando no celular)
   async function keepQuiet() {
     if (!evo.enabled) return 0;
@@ -209,13 +296,14 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
       try {
         if (ticks++ % 10 === 0) await keepQuiet(); // logo ao ligar e depois a cada 10 minutos
         await runReminders();
+        await runSaleReminders();
       } catch (e) { log.error?.(e); } finally { busy = false; }
     };
     tick();
     return setInterval(tick, everyMs);
   }
 
-  return { sendForAppt, sendText, fire, runReminders, startScheduler, packageLabel, keepQuiet };
+  return { sendForAppt, sendText, fire, runReminders, runSaleReminders, startScheduler, packageLabel, keepQuiet };
 }
 
 /* ------------------------- rotas (profissional logada) ------------------------- */

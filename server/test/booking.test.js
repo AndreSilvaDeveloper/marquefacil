@@ -688,3 +688,46 @@ test('avisos no celular: horário chegando, pedido esperando, pré-reserva, bom 
   assert.equal((await call('PUT', '/api/settings', { alerts: { upcoming: 999 } })).status, 400);
   await app.close();
 });
+
+test('vendas pagas depois: lembrete no vencimento e resumo no 1º dia útil do mês', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl } });
+  const call = await salon(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  await call('GET', '/api/whatsapp/status');
+  await call('PUT', '/api/settings', { whatsapp: { pixKey: '11999990000' } });
+  const plan = { entrada: 10, dates: ['2027-03-15', '2027-04-15', '2027-05-15'] }; // 120 − 10 de entrada = 110 em 3x
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'c1', data: { name: 'Maria Souza', phone: '(11) 97777-6666' } },
+    { coll: 'sales', id: 'v1', data: { clientId: 'c1', product: 'Shampoo', qty: 1, total: 100, date: '2027-02-20', orderId: 'o1', payments: [{ v: 10, m: 'pix', d: '2027-02-20' }], plan } },
+    { coll: 'sales', id: 'v2', data: { clientId: 'c1', product: 'Pente', qty: 2, total: 20, date: '2027-02-20', orderId: 'o1', payments: [], plan } },
+  ] });
+  const at = (date, time) => Date.parse(`${date}T${time}:00-03:00`);
+  const m = app.messenger;
+
+  assert.equal(await m.runSaleReminders(at('2027-03-15', '08:00')), 0, 'antes das 9h não manda');
+  assert.equal(await m.runSaleReminders(at('2027-03-15', '09:30')), 1);
+  const due = evo.sent.at(-1);
+  assert.equal(due.number, '5511977776666');
+  assert.match(due.text, /hoje vence a parcela 1 de 3/);
+  assert.match(due.text, /Shampoo e Pente \(2x\)/);
+  assert.match(due.text, /R\$\s?36,66/);
+  assert.match(due.text, /Pix: 11999990000/);
+  assert.equal(await m.runSaleReminders(at('2027-03-15', '15:00')), 0, 'não repete');
+
+  // pagou a 1ª parcela; no 1º dia útil de abril (quinta, 01/04) chega o resumo com a próxima
+  await call('POST', '/api/sync', { changes: [{ coll: 'sales', id: 'v1', data: { clientId: 'c1', product: 'Shampoo', qty: 1, total: 100, date: '2027-02-20', orderId: 'o1', payments: [{ v: 10, m: 'pix', d: '2027-02-20' }, { v: 36.66, m: 'pix', d: '2027-03-15' }], plan } }] });
+  assert.equal(await m.runSaleReminders(at('2027-04-01', '10:00')), 1);
+  const month = evo.sent.at(-1);
+  assert.match(month.text, /resumo das suas compras/);
+  assert.match(month.text, /parcela 2 de 3: R\$\s?36,66 \(vence 15\/04\)/);
+  assert.match(month.text, /Total em aberto: R\$\s?73,34/);
+  assert.equal(await m.runSaleReminders(at('2027-04-02', '10:00')), 0, 'resumo só no 1º dia útil');
+  assert.equal(await m.runSaleReminders(at('2027-04-15', '09:00')), 1, 'vencimento da 2ª');
+
+  // desligado: não manda
+  await call('PUT', '/api/settings', { whatsapp: { saleReminders: false } });
+  assert.equal(await m.runSaleReminders(at('2027-05-15', '10:00')), 0);
+  await app.close();
+});

@@ -271,6 +271,41 @@ const methodsOf = x => [...new Set(paymentsOf(x).map(p => PAY[p.m]).filter(Boole
 
 const apptDue = a => a.status !== 'cancelado' && a.status !== 'pendente' && a.status !== 'prereserva' && valueOf(a) > 0 && leftOf(a) > 0 && (a.status === 'feito' || isPast(a));
 const saleDue = s => valueOf(s) > 0 && leftOf(s) > 0;
+
+/* Compra paga depois (de uma vez ou parcelada). Os produtos da mesma compra têm o mesmo orderId e o mesmo
+   plano: plan = { entrada, dates: ['AAAA-MM-DD', …] } (uma data por parcela). O que ela paga cobre as
+   parcelas na ordem. Mesma conta do servidor (server/src/sales.js), que manda as cobranças no WhatsApp. */
+const orderKey = s => s.orderId || s.id;
+function orderOf(s) {
+  const key = orderKey(s);
+  const lines = db.sales.filter(x => orderKey(x) === key);
+  const total = round2(lines.reduce((t, x) => t + valueOf(x), 0)), paid = round2(lines.reduce((t, x) => t + paidOf(x), 0));
+  return { key, lines, clientId: s.clientId, total, paid, left: Math.max(0, round2(total - paid)), plan: lines.find(x => x.plan?.dates?.length)?.plan || null };
+}
+function installmentsOf(o) {
+  const dates = o.plan?.dates || [];
+  if (!dates.length) return [];
+  const entrada = Math.min(o.plan.entrada || 0, o.total), base = Math.max(0, round2(o.total - entrada)), n = dates.length;
+  const each = Math.floor(base / n * 100) / 100;
+  let covered = Math.max(0, round2(o.paid - entrada));
+  return dates.map((date, i) => {
+    const amount = i < n - 1 ? each : round2(base - each * (n - 1)), got = Math.min(amount, covered);
+    covered = round2(covered - got);
+    return { n: i + 1, of: n, date, amount, paid: round2(got), left: round2(amount - got) };
+  });
+}
+const nextInstallment = o => installmentsOf(o).find(p => p.left > 0) || null;
+const productsText = o => { const n = o.lines.map(x => `${x.product}${x.qty > 1 ? ` (${x.qty}x)` : ''}`); return n.length > 1 ? `${n.slice(0, -1).join(', ')} e ${n.at(-1)}` : n[0] || 'Compra'; };
+// Recebeu um valor da compra: vai cobrindo os produtos em ordem
+function payOrder(o, v, m, d = today()) {
+  let rest = round2(v);
+  for (const x of o.lines) {
+    const part = Math.min(rest, leftOf(x));
+    if (part > 0) { addPayment(x, part, m, d); rest = round2(rest - part); }
+  }
+}
+// "parcela 2 de 3 · vence 05/10" (ou "vence 05/10" quando é de uma vez)
+const dueText = p => `${p.of > 1 ? `parcela ${p.n} de ${p.of} · ` : ''}${p.date < today() ? '⚠️ venceu' : p.date === today() ? 'vence hoje' : 'vence'} ${p.date === today() ? '' : fmtShort(p.date).slice(0, 5)}`.trim();
 function clientOwes(id) {
   return round2(db.appts.filter(a => a.clientId === id && apptDue(a)).reduce((t, a) => t + leftOf(a), 0) +
     db.sales.filter(s => s.clientId === id && saleDue(s)).reduce((t, s) => t + leftOf(s), 0));
@@ -289,7 +324,7 @@ function payBadge(x, dueWord = 'Não pago') {
 }
 
 // Janela "Receber pagamento": quanto recebeu agora e como
-function paySheet(x, title, onDone) {
+function paySheet(x, title, onDone, suggest = 0) {
   const total = valueOf(x), left = leftOf(x) || total;
   let method = '';
   const bg = document.createElement('div');
@@ -299,7 +334,7 @@ function paySheet(x, title, onDone) {
     <p class="muted" style="margin-top:-.3rem">${esc(title)}</p>
     ${paidOf(x) > 0 ? `<p>Valor ${brl(total)} · já pagou ${brl(paidOf(x))} · <b>falta ${brl(leftOf(x))}</b></p>` : ''}
     <div class="field"><label for="ps-v">Quanto recebeu agora?</label>
-      <div class="money"><input type="text" id="ps-v" inputmode="numeric" value="${moneyVal(left)}"></div>
+      <div class="money"><input type="text" id="ps-v" inputmode="numeric" value="${moneyVal(suggest || left)}"></div>
       <small class="hint">Se ela pagou só uma parte, troque o valor.</small></div>
     <div class="field"><span class="lbl">Como pagou?</span>
       <div class="paygrid" id="ps-m">${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}">${n}</button>`).join('')}</div></div>
@@ -490,6 +525,7 @@ const visitLeft = a => round2(leftOf(a) + salesOfAppt(a).reduce((t, x) => t + le
 /* Pré-reserva: horário segurado esperando o sinal (status 'prereserva') */
 const PRE = 'prereserva';
 const depositPct = () => salonHours()?.deposit ?? 50;
+const salonWhats = () => !!salonHours()?.wa; // WhatsApp conectado e cobranças de venda ligadas
 const depositOf = a => (a.price > 0 ? round2(a.price * depositPct() / 100) : 0);
 const preAppts = () => db.appts.filter(a => a.status === PRE && !isPast(a)).sort(byWhen);
 
@@ -2032,10 +2068,26 @@ function historyRow({ k, it }) {
   if (k === 'a' && !(price > 0)) {
     extra = `<div class="quickprice"><div class="money"><input type="text" inputmode="numeric" placeholder="Quanto custou?" data-price="${it.id}"></div>
       <button class="btn small main" data-saveprice="${it.id}">Salvar</button></div>`;
+  } else if (k === 's' && it.orderId && leftOf(it) >= 0) {
+    const o = orderOf(it), p = nextInstallment(o);
+    if (o.left > 0 && o.lines[0].id === it.id) extra = `<div class="quickprice"><button class="btn small ok" style="flex:1" data-pay="s:${it.id}">💰 Receber ${brl(p ? p.left : o.left)}${p ? ` · ${dueText(p)}` : ''}</button></div>`;
   } else if (leftOf(it) > 0) {
     extra = `<div class="quickprice"><button class="btn small ok" style="flex:1" data-pay="${k}:${it.id}">💰 Receber ${brl(leftOf(it))}</button></div>`;
   }
   return extra ? `<div>${card}${extra}</div>` : card;
+}
+
+// Receber de uma compra (a parcela que vence primeiro já vem preenchida)
+function receiveSale(s, after = render) {
+  const o = orderOf(s), p = nextInstallment(o);
+  const what = `${clientName(s.clientId)} — ${productsText(o)}${p ? ` · ${dueText(p)}` : ''}`;
+  paySheet({ total: o.total, payments: [{ v: o.paid }] }, what, (v, m) => {
+    payOrder(o, v, m);
+    save();
+    const o2 = orderOf(s), n2 = nextInstallment(o2);
+    toast(o2.left <= 0 ? `Compra paga ✓ (${PAY[m]})` : `Recebido ${brl(v)} ✓ Falta ${brl(o2.left)}${n2 ? ` · próxima ${fmtShort(n2.date).slice(0, 5)}` : ''}`);
+    after();
+  }, p ? p.left : 0);
 }
 
 function bindQuickPay(el) {
@@ -2044,6 +2096,7 @@ function bindQuickPay(el) {
     if (pay) {
       const [k, id] = pay.dataset.pay.split(':');
       const it = (k === 'a' ? db.appts : db.sales).find(x => x.id === id);
+      if (it && k === 's') { receiveSale(it); return; }
       if (it) {
         const what = `${clientName(it.clientId)} — ${k === 'a' ? (it.service || 'Serviço') : it.product} (${fmtShort(it.date)})`;
         paySheet(it, what, (v, m) => {
@@ -2135,6 +2188,8 @@ function vSell(_, q) {
   const cart = [];          // { name, qty, price }
   let counter = !startClient && q.balcao === '1';
   let method = '';          // pix | dinheiro | cartao | depois
+  // Pagar depois: de uma vez (1 data) ou parcelado (n datas), com entrada se quiser
+  const later = { mode: 'uma', n: 3, every: 'm', first: addDays(today(), 30), entrada: 0, entradaM: '' };
   const topProducts = () => {
     const sold = {};
     for (const x of db.sales) sold[norm(x.product)] = (sold[norm(x.product)] || 0) + (x.qty || 1);
@@ -2176,7 +2231,26 @@ function vSell(_, q) {
           <span class="lbl">Como pagou?</span>
           <div class="paygrid four" id="pay">
             ${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}">${n}</button>`).join('')}
-            <button type="button" data-m="depois">Vai pagar depois</button>
+            <button type="button" data-m="depois">Depois / parcelado</button>
+          </div>
+          <div class="later" id="later" hidden>
+            ${toggle2('lt-mode', true, '📅 De uma vez', '🧾 Parcelado', true)}
+            <div id="lt-parc" hidden>
+              <span class="lbl" style="margin-top:.8rem">Em quantas vezes?</span>
+              <div class="chips mini" id="lt-n">${[2, 3, 4, 5, 6, 8, 10, 12].map(n => `<button type="button" class="chip ${n === 3 ? 'on' : ''}" data-n="${n}">${n}x</button>`).join('')}</div>
+              <span class="lbl" style="margin-top:.7rem">De quanto em quanto?</span>
+              <div class="chips mini" id="lt-every">${[['m', 'Todo mês'], ['14', 'A cada 15 dias'], ['7', 'Toda semana']].map(([k, n]) => `<button type="button" class="chip ${k === 'm' ? 'on' : ''}" data-e="${k}">${n}</button>`).join('')}</div>
+            </div>
+            <label for="lt-dtext" style="margin-top:.8rem" id="lt-dlabel">Vence em</label>
+            <div class="datefield">
+              <input type="text" id="lt-dtext" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" value="${fmtShort(addDays(today(), 30))}">
+              <label class="btn calbtn" aria-label="Abrir calendário">📆<input type="date" id="lt-date" value="${addDays(today(), 30)}"></label>
+            </div>
+            <div class="chips mini" id="lt-quick" style="margin-top:.4rem">${[5, 10, 15, 20].map(d => `<button type="button" class="chip" data-day="${d}">Dia ${d}</button>`).join('')}<button type="button" class="chip" data-plus="30">Em 30 dias</button></div>
+            <label for="lt-ent" style="margin-top:.8rem">Deu uma entrada agora? <span class="opt">(se quiser)</span></label>
+            <div class="money"><input type="text" id="lt-ent" inputmode="numeric" placeholder="0,00"></div>
+            <div class="paygrid" id="lt-em" style="margin-top:.5rem" hidden>${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}">${n}</button>`).join('')}</div>
+            <div id="lt-prev"></div>
           </div>
           <div class="change" id="change" hidden>
             <label for="f-got">Recebeu quanto em dinheiro?</label>
@@ -2223,6 +2297,27 @@ function vSell(_, q) {
       iProd.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addItem(iProd.value); iProd.value = ''; } });
 
       const total = () => round2(cart.reduce((t, x) => t + (x.price || 0) * x.qty, 0));
+      const planDates = () => (later.mode === 'uma' ? [later.first] : seriesByCount(later.first, later.every, later.n));
+      // Prévia das parcelas (mesma conta de installmentsOf)
+      function paintLater() {
+        $('#lt-parc', el).hidden = later.mode !== 'parc';
+        $('#lt-dlabel', el).textContent = later.mode === 'parc' ? '1ª parcela vence em' : 'Vence em';
+        $('#lt-em', el).hidden = !(later.entrada > 0);
+        el.querySelectorAll('#lt-em [data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === later.entradaM));
+        const tt = total();
+        if (!later.first) { $('#lt-prev', el).innerHTML = '<p class="error" style="margin:.6rem 0 0">Escreva a data. Exemplo: 05/10/2026</p>'; return; }
+        const parts = installmentsOf({ total: tt, paid: later.entrada, plan: { entrada: later.entrada, dates: planDates() } });
+        const nm = iClient.value.trim(), c = nm && findByName(db.clients, nm);
+        const phone = $('#f-phone', el).value.trim() || c?.phone;
+        $('#lt-prev', el).innerHTML = tt ? `<div class="lt-list">
+          ${later.entrada > 0 ? `<div><span>Entrada hoje</span><b>${brl(Math.min(later.entrada, tt))}</b></div>` : ''}
+          ${parts.map(p => `<div><span>${p.of > 1 ? `${p.n}ª parcela` : 'Pagamento'} · ${cap(fmtDate(p.date, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', '').replace('.', ''))}</span><b>${brl(p.amount)}</b></div>`).join('')}
+          </div>
+          <small class="hint">${counter ? '⚠️ Para vender a prazo, escreva o nome da cliente (não pode ser balcão).'
+            : phone && salonWhats() ? '💬 A cliente recebe lembrete no WhatsApp no dia de cada vencimento e um resumo no 1º dia útil do mês.'
+            : phone ? 'Ligue o WhatsApp automático (Mais) para a cliente receber os lembretes de pagamento.'
+            : 'Sem telefone: coloque o WhatsApp da cliente para ela receber os lembretes de pagamento.'}</small>` : '';
+      }
       function paint() {
         $('#err', el).innerHTML = '';
         $('#cart', el).innerHTML = cart.length ? `<div class="cart">
@@ -2252,6 +2347,9 @@ function vSell(_, q) {
         const nm = iClient.value.trim();
         $('#f-phone', el).hidden = counter || !nm || !!findByName(db.clients, nm);
         $('#change', el).hidden = method !== 'dinheiro';
+        $('#later', el).hidden = method !== 'depois';
+        if (method === 'depois') paintLater();
+        if (method === 'depois' && !counter) $('#f-phone', el).hidden = !!findByName(db.clients, nm)?.phone; // a prazo: pede o telefone se não tiver
         const got = parseMoney($('#f-got', el).value);
         $('#troco', el).innerHTML = method === 'dinheiro' && got ? (got >= total() ? `Troco: <span style="color:var(--ok)">${brl(round2(got - total()))}</span>` : `<span style="color:var(--bad)">Faltam ${brl(round2(total() - got))}</span>`) : '';
         const who = counter ? '🧍 Balcão' : iClient.value.trim() || '<span class="muted">cliente?</span>';
@@ -2275,6 +2373,27 @@ function vSell(_, q) {
       });
       $('#pay', el).onclick = e => { const b = e.target.closest('[data-m]'); if (b) { method = b.dataset.m; paint(); if (method === 'dinheiro') $('#f-got', el).focus(); } };
       $('#f-got', el).addEventListener('input', paint);
+      // pagar depois: de uma vez / parcelado, vezes, frequência, data, entrada
+      bindToggle2($('#lt-mode', el), v => { later.mode = v ? 'uma' : 'parc'; paintLater(); });
+      $('#lt-n', el).onclick = e => { const b = e.target.closest('[data-n]'); if (!b) return; later.n = +b.dataset.n; el.querySelectorAll('#lt-n .chip').forEach(x => x.classList.toggle('on', x === b)); paintLater(); };
+      $('#lt-every', el).onclick = e => { const b = e.target.closest('[data-e]'); if (!b) return; later.every = b.dataset.e; el.querySelectorAll('#lt-every .chip').forEach(x => x.classList.toggle('on', x === b)); paintLater(); };
+      const setFirst = d => { later.first = d; if (d) { $('#lt-dtext', el).value = fmtShort(d); $('#lt-date', el).value = d; } paintLater(); };
+      $('#lt-dtext', el).addEventListener('input', e => {
+        const dg = e.target.value.replace(/\D/g, '').slice(0, 8);
+        e.target.value = dg.length > 4 ? `${dg.slice(0, 2)}/${dg.slice(2, 4)}/${dg.slice(4)}` : dg.length > 2 ? `${dg.slice(0, 2)}/${dg.slice(2)}` : dg;
+        later.first = parseDateBR(e.target.value) || ''; paintLater();
+      });
+      $('#lt-date', el).addEventListener('change', e => setFirst(e.target.value));
+      $('#lt-quick', el).onclick = e => {
+        const b = e.target.closest('[data-day], [data-plus]'); if (!b) return;
+        if (b.dataset.plus) return setFirst(addDays(today(), +b.dataset.plus));
+        const t0 = toDate(today()), day = +b.dataset.day;
+        let d = new Date(t0.getFullYear(), t0.getMonth(), day);
+        if (d <= t0) d = new Date(t0.getFullYear(), t0.getMonth() + 1, day); // próximo dia X que ainda não passou
+        setFirst(dstr(d));
+      };
+      $('#lt-ent', el).addEventListener('input', e => { later.entrada = parseMoney(e.target.value) || 0; paintLater(); });
+      $('#lt-em', el).onclick = e => { const b = e.target.closest('[data-m]'); if (b) { later.entradaM = b.dataset.m; paintLater(); } };
       iClient.addEventListener('input', paint);
       iClient.addEventListener('change', paint);
       setCounter(counter);
@@ -2287,7 +2406,13 @@ function vSell(_, q) {
         if (!counter && !name) return err('Escreva o nome da cliente ou toque em "Balcão".');
         if (!cart.length) return err('Ponha pelo menos um produto.');
         if (cart.some(x => x.price == null)) return err('Coloque o preço de todos os produtos.');
-        if (!method) return err('Toque em como pagou (Pix, Dinheiro, Cartão ou Vai pagar depois).');
+        if (!method) return err('Toque em como pagou (Pix, Dinheiro, Cartão ou Depois / parcelado).');
+        if (method === 'depois') {
+          if (counter) return err('Para vender a prazo, escreva o nome da cliente (não pode ser balcão).');
+          if (!later.first) return err('Escreva quando vence. Exemplo: 05/10/2026');
+          if (later.entrada >= total()) return err('A entrada é o valor todo. Toque em Pix, Dinheiro ou Cartão.');
+          if (later.entrada > 0 && !later.entradaM) return err('Toque em como ela pagou a entrada (Pix, Dinheiro ou Cartão).');
+        }
         let clientId = '';
         if (!counter) {
           const c = findOrCreate(db.clients, name, { phone: '', notes: '' });
@@ -2296,7 +2421,8 @@ function vSell(_, q) {
           clientId = c.id;
         }
         const date = $('#f-date', el).value || today();
-        const orderId = cart.length > 1 ? uid() : null;
+        const plan = method === 'depois' ? { entrada: round2(later.entrada || 0), dates: planDates() } : null;
+        const orderId = cart.length > 1 || plan ? uid() : null;
         for (const x of cart) {
           const p = findOrCreate(db.products, x.name, { price: x.price });
           if (!p.price && x.price) p.price = x.price;
@@ -2305,12 +2431,16 @@ function vSell(_, q) {
             total: round2(x.price * x.qty), date, paid: false, payments: [] };
           if (orderId) sale.orderId = orderId;
           if (fromAppt && fromAppt.clientId === clientId) sale.apptId = fromAppt.id;
+          if (plan) sale.plan = plan;
           if (method !== 'depois' && sale.total > 0) addPayment(sale, sale.total, method, date);
           db.sales.push(sale);
         }
+        if (plan?.entrada > 0) payOrder(orderOf(db.sales.at(-1)), plan.entrada, later.entradaM, date);
         save();
         const low = cart.map(x => findByName(db.products, x.name)).filter(lowStock);
-        toast(`Venda lançada ✓ ${brl(total())}${method === 'depois' ? ' (a receber)' : ''}`);
+        const parts = plan ? installmentsOf(orderOf(db.sales.at(-1))) : [];
+        toast(plan ? `Venda lançada ✓ ${parts.length > 1 ? `${parts.length}x de ${brl(parts[0].amount)}` : brl(parts[0].amount)} · ${parts.length > 1 ? '1ª vence' : 'vence'} ${fmtShort(plan.dates[0]).slice(0, 5)}`
+          : `Venda lançada ✓ ${brl(total())}`);
         if (low.length) setTimeout(() => toast(`📦 Acabando: ${low.map(p => p.name).join(', ')}`), 2300);
         back();
       });
@@ -2325,6 +2455,24 @@ function vSaleForm(_, q) {
   let qty = s.qty || 1;
   let paid = isPaid(s);
   let method = paymentsOf(s).at(-1)?.m || '';
+  // compra a prazo: o pagamento é da compra toda (parcelas), não deste produto sozinho
+  const ord = edit && (edit.plan || edit.orderId) ? orderOf(edit) : null;
+  const hasPlan = !!ord?.plan;
+  const planBox = () => {
+    const parts = installmentsOf(ord), next = nextInstallment(ord), c = client(ord.clientId);
+    const late = parts.filter(p => p.left > 0 && p.date < today());
+    const cobrar = c?.phone && next ? waLink(c.phone, `Olá, ${firstName(c)}! 😊 Passando para lembrar ${next.of > 1 ? `da parcela ${next.n} de ${next.of}` : 'do pagamento'} da sua compra no ${session.tenant.name} (${productsText(ord)}): ${brl(next.left)}, ${next.date < today() ? `que venceu em ${fmtShort(next.date).slice(0, 5)}` : `com vencimento em ${fmtShort(next.date).slice(0, 5)}`}. Obrigada! 💖`) : '';
+    return `<div class="card planbox">
+      <div class="line"><b class="grow">🧾 ${parts.length > 1 ? `Parcelado em ${parts.length}x` : 'Pagar depois'}</b>${ord.left > 0 ? `<b style="color:var(--warn)">falta ${brl(ord.left)}</b>` : '<b style="color:var(--ok)">✓ Paga</b>'}</div>
+      <small class="muted">${esc(productsText(ord))} · total ${brl(ord.total)}${ord.plan.entrada > 0 ? ` · entrada ${brl(ord.plan.entrada)}` : ''}</small>
+      ${late.length ? `<p class="warnline" style="margin:.5rem 0 0">⚠️ ${late.length === 1 ? '1 parcela vencida' : `${late.length} parcelas vencidas`}</p>` : ''}
+      <div class="lt-list">${parts.map(p => `<div class="${p.left <= 0 ? 'ok' : p.date < today() ? 'late' : ''}">
+        <span>${p.of > 1 ? `${p.n}ª parcela` : 'Pagamento'} · ${fmtShort(p.date).slice(0, 5)}</span>
+        <b>${p.left <= 0 ? `✓ ${brl(p.amount)}` : p.paid > 0 ? `falta ${brl(p.left)}` : brl(p.amount)}</b></div>`).join('')}</div>
+      ${next ? `<button type="button" class="btn ok" id="recv" style="margin-top:.7rem">💰 Receber ${brl(next.left)}</button>` : ''}
+      ${cobrar ? `<a class="btn small" style="margin-top:.5rem" target="_blank" rel="noopener" href="${cobrar}">💬 Cobrar pelo WhatsApp</a>` : ''}
+    </div>`;
+  };
 
   return {
     title: edit ? 'Venda de produto' : 'Vender produto', tab: 'clientes', back: true,
@@ -2364,7 +2512,8 @@ function vSaleForm(_, q) {
           <label for="f-date">Dia da venda</label>
           <input type="date" id="f-date" value="${s.date}">
         </div>
-        <div class="field">
+        ${hasPlan ? planBox() : ''}
+        <div class="field" ${hasPlan ? 'hidden' : ''}>
           <span class="lbl">Já está pago?</span>
           ${edit && paidOf(s) > 0 && !isPaid(s) ? `<p style="margin:.2rem 0 .5rem">${payBadge(s)}</p>` : ''}
           ${toggle2('f-paid', paid, '✓ Já pagou', 'Ainda não')}
@@ -2376,6 +2525,7 @@ function vSaleForm(_, q) {
       </form>`,
     bind(el) {
       const iClient = $('#f-client', el), iProd = $('#f-prod', el), iPrice = $('#f-price', el);
+      $('#recv', el) && ($('#recv', el).onclick = () => receiveSale(edit));
       const total = () => {
         const p = parseMoney(iPrice.value);
         $('#h-total', el).innerHTML = p ? `Total: <b>${brl(p * qty)}</b>` : '';
@@ -2430,7 +2580,7 @@ function vSaleForm(_, q) {
         const data = { clientId: c.id, product: p.name, qty, unitPrice: unit, total: Math.round((unit || 0) * qty * 100) / 100, date: $('#f-date', el).value || today() };
         const apptId = edit ? edit.apptId : fromAppt?.id;
         if (apptId && db.appts.find(x => x.id === apptId)?.clientId === c.id) data.apptId = apptId; else delete data.apptId;
-        if (paid && data.total > 0 && !method && !isPaid({ ...s, ...data })) { err('Toque em Pix, Dinheiro ou Cartão (como pagou).'); return; }
+        if (!hasPlan && paid && data.total > 0 && !method && !isPaid({ ...s, ...data })) { err('Toque em Pix, Dinheiro ou Cartão (como pagou).'); return; }
         const setPay = x => {
           if (!paid) { if (isPaid(x) || x.paid) clearPayments(x); return; }
           if (!(x.total > 0)) { x.paid = true; return; }
@@ -2439,7 +2589,7 @@ function vSaleForm(_, q) {
         };
         if (edit) moveStock(edit.product, +edit.qty); // devolve o da venda antiga…
         moveStock(data.product, -qty);                 // …e tira o da venda nova
-        if (edit) { Object.assign(edit, data); if (!data.apptId) delete edit.apptId; setPay(edit); }
+        if (edit) { Object.assign(edit, data); if (!data.apptId) delete edit.apptId; if (hasPlan) refreshPaid(edit); else setPay(edit); }
         else { const n = { id: uid(), createdAt: Date.now(), ...data, paid: false }; setPay(n); db.sales.push(n); }
         const pr = findByName(db.products, data.product);
         if (lowStock(pr)) setTimeout(() => toast(`📦 ${pr.name}: ${pr.stock <= 0 ? 'acabou o estoque' : `só restam ${pr.stock}`}`), 2300);
@@ -2493,12 +2643,15 @@ function vFin(_, q) {
   // FALTA RECEBER (do mês) e de meses anteriores
   const monthAppts = db.appts.filter(a => a.date.startsWith(m) && a.status !== 'cancelado' && a.status !== 'pendente');
   const monthSales = db.sales.filter(x => x.date.startsWith(m));
-  const dueOf = list => list.sort((a, b) => (a.it.date + (a.it.time || '')).localeCompare(b.it.date + (b.it.time || '')));
+  // uma linha por compra (os produtos da mesma compra viram um item só)
+  const oneOrder = list => { const seen = new Set(); return list.filter(d => d.k !== 's' || (!seen.has(orderKey(d.it)) && seen.add(orderKey(d.it)))); };
+  const dueOf = list => oneOrder(list).sort((a, b) => (a.it.date + (a.it.time || '')).localeCompare(b.it.date + (b.it.time || '')));
+  const leftOfDue = d => (d.k === 's' ? orderOf(d.it).left : leftOf(d.it));
   const dueMonth = dueOf([...monthAppts.filter(apptDue).map(it => ({ k: 'a', it })), ...monthSales.filter(saleDue).map(it => ({ k: 's', it }))]);
   const dueOld = dueOf([...db.appts.filter(a => a.date < m + '-01' && apptDue(a)).map(it => ({ k: 'a', it })),
                         ...db.sales.filter(x => x.date < m + '-01' && saleDue(x)).map(it => ({ k: 's', it }))]);
-  const owed = sumBy(dueMonth, d => leftOf(d.it));
-  const owedOld = sumBy(dueOld, d => leftOf(d.it));
+  const owed = sumBy(dueMonth, leftOfDue);
+  const owedOld = sumBy(dueOld, leftOfDue);
 
   // AINDA VAI ENTRAR: horários do mês que ainda vão acontecer
   const upcoming = monthAppts.filter(a => !isPast(a) && a.status === 'marcado' && !isPaid(a)).sort(byWhen);
@@ -2516,9 +2669,16 @@ function vFin(_, q) {
     <a class="mrow-main" href="${href}"><span class="dr-time"><b>${fmtShort(date).slice(0, 5)}</b><small>${fmtDate(date, { weekday: 'short' }).replace('.', '')}</small></span>
       <span class="dr-info"><b>${title}</b>${sub ? `<span>${sub}</span>` : ''}</span>
       <span class="dr-money" style="color:${color}">${amount}</span></a>${extra}</div>`;
-  const dueRow = ({ k, it }) => mrow(link(k, it), it.date, esc(clientName(it.clientId)),
-    esc(what(k, it)) + (paidOf(it) > 0 ? ` · já pagou ${brl(paidOf(it))}` : ''), brl(leftOf(it)).replace(',00', ''), 'var(--warn)',
-    `<button class="btn small ok payin" data-pay="${k}:${it.id}">💰 Receber</button>`);
+  const dueRow = ({ k, it }) => {
+    if (k === 's') { // compra: pode ter vários produtos e parcelas
+      const o = orderOf(it), p = nextInstallment(o);
+      return mrow(link(k, it), it.date, esc(clientName(it.clientId)), `🛍️ ${esc(productsText(o))}${p ? ` · <b style="color:${p.date < today() ? 'var(--bad)' : 'inherit'}">${dueText(p)}</b>` : ''}`,
+        brl(o.left).replace(',00', ''), 'var(--warn)', `<button class="btn small ok payin" data-pay="s:${it.id}">💰 Receber${p ? ' ' + brl(p.left).replace(',00', '') : ''}</button>`);
+    }
+    return mrow(link(k, it), it.date, esc(clientName(it.clientId)),
+      esc(what(k, it)) + (paidOf(it) > 0 ? ` · já pagou ${brl(paidOf(it))}` : ''), brl(leftOf(it)).replace(',00', ''), 'var(--warn)',
+      `<button class="btn small ok payin" data-pay="${k}:${it.id}">💰 Receber</button>`);
+  };
 
   // Conteúdo de cada quadro
   const views = {
@@ -3668,7 +3828,7 @@ function vWhats(_, q = {}) {
       }
       const w = S.whatsapp;
       const connected = st.state === 'open';
-      const kinds = { confirm: 'Confirmação', change: 'Horário mudou', reminder: 'Lembrete', owner: 'Aviso para você', decline: 'Pedido recusado', prereserve: 'Pré-reserva', rescheduleNo: 'Remarcação recusada', access: 'Link "meus horários"', test: 'Teste' };
+      const kinds = { confirm: 'Confirmação', change: 'Horário mudou', saledue: 'Venda: vencimento', salemonth: 'Venda: resumo do mês', reminder: 'Lembrete', owner: 'Aviso para você', decline: 'Pedido recusado', prereserve: 'Pré-reserva', rescheduleNo: 'Remarcação recusada', access: 'Link "meus horários"', test: 'Teste' };
       const status = { sent: '<span class="badge ok">Enviada</span>', error: '<span class="badge bad">Falhou</span>', skipped: '<span class="badge warn">Sem telefone</span>', sending: '<span class="badge">Enviando</span>' };
       box.innerHTML = `
         <div class="card">
@@ -3706,6 +3866,9 @@ function vWhats(_, q = {}) {
                 return `<option value="${u}" ${u === unit ? 'selected' : ''}>${n} antes</option>`; }).join('')}</select>
             </div>
             <small class="hint">No máximo 3 dias antes.</small></div>
+          <div class="field"><span class="lbl">🛍️ Cobrar compras a prazo <span class="opt">(lembrete no dia do vencimento e resumo no 1º dia útil do mês, às 9h)</span></span>${toggle2('saleReminders', w.saleReminders !== false, '✓ Mandar', 'Não')}</div>
+          <div class="field"><label for="pix">Chave Pix <span class="opt">(vai nas cobranças — se quiser)</span></label>
+            <input type="text" id="pix" value="${esc(w.pixKey || '')}" placeholder="CPF, telefone, e-mail ou chave aleatória"></div>
           <div class="field"><span class="lbl">Também me avisar pelo WhatsApp quando chegar pedido</span>${toggle2('notifyOwner', w.notifyOwner, '✓ Avisar', 'Não')}</div>
           <div class="field"><label for="own">Número que recebe o aviso <span class="opt">(vazio = o próprio WhatsApp conectado)</span></label>
             <input type="tel" id="own" placeholder="(11) 99999-9999" value="${esc(w.ownerPhone || '')}"></div>
@@ -3716,6 +3879,8 @@ function vWhats(_, q = {}) {
             <div class="field"><label for="t-change">Horário mudou <span class="opt">(quando você muda o dia ou a hora de um horário já marcado)</span></label><textarea id="t-change" rows="6">${esc(w.templates.change)}</textarea></div>
             <div class="field"><label for="t-reminder">Lembrete</label><textarea id="t-reminder" rows="6">${esc(w.templates.reminder)}</textarea></div>
             <div class="field"><label for="t-prereserve">Pré-reserva</label><textarea id="t-prereserve" rows="8">${esc(w.templates.prereserve)}</textarea></div>
+            <div class="field"><label for="t-saleDue">🛍️ Venda: dia do vencimento <span class="opt">({parcela}, {produtos}, {valor}, {pix})</span></label><textarea id="t-saleDue" rows="7">${esc(w.templates.saleDue)}</textarea></div>
+            <div class="field"><label for="t-saleMonth">🛍️ Venda: resumo do mês <span class="opt">({lista}, {total}, {pix})</span></label><textarea id="t-saleMonth" rows="7">${esc(w.templates.saleMonth)}</textarea></div>
             <div class="field"><label for="t-decline">Pedido recusado</label><textarea id="t-decline" rows="4">${esc(w.templates.decline)}</textarea></div>
             <div class="field"><label for="t-owner">Aviso para você</label><textarea id="t-owner" rows="5">${esc(w.templates.owner)}</textarea></div>
           </details>
@@ -3730,7 +3895,7 @@ function vWhats(_, q = {}) {
           ${status[m.status] || ''}</div>
           ${m.body ? `<details class="msgbody"><summary>Ver o que foi enviado</summary><p>${esc(m.body).replace(/\n/g, '<br>')}</p></details>` : ''}</div>`).join('') : '<div class="muted">Nenhuma mensagem ainda.</div>'}</div>`;
 
-      const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner, declineMessage: w.declineMessage, prereserveMessage: w.prereserveMessage };
+      const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner, declineMessage: w.declineMessage, prereserveMessage: w.prereserveMessage, saleReminders: w.saleReminders !== false };
       for (const k of Object.keys(flags)) bindToggle2($('#' + k, box), v => (flags[k] = v));
 
       const err = e => { $('#err', box).innerHTML = `<div class="error">${esc(e.offline ? 'Precisa de internet.' : e.message)}</div>`; };
@@ -3748,7 +3913,9 @@ function vWhats(_, q = {}) {
           cacheSalon(await api('PUT', '/api/settings', { whatsapp: {
             ...flags, reminderMinutes: reminderValue(), ownerPhone: $('#own', box).value.trim(),
             depositPercent: +$('#dep', box).value,
-            templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value, decline: $('#t-decline', box).value, prereserve: $('#t-prereserve', box).value, change: $('#t-change', box).value },
+            templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value, decline: $('#t-decline', box).value, prereserve: $('#t-prereserve', box).value, change: $('#t-change', box).value,
+              saleDue: $('#t-saleDue', box).value, saleMonth: $('#t-saleMonth', box).value },
+            pixKey: $('#pix', box).value.trim(),
           } }));
           toast('Salvo ✓');
           $('#err', box).innerHTML = '';
@@ -3976,7 +4143,7 @@ function showLogin(mode = 'entrar') {
 // Horário de atendimento (dias, almoço) guardado no celular: a agenda usa para mostrar os horários livres
 const salonKey = () => `mf.salon.${session.tenant.id}`;
 const salonHours = () => readLS(salonKey());
-function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50, goal: S.finance?.goal || 0 }); } catch { /* ok */ } }
+function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50, goal: S.finance?.goal || 0, wa: !!S.whatsapp?.instance && S.whatsapp?.saleReminders !== false }); } catch { /* ok */ } }
 function refreshSalon() { api('GET', '/api/settings').then(S => { cacheSalon(S); if (!$('#app form') && parseHash().parts[0] === 'agenda') render(); }).catch(() => {}); }
 
 function refreshPush() {
