@@ -732,3 +732,6 @@ details.ready { padding: .7rem 1rem; }
 .tomorrow span { color: var(--muted); font-weight: 700; }
 .tomorrow b { flex: 1; font-weight: 600; }
 .tomorrow i { font-style: normal; color: var(--muted); }
+.sortrow { gap: .5rem; }
+.sortrow select { width: auto; }
+.sortrow select { flex: 0 1 10rem; min-width: 0; max-width: 10rem; }

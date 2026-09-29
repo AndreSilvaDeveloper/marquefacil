@@ -426,6 +426,8 @@ function render() {
   if (curHash() !== lastHash) window.scrollTo(0, 0);
   lastHash = curHash();
   v.bind?.($('#app'));
+  // linhas de filtros que rolam para o lado: mostra o filtro escolhido
+  $$('#app .hscroll').forEach(row => { const on = $('.chip.on', row); if (on) row.scrollLeft = on.offsetLeft - row.offsetLeft - 16; });
 }
 
 window.addEventListener('hashchange', () => {
@@ -1756,7 +1758,7 @@ function clientWaText(c, st, f) {
 function clientRow(c, st = clientStats(c), f = '') {
   const info = st.next
     ? `📅 ${st.next.status === 'pendente' ? 'Pedido' : 'Marcada'}: ${esc(fmtDate(st.next.date, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', '').replace('.', ''))} ${st.next.time}`
-    : st.last ? `Última vez ${daysAgo(st.last.date)}${st.last.service ? ' · ' + esc(st.last.service) : ''}` : 'Ainda não veio';
+    : st.last ? `${cap(daysAgo(st.last.date))}${st.last.service ? ' · ' + esc(st.last.service) : ''}` : 'Ainda não veio';
   const bd = bdayIn(c.birthday);
   const note = st.owes > 0 ? `<em class="warn">Deve ${brl(st.owes)}</em>`
     : bd === 0 ? '<em class="warn">🎂 Aniversário hoje!</em>'
@@ -1767,6 +1769,42 @@ function clientRow(c, st = clientStats(c), f = '') {
       <span class="dr-info"><b>${esc(c.name)}</b><span>${info}</span>${note}</span></a>
     ${c.phone ? `<a class="wa-mini" target="_blank" rel="noopener" href="${waLink(c.phone, clientWaText(c, st, f))}" aria-label="WhatsApp de ${esc(c.name)}">💬</a>` : ''}
   </div>`;
+}
+
+// Mandar a mesma mensagem para várias clientes: abre o WhatsApp de uma por vez (ela só toca em enviar)
+function bulkSheet(list, f) {
+  let i = 0;
+  const bg = document.createElement('div');
+  bg.className = 'sheet-bg';
+  const sample = list[0];
+  const own = f === 'aniver' || f === 'devendo'; // cada uma recebe a sua (valor da dívida, parabéns no dia)
+  const text0 = own ? '' : clientWaText(sample.c, sample.st, f).replace(firstName(sample.c), '{nome}');
+  bg.innerHTML = `<div class="sheet form" role="dialog" aria-modal="true">
+    <h2>📣 Mandar para ${list.length === 1 ? '1 cliente' : `${list.length} clientes`}</h2>
+    <p class="muted" style="margin-top:-.3rem">O WhatsApp abre com a mensagem pronta, uma cliente de cada vez. Envie e volte aqui para a próxima.</p>
+    ${own ? '<p class="muted">Cada cliente recebe a mensagem com os dados dela.</p>' : `<div class="field"><label for="bk-t">Mensagem <span class="opt">({nome} vira o primeiro nome)</span></label>
+      <textarea id="bk-t" rows="5">${esc(text0)}</textarea></div>`}
+    <div id="bk-now"></div>
+    <button class="btn ok" id="bk-go"></button>
+    <button class="btn" id="bk-skip" style="margin-top:.6rem">Pular esta</button>
+    <button class="btn" id="bk-no" style="margin-top:.6rem">Fechar</button></div>`;
+  document.body.appendChild(bg);
+  const close = () => bg.remove();
+  const paint = () => {
+    if (i >= list.length) { close(); toast(`Pronto ✓ ${list.length} ${list.length === 1 ? 'cliente' : 'clientes'}`); return; }
+    const { c } = list[i];
+    $('#bk-now', bg).innerHTML = `<p style="margin:.2rem 0 .8rem"><b>${i + 1} de ${list.length}:</b> ${esc(c.name)}</p>`;
+    $('#bk-go', bg).textContent = `💬 Abrir WhatsApp da ${firstName(c)}`;
+  };
+  $('#bk-go', bg).onclick = () => {
+    const { c, st } = list[i];
+    const txt = own ? clientWaText(c, st, f) : ($('#bk-t', bg).value || '').replaceAll('{nome}', firstName(c));
+    window.open(waLink(c.phone, txt), '_blank', 'noopener');
+    i++; paint();
+  };
+  $('#bk-skip', bg).onclick = () => { i++; paint(); };
+  $('#bk-no', bg).onclick = close;
+  paint();
 }
 
 let clientsSearch = '';
@@ -1799,13 +1837,14 @@ function vClients(_, q) {
   const cameMonth = new Set(db.appts.filter(a => a.date.startsWith(month) && (a.status === 'feito' || (a.status === 'marcado' && isPast(a)))).map(a => a.clientId)).size;
   const newMonth = all.filter(x => x.st.since?.startsWith(month)).length;
   const bdToday = all.filter(x => bdayIn(x.c.birthday) === 0);
+  const withPhone = list.filter(x => x.c.phone);
   const hints = { sumidas: 'Não vêm há mais de 2 meses e não têm horário marcado. Toque em 💬 para chamar de volta.', aniver: 'Aniversários dos próximos 30 dias. Toque em 💬 no dia para mandar parabéns.', devendo: 'Toque em 💬 para mandar a cobrança pronta.', fieis: `Vieram ${LOYAL} vezes ou mais.`, novas: 'Primeira vez nos últimos 30 dias.' };
 
   // Letras separando a lista (quando está em ordem de nome)
   let letter = '';
   const rows = list.map(({ c, st }) => {
     let head = '';
-    if (order === 'nome' && f !== 'aniver' && list.length > 15) {
+    if (order === 'nome' && f !== 'aniver' && list.length > 40) {
       const L = norm(c.name)[0]?.toUpperCase() || '#';
       if (L !== letter) { letter = L; head = `<div class="letter" data-letter>${esc(L)}</div>`; }
     }
@@ -1824,8 +1863,9 @@ function vClients(_, q) {
         return !k || cnt || f === k ? `<a class="chip ${f === k ? 'on' : ''}" href="${url({ f: k })}" data-f>${n} <small>${cnt}</small></a>` : '';
       }).join('')}</div>
       ${hints[f] ? `<p class="muted" style="margin:0 0 .6rem;font-size:.9rem">${hints[f]}</p>` : ''}
-      <div class="sortrow"><label for="ord">Ordem:</label>
-        <select id="ord">${[['nome', 'Nome (A–Z)'], ['ultima', 'Última visita'], ['visitas', 'Quem mais vem']].map(([k, n]) => `<option value="${k}" ${order === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>` : ''}
+      <div class="sortrow">
+        ${f && withPhone.length ? `<button type="button" class="btn small" id="bulk" style="white-space:nowrap">📣 Mensagem (${withPhone.length})</button>` : ''}
+        <select id="ord" aria-label="Ordem da lista" style="margin-left:auto;max-width:11rem">${[['nome', 'A–Z'], ['ultima', 'Última visita'], ['visitas', 'Quem mais vem']].map(([k, n]) => `<option value="${k}" ${order === k ? 'selected' : ''}>↕ ${n}</option>`).join('')}</select></div>` : ''}
       <div class="list clist" id="list">${rows || (all.length ? '<div class="empty">Nenhuma cliente neste filtro.</div>' : '<div class="empty">Nenhuma cliente ainda.<br>Elas aparecem aqui sozinhas quando você agenda.</div>')}</div>
       <div class="empty" id="none" hidden>Nenhuma cliente com esse nome.</div>`,
     bind(el) {
@@ -1847,6 +1887,7 @@ function vClients(_, q) {
         replaceTo(a.getAttribute('href'));
       });
       $('#ord', el)?.addEventListener('change', e => replaceTo(url({ o: e.target.value })));
+      $('#bulk', el) && ($('#bulk', el).onclick = () => bulkSheet(withPhone, f));
     },
   };
 }
