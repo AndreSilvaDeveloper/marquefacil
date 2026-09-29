@@ -421,7 +421,7 @@ function parseHash() {
 
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
-  agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: (id, q) => (q.id ? vSaleForm(id, q) : vSell(id, q)), financeiro: vFin, mais: vMore,
+  agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: (id, q) => (q.id ? (q.editar ? vSaleForm(id, q) : vSaleView(id, q)) : vSell(id, q)), financeiro: vFin, mais: vMore,
   itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, ajuda: vAjuda, conta: vConta, pacote: vPackageForm,
 };
 
@@ -2573,6 +2573,68 @@ function vSell(_, q) {
         if (low.length) setTimeout(() => toast(`📦 Acabando: ${low.map(p => p.name).join(', ')}`), 2300);
         back();
       });
+    },
+  };
+}
+
+// Tela da compra: todos os produtos, o que foi pago, parcelas e ações
+function vSaleView(_, q) {
+  const s = db.sales.find(x => x.id === q.id);
+  if (!s) return { title: 'Compra', back: true, html: '<div class="empty">Essa venda não existe mais.</div>' };
+  const o = orderOf(s), c = client(s.clientId), parts = installmentsOf(o), next = nextInstallment(o);
+  const ap = s.apptId && db.appts.find(x => x.id === s.apptId);
+  // pagamentos da compra toda, juntando os produtos (mesmo dia e forma)
+  const pays = Object.values(o.lines.flatMap(paymentsOf).reduce((acc, p) => {
+    const k = `${p.d}|${p.m}`; (acc[k] ||= { ...p, v: 0 }).v = round2(acc[k].v + p.v); return acc;
+  }, {})).sort((a, b) => (a.d || '').localeCompare(b.d || ''));
+  const late = parts.filter(p => p.left > 0 && p.date < today());
+  const cobrar = c?.phone && o.left > 0 ? waLink(c.phone, next
+    ? `Olá, ${firstName(c)}! 😊 Passando para lembrar ${next.of > 1 ? `da parcela ${next.n} de ${next.of}` : 'do pagamento'} da sua compra no ${session.tenant.name} (${productsText(o)}): ${brl(next.left)}, ${next.date < today() ? `que venceu em ${fmtShort(next.date).slice(0, 5)}` : `com vencimento em ${fmtShort(next.date).slice(0, 5)}`}. Obrigada! 💖`
+    : clientWaText(c, { owes: o.left }, 'devendo')) : '';
+  return {
+    title: 'Compra', tab: 'clientes', back: true,
+    html: `
+      <div class="hero appt-hero">
+        ${c ? `<a class="big" href="#/cliente/${c.id}">${esc(c.name)} ›</a>` : '<p class="big" style="color:var(--ink)">🧍 Balcão</p>'}
+        <p class="when"><b>${cap(fmtDate(s.date, { weekday: 'long' }))}</b>, ${fmtShort(s.date)}</p>
+        ${ap ? `<p>💇 Junto com o atendimento de <a href="#/agendamento/${ap.id}">${fmtShort(ap.date).slice(0, 5)} às ${ap.time}${ap.service ? ' · ' + esc(ap.service) : ''}</a></p>` : ''}
+        <p class="status-line">${o.left <= 0 ? '<span class="badge ok">✓ Paga</span>' : late.length ? `<span class="badge bad">⚠️ ${late.length === 1 ? '1 parcela vencida' : `${late.length} parcelas vencidas`}</span>`
+          : `<span class="badge warn">Falta ${brl(o.left)}</span>`}${parts.length > 1 ? ` <span class="badge">🧾 ${parts.length}x</span>` : ''}</p>
+      </div>
+
+      <div class="card extrato moneybox">
+        ${o.lines.map(x => `<a class="ex-row" href="#/venda?id=${x.id}&editar=1"><span>🛍️ ${esc(x.product)} <small class="muted">${x.qty > 1 ? `${x.qty} × ${brl(x.unitPrice || 0)}` : ''}</small></span><b>${brl(valueOf(x))}</b><i>✏️</i></a>`).join('')}
+        <div class="ex-row"><span><b>Total</b></span><b>${brl(o.total)}</b></div>
+      </div>
+
+      <div class="card extrato moneybox">
+        <div class="ex-row"><span>Pago${pays.length ? `<small class="muted paid-how">${pays.map(p => `${brl(p.v)}${PAY[p.m] ? ' ' + PAY[p.m] : ''} · ${fmtShort(p.d).slice(0, 5)}`).join('<br>')}</small>` : ''}</span><b style="color:var(--ok)">${brl(o.paid)}</b></div>
+        ${o.left > 0 ? `<div class="ex-row"><span>Falta</span><b style="color:var(--warn)">${brl(o.left)}</b></div>` : ''}
+        ${parts.length ? `<div class="lt-list" style="margin:.2rem .8rem .8rem">${o.plan.entrada > 0 ? `<div class="ok"><span>Entrada</span><b>✓ ${brl(o.plan.entrada)}</b></div>` : ''}${parts.map(p => `<div class="${p.left <= 0 ? 'ok' : p.date < today() ? 'late' : ''}">
+          <span>${p.of > 1 ? `${p.n}ª parcela` : 'Pagamento'} · ${fmtShort(p.date).slice(0, 5)}</span>
+          <b>${p.left <= 0 ? `✓ ${brl(p.amount)}` : p.paid > 0 ? `falta ${brl(p.left)}` : brl(p.amount)}</b></div>`).join('')}</div>` : ''}
+      </div>
+      ${o.left > 0 ? `<button class="btn ok" id="recv">💰 Receber ${brl(next ? next.left : o.left)}${next && next.of > 1 ? ` · ${next.n}ª parcela` : ''}</button>` : ''}
+
+      <div class="menu" style="margin-top:1rem">
+        ${cobrar ? `<a class="menu-item" target="_blank" rel="noopener" href="${cobrar}"><span class="mi-icon">💬</span><span class="mi-text"><b>Cobrar pelo WhatsApp</b></span><span class="mi-go">›</span></a>` : ''}
+        ${o.lines.length === 1 ? `<a class="menu-item" href="#/venda?id=${s.id}&editar=1"><span class="mi-icon">✏️</span><span class="mi-text"><b>Mudar produto, quantidade ou valor</b></span><span class="mi-go">›</span></a>` : ''}
+        ${pays.length ? '<button type="button" class="menu-item" id="unpay"><span class="mi-icon">↩️</span><span class="mi-text"><b>Desfazer pagamentos</b><small>Volta a compra para "não paga"</small></span></button>' : ''}
+        <button type="button" class="menu-item danger" id="del-order"><span class="mi-icon">🗑️</span><span class="mi-text"><b>Apagar ${o.lines.length > 1 ? 'a compra toda' : 'a venda'}</b><small>Os produtos voltam para o estoque</small></span></button>
+      </div>`,
+    bind(el) {
+      $('#recv', el) && ($('#recv', el).onclick = () => receiveSale(s));
+      $('#unpay', el) && ($('#unpay', el).onclick = () => {
+        if (!confirm('Apagar os pagamentos lançados nesta compra?')) return;
+        o.lines.forEach(clearPayments); save(); toast('Pagamentos desfeitos'); render();
+      });
+      $('#del-order', el).onclick = () => {
+        if (!confirm(o.lines.length > 1 ? `Apagar a compra toda (${o.lines.length} produtos)?` : 'Apagar esta venda?')) return;
+        const ids = new Set(o.lines.map(x => x.id));
+        o.lines.forEach(x => moveStock(x.product, +x.qty));
+        db.sales = db.sales.filter(x => !ids.has(x.id));
+        save(); toast('Venda apagada'); back();
+      };
     },
   };
 }
