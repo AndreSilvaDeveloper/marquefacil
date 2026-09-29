@@ -711,3 +711,11 @@ details.ready { padding: .7rem 1rem; }
 .hrow-x { padding: 0 .9rem .7rem 5.3rem; }
 .hrow-x .quickprice { margin: 0; }
 .list.clist .letter + .hrow, .list.clist .letter + .dayrow { border-top: 1px solid var(--line); }
+
+/* ---------- Vender: busca de produto e carrinho compacto ---------- */
+.prodgrid button { min-height: 3rem; padding: .45rem .65rem; }
+.prodgrid button b { font-size: .95rem; }
+.cl-bottom .money.small { flex: 0 1 7.5rem; }
+.cl-bottom .line-total { margin-left: auto; min-width: 4.2rem; }
+.cart-line { padding: .5rem 0; }
+.linkish { border: 0; background: none; color: var(--brand); font-weight: 700; padding: .3rem 0; cursor: pointer; font: inherit; font-weight: 700; }

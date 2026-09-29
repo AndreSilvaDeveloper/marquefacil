@@ -2194,8 +2194,10 @@ function vSell(_, q) {
   const topProducts = () => {
     const sold = {};
     for (const x of db.sales) sold[norm(x.product)] = (sold[norm(x.product)] || 0) + (x.qty || 1);
-    return [...db.products].sort((a, b) => (sold[norm(b.name)] || 0) - (sold[norm(a.name)] || 0) || byName(a, b)).slice(0, 12);
+    const out = p => (hasStock(p) && p.stock <= 0 ? 1 : 0);
+    return [...db.products].sort((a, b) => out(a) - out(b) || (sold[norm(b.name)] || 0) - (sold[norm(a.name)] || 0) || byName(a, b));
   };
+  const SHOW = 8; // sem busca, mostra os mais vendidos
   return {
     title: 'Vender', tab: 'clientes', back: true,
     html: `
@@ -2218,12 +2220,11 @@ function vSell(_, q) {
 
         <div class="field">
           <span class="lbl">O que vendeu?</span>
-          ${topProducts().length ? `<div class="prodgrid" id="prods">${topProducts().map(p => `<button type="button" data-p="${esc(p.name)}" class="${hasStock(p) && p.stock <= 0 ? 'out' : ''}">
-            <b>${esc(p.name)}</b><small>${p.price ? brl(p.price) : 'sem preço'}${hasStock(p) ? ` · ${p.stock <= 0 ? 'sem estoque' : `tem ${p.stock}`}` : ''}</small><i class="incart" hidden></i></button>`).join('')}</div>` : ''}
-          <div class="row" style="margin-top:.5rem;align-items:flex-start">
-            <div class="ac" style="flex:2"><input type="text" id="f-prod" placeholder="${db.products.length ? 'Outro produto…' : 'Nome do produto'}" autocapitalize="sentences"><div class="sug" hidden></div></div>
-            <button type="button" class="btn small main" id="add" style="flex:0 0 auto;min-height:3.2rem">+ Pôr</button>
-          </div>
+          <input type="search" id="f-prod" placeholder="${db.products.length ? '🔍 Procurar ou escrever o produto' : 'Nome do produto'}" autocapitalize="sentences" enterkeyhint="done">
+          ${db.products.length ? `<div class="prodgrid" id="prods" style="margin-top:.5rem">${topProducts().map((p, i) => `<button type="button" data-p="${esc(p.name)}" data-n="${esc(norm(p.name))}" class="${hasStock(p) && p.stock <= 0 ? 'out' : ''}" ${i >= SHOW ? 'hidden' : ''}>
+            <b>${esc(p.name)}</b><small>${p.price ? brl(p.price).replace(',00', '') : 'sem preço'}${hasStock(p) ? ` · ${p.stock <= 0 ? 'sem estoque' : `tem ${p.stock}`}` : ''}</small><i class="incart" hidden></i></button>`).join('')}</div>` : ''}
+          <small class="hint" id="prods-more">${db.products.length > SHOW ? `Mostrando os ${SHOW} mais vendidos · procure para ver os outros ${db.products.length - SHOW}` : ''}</small>
+          <button type="button" class="btn small main" id="add" style="margin-top:.5rem" hidden></button>
         </div>
 
         <div id="cart"></div>
@@ -2259,9 +2260,10 @@ function vSell(_, q) {
           </div>
         </div>
 
-        <details class="more"><summary>➕ Mais detalhes <small>dia da venda</small></summary>
-          <div class="field"><label for="f-date">Dia da venda</label><input type="date" id="f-date" value="${fromAppt?.date || today()}"></div>
-        </details>
+        <div class="field">
+          <button type="button" class="linkish" id="otherday" ${fromAppt && fromAppt.date !== today() ? 'hidden' : ''}>📅 Foi em outro dia?</button>
+          <div id="dayfield" ${fromAppt && fromAppt.date !== today() ? '' : 'hidden'}><label for="f-date">Dia da venda</label><input type="date" id="f-date" value="${fromAppt?.date || today()}"></div>
+        </div>
 
         <div class="savebar">
           <div class="sum" id="sum"></div>
@@ -2272,7 +2274,18 @@ function vSell(_, q) {
       const iClient = $('#f-client', el), iProd = $('#f-prod', el);
       suggest(iClient, clientItems, () => {});
       bindClientPhone(el, iClient, $('#f-phone', el));
-      suggest(iProd, productItems, it => { addItem(it.label); iProd.value = ''; }, { showOnEmpty: false });
+      // Procurar: filtra os quadrados; se não existir, oferece pôr como produto novo
+      const filterProds = () => {
+        const n = norm(iProd.value);
+        let shown = 0;
+        el.querySelectorAll('#prods [data-p]').forEach((b, i) => { const ok = n ? b.dataset.n.includes(n) : i < SHOW; b.hidden = !ok; shown += ok; });
+        $('#prods-more', el).hidden = !!n;
+        const exact = n && findByName(db.products, iProd.value);
+        $('#add', el).hidden = !n || !!exact;
+        $('#add', el).textContent = `+ Pôr "${iProd.value.trim()}"${shown ? ' (produto novo)' : ''}`;
+      };
+      iProd.addEventListener('input', filterProds);
+      $('#otherday', el).onclick = () => { $('#otherday', el).hidden = true; $('#dayfield', el).hidden = false; $('#f-date', el).focus(); };
 
       const setCounter = on => {
         counter = on;
@@ -2293,9 +2306,15 @@ function vSell(_, q) {
         paint();
         if (!$(`#prods [data-p="${CSS.escape(p?.name || '')}"]`, el)) toast(`+1 ${p?.name || niceName(name)}`); // produto fora dos quadrados
       }
-      $('#prods', el)?.addEventListener('click', e => { const b = e.target.closest('[data-p]'); if (b) addItem(b.dataset.p); });
-      $('#add', el).onclick = () => { addItem(iProd.value); iProd.value = ''; };
-      iProd.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addItem(iProd.value); iProd.value = ''; } });
+      const clearSearch = () => { iProd.value = ''; filterProds(); };
+      $('#prods', el)?.addEventListener('click', e => { const b = e.target.closest('[data-p]'); if (b) { addItem(b.dataset.p); if (iProd.value) clearSearch(); } });
+      $('#add', el).onclick = () => { addItem(iProd.value); clearSearch(); };
+      iProd.addEventListener('keydown', e => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const vis = [...el.querySelectorAll('#prods [data-p]')].filter(b => !b.hidden);
+        if (iProd.value.trim()) { addItem(vis.length === 1 ? vis[0].dataset.p : iProd.value); clearSearch(); }
+      });
 
       const total = () => round2(cart.reduce((t, x) => t + (x.price || 0) * x.qty, 0));
       const planDates = () => (later.mode === 'uma' ? [later.first] : seriesByCount(later.first, later.every, later.n));
@@ -2326,12 +2345,12 @@ function vSell(_, q) {
             const p = findByName(db.products, x.name);
             const warn = hasStock(p) && x.qty > p.stock ? `<small class="warnline">⚠️ ${p.stock <= 0 ? 'sem estoque' : `só tem ${p.stock} em estoque`}</small>` : '';
             return `<div class="cart-line">
-              <div class="cl-top"><b>${esc(x.name)}</b><span class="line-total">${x.price ? brl(x.price * x.qty) : '—'}</span>
-                <button type="button" class="rm" data-rm="${i}" aria-label="Tirar">✕</button></div>
+              <div class="cl-top"><b>${esc(x.name)}</b><button type="button" class="rm" data-rm="${i}" aria-label="Tirar ${esc(x.name)}">✕</button></div>
               ${warn}
               <div class="cl-bottom">
-                <div class="money small"><input type="text" inputmode="numeric" data-price="${i}" value="${moneyVal(x.price)}" placeholder="preço de cada"></div>
-                <div class="qty"><button type="button" data-minus="${i}">−</button><b>${x.qty}</b><button type="button" data-plus="${i}">+</button></div>
+                <div class="money small" title="Preço de cada"><input type="text" inputmode="numeric" data-price="${i}" value="${moneyVal(x.price)}" placeholder="preço"></div>
+                <div class="qty"><button type="button" data-minus="${i}" aria-label="Menos">−</button><b>${x.qty}</b><button type="button" data-plus="${i}" aria-label="Mais">+</button></div>
+                <span class="line-total">${x.price ? brl(x.price * x.qty).replace(',00', '') : '—'}</span>
               </div>
             </div>`;
           }).join('')}
