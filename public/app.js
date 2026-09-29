@@ -703,6 +703,23 @@ function dayRow(a, tag = '', { date = false, who = true } = {}) {
     ${money}</a>`;
 }
 
+// Linha "Hoje também": parcelas de compras vencendo hoje e aniversariantes (só aparece se tiver)
+function alsoToday() {
+  const t = today(), seen = new Set(), parts = [];
+  for (const x of db.sales) {
+    if (!x.plan?.dates?.length || seen.has(orderKey(x))) continue;
+    seen.add(orderKey(x));
+    const o = orderOf(x), p = installmentsOf(o).find(i => i.date === t && i.left > 0);
+    if (p) parts.push({ o, p });
+  }
+  const bdays = db.clients.filter(c => bdayIn(c.birthday) === 0);
+  const rows = [
+    parts.length ? `<a class="ex-row" href="#/financeiro?f=falta"><span>🛍️ ${parts.length === 1 ? `${esc(firstName(client(parts[0].o.clientId) || { name: '' }))}: parcela vence hoje` : `${parts.length} parcelas vencem hoje`}</span><b>${brl(parts.reduce((s2, x) => s2 + x.p.left, 0)).replace(',00', '')}</b><i>›</i></a>` : '',
+    ...bdays.slice(0, 3).map(c => `<a class="ex-row" href="#/cliente/${c.id}"><span>🎂 Aniversário da ${esc(firstName(c))}</span><b></b><i>›</i></a>`),
+  ].filter(Boolean);
+  return rows.length ? `<div class="card extrato also"><div class="also-h">Hoje também</div>${rows.join('')}</div>` : '';
+}
+
 function weekStart(d) { const x = toDate(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return dstr(x); } // segunda-feira
 
 function vAgenda(_, q) {
@@ -732,16 +749,17 @@ function vAgenda(_, q) {
     const tl = dayTimeline(d, active, tags);
     title = d === t ? `Hoje, ${fmtDate(d, { day: 'numeric', month: 'long' })}` : cap(fmtDate(d, { weekday: 'long', day: 'numeric', month: 'long', year: d.slice(0, 4) !== t.slice(0, 4) ? 'numeric' : undefined }).replace('-feira', ''));
     body = `
-      ${active.length ? `<div class="daysum">
-        <span><b>${active.length}</b> ${active.length === 1 ? 'horário' : 'horários'}</span>
-        ${done ? `<span><b>${done}</b> ${done === 1 ? 'feito' : 'feitos'}</span>` : ''}
-        ${expectedDay ? `<span>💰 <b>${brl(expectedDay)}</b>${paidDay ? ` · recebido <b>${brl(paidDay)}</b>` : ''}</span>` : ''}
-      </div>` : ''}
+      ${d === t ? alsoToday() : ''}
+      ${active.length ? `<p class="csum" style="text-align:center"><b>${active.length}</b> ${active.length === 1 ? 'horário' : 'horários'}${done ? ` · <b>${done}</b> ${done === 1 ? 'feito' : 'feitos'}` : ''}${expectedDay ? ` · <b>${brl(expectedDay).replace(',00', '')}</b>${paidDay ? ` · recebido <b style="color:var(--ok)">${brl(paidDay).replace(',00', '')}</b>` : ''}` : ''}</p>` : ''}
       ${tl.closedDay ? '<div class="muted" style="text-align:center;margin:.5rem 0">🔒 Dia fechado no seu horário de atendimento.</div>' : ''}
       <div class="list timeline">
         ${tl.html || `<div class="empty">Nenhum horário marcado neste dia.${d >= t ? `<br><a class="btn main" href="#/agendar?d=${d}" style="margin-top:1rem">📅 Agendar neste dia</a>` : ''}</div>`}
       </div>
-      ${cancelled.length ? `<details class="cancelled"><summary>Cancelados (${cancelled.length})</summary><div class="list">${cancelled.map(a => apptCard(a)).join('')}</div></details>` : ''}`;
+      ${cancelled.length ? `<details class="cancelled"><summary>Cancelados (${cancelled.length})</summary><div class="list">${cancelled.map(a => apptCard(a)).join('')}</div></details>` : ''}
+      ${d === t ? (() => {
+        const tm = addDays(t, 1), l = db.appts.filter(a => a.date === tm && a.status !== 'cancelado').sort(byWhen);
+        return `<a class="tomorrow" href="${url({ d: tm })}" data-nav><span>Amanhã</span><b>${l.length ? `${l.length} ${l.length === 1 ? 'horário' : 'horários'} · 1º às ${l[0].time}` : 'nada marcado'}</b><i>›</i></a>`;
+      })() : ''}`;
   } else {
     const ws = weekStart(d);
     const hours = salonHours();
@@ -787,7 +805,7 @@ function vAgenda(_, q) {
       <label class="daypick ${view === 'dia' && d !== t ? 'other' : ''}">
         <span><b>${esc(title)}</b></span><em>📆 Trocar dia</em>
         <input type="date" id="pick" value="${d}" aria-label="Escolher dia"></label>
-      ${pend.length ? `<a class="card pending-banner" href="#/pedidos">⏳ <b>${pend.length} ${pend.length === 1 ? 'pedido esperando' : 'pedidos esperando'}</b> você confirmar ›</a>` : ''}
+      ${pend.length ? `<a class="card pending-banner slim" href="#/pedidos">⏳ <b>${pend.length} ${pend.length === 1 ? 'pedido' : 'pedidos'}</b> para confirmar<i>›</i></a>` : ''}
       <div id="push-card"></div>
       ${body}
       <div class="fabs">
@@ -4099,9 +4117,20 @@ async function paintPushCard(el, full = false) {
     if (full) el.innerHTML = '<p class="muted">Os avisos estão bloqueados neste aparelho. Libere nas configurações do navegador (Notificações) e volte aqui.</p>';
     return;
   }
-  el.innerHTML = `<div class="card push-card"><b>🔔 Receber avisos no celular</b>
-    <p class="muted" style="margin:.3rem 0 .6rem">Pedidos pelo link, horário chegando, pedido sem confirmar, resumo do dia e mais — mesmo com o app fechado.</p>
-    <button class="btn main" id="push-on">Ativar avisos</button></div>`;
+  // Na agenda: uma linha só, que dá para dispensar por uma semana (em Mais → Avisos continua completo)
+  const HIDE_KEY = 'mf.pushHide';
+  if (!full) {
+    let hideUntil = 0;
+    try { hideUntil = +localStorage.getItem(HIDE_KEY) || 0; } catch { /* sem armazenamento */ }
+    if (Date.now() < hideUntil) { el.innerHTML = ''; return; }
+    el.innerHTML = `<div class="card push-slim"><span>🔔 Avisos no celular</span>
+      <button class="btn small main" id="push-on">Ligar</button><button class="rm" id="push-x" aria-label="Agora não">✕</button></div>`;
+    $('#push-x', el).onclick = () => { try { localStorage.setItem(HIDE_KEY, Date.now() + 7 * 86400000); } catch { /* ok */ } el.innerHTML = ''; };
+  } else {
+    el.innerHTML = `<div class="card push-card"><b>🔔 Receber avisos no celular</b>
+      <p class="muted" style="margin:.3rem 0 .6rem">Pedidos pelo link, horário chegando, pedido sem confirmar, resumo do dia e mais — mesmo com o app fechado.</p>
+      <button class="btn main" id="push-on">Ativar avisos</button></div>`;
+  }
   $('#push-on', el).onclick = async () => {
     try {
       if (await Notification.requestPermission() !== 'granted') { toast('Avisos não liberados'); paintPushCard(el, full); return; }

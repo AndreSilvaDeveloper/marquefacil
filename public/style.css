@@ -720,3 +720,15 @@ details.ready { padding: .7rem 1rem; }
 .cart-line { padding: .5rem 0; }
 .linkish { border: 0; background: none; color: var(--brand); font-weight: 700; padding: .3rem 0; cursor: pointer; font: inherit; font-weight: 700; }
 #ana-tabs { margin-top: -.2rem; }
+
+/* ---------- Agenda: topo mais leve ---------- */
+.push-slim { display: flex; align-items: center; gap: .5rem; padding: .5rem .6rem .5rem .9rem; margin-bottom: .7rem; }
+.push-slim span { flex: 1; font-weight: 700; font-size: .95rem; }
+.pending-banner.slim { display: flex; align-items: center; gap: .3rem; padding: .6rem .9rem; margin-bottom: .7rem; }
+.pending-banner.slim i { margin-left: auto; font-style: normal; }
+.extrato.also .also-h { padding: .5rem 1rem 0; font-size: .8rem; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.extrato.also .ex-row:first-of-type { border-top: 0; }
+.tomorrow { display: flex; align-items: center; gap: .6rem; margin-top: .8rem; padding: .7rem 1rem; border: 1px dashed var(--line); border-radius: var(--radius); text-decoration: none; color: inherit; }
+.tomorrow span { color: var(--muted); font-weight: 700; }
+.tomorrow b { flex: 1; font-weight: 600; }
+.tomorrow i { font-style: normal; color: var(--muted); }
