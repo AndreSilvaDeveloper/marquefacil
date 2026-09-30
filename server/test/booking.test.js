@@ -691,7 +691,7 @@ test('avisos no celular: horário chegando, pedido esperando, pré-reserva, bom 
 
 test('vendas pagas depois: lembrete no vencimento e resumo no 1º dia útil do mês', async () => {
   const evo = fakeEvolution();
-  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl } });
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl }, saleDelay: 0 });
   const call = await salon(app);
   await call('POST', '/api/whatsapp/connect');
   evo.instances[Object.keys(evo.instances)[0]] = 'open';
@@ -729,5 +729,55 @@ test('vendas pagas depois: lembrete no vencimento e resumo no 1º dia útil do m
   // desligado: não manda
   await call('PUT', '/api/settings', { whatsapp: { saleReminders: false } });
   assert.equal(await m.runSaleReminders(at('2027-05-15', '10:00')), 0);
+  await app.close();
+});
+
+test('venda lançada: a cliente recebe o comprovante (pago ou com as parcelas)', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl }, saleDelay: 0 });
+  const call = await salon(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  await call('GET', '/api/whatsapp/status');
+  await call('PUT', '/api/settings', { whatsapp: { pixKey: 'chave@pix.com' } });
+  const wait = () => new Promise(r => setTimeout(r, 60));
+  const T = nowIn('America/Sao_Paulo').date;
+  await call('POST', '/api/sync', { changes: [{ coll: 'clients', id: 'c1', data: { name: 'Maria Souza', phone: '(11) 97777-6666' } }] });
+
+  // paga na hora (2 produtos, uma compra só): uma mensagem com os dois
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'sales', id: 'p1', data: { clientId: 'c1', product: 'Shampoo', qty: 1, total: 40, date: T, orderId: 'o1', payments: [{ v: 40, m: 'pix', d: T }] } },
+    { coll: 'sales', id: 'p2', data: { clientId: 'c1', product: 'Pente', qty: 2, total: 16, date: T, orderId: 'o1', payments: [{ v: 16, m: 'pix', d: T }] } },
+  ] });
+  await wait();
+  const paid = evo.sent.filter(m => /foi registrada/.test(m.text));
+  assert.equal(paid.length, 1);
+  assert.match(paid[0].text, /Shampoo — R\$\s?40,00/);
+  assert.match(paid[0].text, /Pente \(2x\)/);
+  assert.match(paid[0].text, /Total: R\$\s?56,00/);
+  assert.match(paid[0].text, /✅ Pago \(Pix\)/);
+  assert.doesNotMatch(paid[0].text, /Pix: chave/, 'paga: não precisa da chave Pix');
+
+  // a prazo: parcelas com vencimento e chave Pix
+  const plan = { entrada: 10, dates: [addDays(T, 30), addDays(T, 60)] };
+  await call('POST', '/api/sync', { changes: [{ coll: 'sales', id: 'q1', data: { clientId: 'c1', product: 'Máscara', qty: 1, total: 90, date: T, orderId: 'o2', payments: [{ v: 10, m: 'dinheiro', d: T }], plan } }] });
+  await wait();
+  const later = evo.sent.at(-1).text;
+  assert.match(later, /Entrada: R\$\s?10,00/);
+  assert.match(later, /1ª parcela: R\$\s?40,00 — vence/);
+  assert.match(later, /2ª parcela: R\$\s?40,00/);
+  assert.match(later, /Pix: chave@pix\.com/);
+
+  // editar a venda depois não manda de novo; venda de outro dia (lançada atrasada) não manda
+  const n = evo.sent.length;
+  await call('POST', '/api/sync', { changes: [{ coll: 'sales', id: 'q1', data: { clientId: 'c1', product: 'Máscara', qty: 1, total: 90, date: T, orderId: 'o2', payments: [], plan } }] });
+  await call('POST', '/api/sync', { changes: [{ coll: 'sales', id: 'r1', data: { clientId: 'c1', product: 'Pente', qty: 1, total: 8, date: addDays(T, -3), payments: [] } }] });
+  await wait();
+  assert.equal(evo.sent.length, n);
+  // desligado: não manda
+  await call('PUT', '/api/settings', { whatsapp: { saleConfirm: false } });
+  await call('POST', '/api/sync', { changes: [{ coll: 'sales', id: 'r2', data: { clientId: 'c1', product: 'Pente', qty: 1, total: 8, date: T, payments: [] } }] });
+  await wait();
+  assert.equal(evo.sent.length, n);
   await app.close();
 });

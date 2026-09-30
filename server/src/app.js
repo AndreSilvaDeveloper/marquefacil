@@ -57,6 +57,7 @@ export function buildApp({
   evolution = {},        // { url, apikey, fetchImpl }
   publicUrl = '',        // endereço do sistema, para links nas mensagens
   pushSender = null,     // para testes
+  saleDelay = 4000,      // espera antes do comprovante de venda (os produtos da compra chegam juntos)
   logger = false,
 } = {}) {
   const db = openDb(dbFile);
@@ -238,6 +239,8 @@ export function buildApp({
     const tenantId = req.s.tenant_id;
     const changes = cleanChanges(req.body?.changes);
     const old = new Map(changes.filter(c => c.coll === 'appts').map(c => [c.id, apptOf(tenantId, c.id)]));
+    const saleExists = db.prepare("SELECT 1 FROM records WHERE tenant_id = ? AND coll = 'sales' AND id = ?");
+    const newSales = changes.filter(c => c.coll === 'sales' && !c.deleted && !saleExists.get(tenantId, c.id));
     const seq = changes.length ? applyChanges(db, tenantId, changes)
       : db.prepare('SELECT seq FROM tenants WHERE id = ?').get(tenantId).seq;
 
@@ -266,6 +269,14 @@ export function buildApp({
       if (c.data.seriesIndex > 0) continue;
       if (s.whatsapp.confirmManual && to === 'marcado' && c.data.date && c.data.time &&
           zonedEpoch(c.data.date, c.data.time, s.timezone) > Date.now()) messenger.fire(tenantId, c.id, 'confirm');
+    }
+    // Venda nova (de hoje, com cliente): a cliente recebe o comprovante — ou as parcelas, se for a prazo.
+    // Espera uns segundos para os outros produtos da mesma compra chegarem.
+    if (newSales.length) {
+      s ||= getSettings(tenantId);
+      const t = nowIn(s.timezone).date;
+      const keys = new Set(newSales.filter(c => c.data.clientId && c.data.date >= t).map(c => c.data.orderId || c.id));
+      if (s.whatsapp.saleConfirm) for (const k of keys) setTimeout(() => messenger.sendSaleNew(tenantId, k).catch(e => app.log.error(e)), saleDelay);
     }
     return { seq };
   });

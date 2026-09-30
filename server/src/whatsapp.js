@@ -213,6 +213,39 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
       return 'error';
     }
   }
+  // Comprovante da venda, logo depois de lançar: paga (forma de pagamento) ou a prazo (entrada e parcelas)
+  async function sendSaleNew(tenantId, key) {
+    const t = q.tenant.get(tenantId);
+    if (!t || !evo.enabled) return 'off';
+    const s = readSettings(t.settings);
+    if (!s.whatsapp.instance || !s.whatsapp.saleConfirm) return 'off';
+    const o = groupOrders(salesOf.all(tenantId).map(r => JSON.parse(r.data)).filter(x => (x.orderId || x.id) === key))[0];
+    if (!o?.clientId) return 'skip';
+    const client = getRecord(tenantId, 'clients', o.clientId);
+    const d2 = d => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+    const METHOD = { pix: 'Pix', dinheiro: 'Dinheiro', cartao: 'Cartão' };
+    const parts = installments(o);
+    let pagamento;
+    if (parts.length) {
+      pagamento = [
+        o.plan.entrada > 0 ? `✅ Entrada: ${brl(Math.min(o.plan.entrada, o.total))}` : '',
+        ...parts.map(p => `${p.of > 1 ? `${p.n}ª parcela` : 'Pagamento'}: ${brl(p.amount)} — vence ${d2(p.date)}`),
+      ].filter(Boolean).join('\n');
+    } else if (o.left <= 0) {
+      const how = [...new Set(o.lines.flatMap(x => x.payments || []).map(p => METHOD[p.m]).filter(Boolean))].join(' + ');
+      pagamento = `✅ Pago${how ? ` (${how})` : ''}`;
+    } else {
+      pagamento = `${o.paid > 0 ? `✅ Pago: ${brl(o.paid)}\n` : ''}⏳ Falta: ${brl(o.left)}`;
+    }
+    const tpl = s.whatsapp.templates.saleNew || DEFAULTS.whatsapp.templates.saleNew;
+    const body = renderTemplate(tpl, {
+      nome: (client?.name || '').split(' ')[0], salao: t.name, produtos: o.lines.map(x => `• ${x.product}${x.qty > 1 ? ` (${x.qty}x)` : ''} — ${brl(valueOfSale(x))}`).join('\n'),
+      total: brl(o.total), pagamento, pix: o.left > 0 ? s.whatsapp.pixKey || '' : '',
+    });
+    return sendSale(t, s, { apptId: `sale:${key}`, kind: 'salenew', client, body });
+  }
+  const valueOfSale = x => ('total' in x ? x.total : x.price) || 0;
+
   async function runSaleReminders(now = Date.now()) {
     let sent = 0;
     for (const t of tenantsOn.all()) {
@@ -303,7 +336,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
     return setInterval(tick, everyMs);
   }
 
-  return { sendForAppt, sendText, fire, runReminders, runSaleReminders, startScheduler, packageLabel, keepQuiet };
+  return { sendForAppt, sendText, fire, runReminders, runSaleReminders, sendSaleNew, startScheduler, packageLabel, keepQuiet };
 }
 
 /* ------------------------- rotas (profissional logada) ------------------------- */

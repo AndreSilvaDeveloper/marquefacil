@@ -2570,6 +2570,7 @@ function vSell(_, q) {
         const parts = plan ? installmentsOf(orderOf(db.sales.at(-1))) : [];
         toast(plan ? `Venda lançada ✓ ${parts.length > 1 ? `${parts.length}x de ${brl(parts[0].amount)}` : brl(parts[0].amount)} · ${parts.length > 1 ? '1ª vence' : 'vence'} ${fmtShort(plan.dates[0]).slice(0, 5)}`
           : `Venda lançada ✓ ${brl(total())}`);
+        if (clientId && client(clientId)?.phone && salonHours()?.waSale) setTimeout(() => toast('💬 A cliente recebe o comprovante no WhatsApp'), 2300);
         if (low.length) setTimeout(() => toast(`📦 Acabando: ${low.map(p => p.name).join(', ')}`), 2300);
         back();
       });
@@ -4069,7 +4070,7 @@ function vWhats(_, q = {}) {
       }
       const w = S.whatsapp;
       const connected = st.state === 'open';
-      const kinds = { confirm: 'Confirmação', change: 'Horário mudou', saledue: 'Venda: vencimento', salemonth: 'Venda: resumo do mês', reminder: 'Lembrete', owner: 'Aviso para você', decline: 'Pedido recusado', prereserve: 'Pré-reserva', rescheduleNo: 'Remarcação recusada', access: 'Link "meus horários"', test: 'Teste' };
+      const kinds = { confirm: 'Confirmação', change: 'Horário mudou', saledue: 'Venda: vencimento', salemonth: 'Venda: resumo do mês', salenew: 'Venda: comprovante', reminder: 'Lembrete', owner: 'Aviso para você', decline: 'Pedido recusado', prereserve: 'Pré-reserva', rescheduleNo: 'Remarcação recusada', access: 'Link "meus horários"', test: 'Teste' };
       const status = { sent: '<span class="badge ok">Enviada</span>', error: '<span class="badge bad">Falhou</span>', skipped: '<span class="badge warn">Sem telefone</span>', sending: '<span class="badge">Enviando</span>' };
       box.innerHTML = `
         <div class="card">
@@ -4107,6 +4108,7 @@ function vWhats(_, q = {}) {
                 return `<option value="${u}" ${u === unit ? 'selected' : ''}>${n} antes</option>`; }).join('')}</select>
             </div>
             <small class="hint">No máximo 3 dias antes.</small></div>
+          <div class="field"><span class="lbl">🛍️ Comprovante da venda para a cliente <span class="opt">(logo depois de lançar; a prazo vai com as parcelas)</span></span>${toggle2('saleConfirm', w.saleConfirm !== false, '✓ Mandar', 'Não')}</div>
           <div class="field"><span class="lbl">🛍️ Cobrar compras a prazo <span class="opt">(lembrete no dia do vencimento e resumo no 1º dia útil do mês, às 9h)</span></span>${toggle2('saleReminders', w.saleReminders !== false, '✓ Mandar', 'Não')}</div>
           <div class="field"><label for="pix">Chave Pix <span class="opt">(vai nas cobranças — se quiser)</span></label>
             <input type="text" id="pix" value="${esc(w.pixKey || '')}" placeholder="CPF, telefone, e-mail ou chave aleatória"></div>
@@ -4120,6 +4122,7 @@ function vWhats(_, q = {}) {
             <div class="field"><label for="t-change">Horário mudou <span class="opt">(quando você muda o dia ou a hora de um horário já marcado)</span></label><textarea id="t-change" rows="6">${esc(w.templates.change)}</textarea></div>
             <div class="field"><label for="t-reminder">Lembrete</label><textarea id="t-reminder" rows="6">${esc(w.templates.reminder)}</textarea></div>
             <div class="field"><label for="t-prereserve">Pré-reserva</label><textarea id="t-prereserve" rows="8">${esc(w.templates.prereserve)}</textarea></div>
+            <div class="field"><label for="t-saleNew">🛍️ Venda: comprovante <span class="opt">({produtos}, {total}, {pagamento}, {pix})</span></label><textarea id="t-saleNew" rows="8">${esc(w.templates.saleNew)}</textarea></div>
             <div class="field"><label for="t-saleDue">🛍️ Venda: dia do vencimento <span class="opt">({parcela}, {produtos}, {valor}, {pix})</span></label><textarea id="t-saleDue" rows="7">${esc(w.templates.saleDue)}</textarea></div>
             <div class="field"><label for="t-saleMonth">🛍️ Venda: resumo do mês <span class="opt">({lista}, {total}, {pix})</span></label><textarea id="t-saleMonth" rows="7">${esc(w.templates.saleMonth)}</textarea></div>
             <div class="field"><label for="t-decline">Pedido recusado</label><textarea id="t-decline" rows="4">${esc(w.templates.decline)}</textarea></div>
@@ -4136,7 +4139,7 @@ function vWhats(_, q = {}) {
           ${status[m.status] || ''}</div>
           ${m.body ? `<details class="msgbody"><summary>Ver o que foi enviado</summary><p>${esc(m.body).replace(/\n/g, '<br>')}</p></details>` : ''}</div>`).join('') : '<div class="muted">Nenhuma mensagem ainda.</div>'}</div>`;
 
-      const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner, declineMessage: w.declineMessage, prereserveMessage: w.prereserveMessage, saleReminders: w.saleReminders !== false };
+      const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner, declineMessage: w.declineMessage, prereserveMessage: w.prereserveMessage, saleReminders: w.saleReminders !== false, saleConfirm: w.saleConfirm !== false };
       for (const k of Object.keys(flags)) bindToggle2($('#' + k, box), v => (flags[k] = v));
 
       const err = e => { $('#err', box).innerHTML = `<div class="error">${esc(e.offline ? 'Precisa de internet.' : e.message)}</div>`; };
@@ -4155,7 +4158,7 @@ function vWhats(_, q = {}) {
             ...flags, reminderMinutes: reminderValue(), ownerPhone: $('#own', box).value.trim(),
             depositPercent: +$('#dep', box).value,
             templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value, decline: $('#t-decline', box).value, prereserve: $('#t-prereserve', box).value, change: $('#t-change', box).value,
-              saleDue: $('#t-saleDue', box).value, saleMonth: $('#t-saleMonth', box).value },
+              saleDue: $('#t-saleDue', box).value, saleMonth: $('#t-saleMonth', box).value, saleNew: $('#t-saleNew', box).value },
             pixKey: $('#pix', box).value.trim(),
           } }));
           toast('Salvo ✓');
@@ -4395,7 +4398,7 @@ function showLogin(mode = 'entrar') {
 // Horário de atendimento (dias, almoço) guardado no celular: a agenda usa para mostrar os horários livres
 const salonKey = () => `mf.salon.${session.tenant.id}`;
 const salonHours = () => readLS(salonKey());
-function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50, goal: S.finance?.goal || 0, wa: !!S.whatsapp?.instance && S.whatsapp?.saleReminders !== false }); } catch { /* ok */ } }
+function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50, goal: S.finance?.goal || 0, wa: !!S.whatsapp?.instance && S.whatsapp?.saleReminders !== false, waSale: !!S.whatsapp?.instance && S.whatsapp?.saleConfirm !== false }); } catch { /* ok */ } }
 function refreshSalon() { api('GET', '/api/settings').then(S => { cacheSalon(S); if (!$('#app form') && parseHash().parts[0] === 'agenda') render(); }).catch(() => {}); }
 
 function refreshPush() {
