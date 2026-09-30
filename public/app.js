@@ -312,7 +312,7 @@ function installmentsOf(o) {
 }
 const nextInstallment = o => installmentsOf(o).find(p => p.left > 0) || null;
 const orderDueNow = o => (o.plan ? round2(installmentsOf(o).filter(p => p.date <= today()).reduce((t, p) => t + p.left, 0)) : o.left);
-const productsText = o => { const n = o.lines.map(x => `${x.product}${x.qty > 1 ? ` (${x.qty}x)` : ''}`); return n.length > 1 ? `${n.slice(0, -1).join(', ')} e ${n.at(-1)}` : n[0] || 'Compra'; };
+const productsText = o => { const n = o.lines.map(x => `${x.product}${x.desc ? ` (${x.desc})` : ''}${x.qty > 1 ? ` (${x.qty}x)` : ''}`); return n.length > 1 ? `${n.slice(0, -1).join(', ')} e ${n.at(-1)}` : n[0] || 'Compra'; };
 // Recebeu um valor da compra: vai cobrindo os produtos em ordem
 function payOrder(o, v, m, d = today()) {
   let rest = round2(v);
@@ -507,7 +507,7 @@ function saleRow(x, { who = true } = {}) {
   const paid = isPaid(x);
   return `<a class="dayrow" href="#/venda?id=${x.id}">
     <span class="dr-time"><b>${fmtShort(x.date).slice(0, 5)}</b><small>🛍️ venda</small></span>
-    <span class="dr-info"><b>${esc(x.product)}${x.qty > 1 ? ` (${x.qty}x)` : ''}</b>${who ? `<span>${esc(clientName(x.clientId))}</span>` : ''}${saleNote(x)}</span>
+    <span class="dr-info"><b>${esc(x.product)}${x.qty > 1 ? ` (${x.qty}x)` : ''}</b>${x.desc ? `<span>📝 ${esc(x.desc)}</span>` : ''}${who ? `<span>${esc(clientName(x.clientId))}</span>` : ''}${saleNote(x)}</span>
     <span class="dr-money ${paid ? 'ok' : ''}">${paid ? '✓ ' : ''}${brl(valueOf(x)).replace(',00', '')}</span></a>`;
 }
 const expenseLine = e => `<a class="dayrow" href="#/despesa?id=${e.id}">
@@ -1675,7 +1675,7 @@ function searchText(kind, x) {
     return norm(`${clientName(x.clientId)} ${client(x.clientId)?.phone?.replace(/\D/g, '') || ''} ${x.service || ''} ${x.notes || ''} ${dateWords(x.date)} ${x.time} ${status}
       ${apptDue(x) ? 'devendo deve nao pago' : isPaid(x) ? 'pago' : ''} ${moneyWords(x.price)} ${x.seriesId ? 'fixa' : ''} ${x.source === 'online' ? 'link online' : ''}`);
   }
-  if (kind === 's') return norm(`${clientName(x.clientId)} ${x.product} ${dateWords(x.date)} ${saleDue(x) ? 'devendo deve nao pago' : 'pago'} ${moneyWords(x.total)} venda produto`);
+  if (kind === 's') return norm(`${clientName(x.clientId)} ${x.product} ${x.desc || ''} ${dateWords(x.date)} ${saleDue(x) ? 'devendo deve nao pago' : 'pago'} ${moneyWords(x.total)} venda produto`);
   return norm(`${x.desc || ''} ${x.cat || ''} ${dateWords(x.date)} ${moneyWords(x.amount)} despesa gasto`);
 }
 
@@ -2594,6 +2594,8 @@ function vSell(_, q) {
             const warn = hasStock(p) && x.qty > p.stock ? `<small class="warnline">⚠️ ${p.stock <= 0 ? 'sem estoque' : `só tem ${p.stock} em estoque`} — pode vender assim mesmo</small>` : '';
             return `<div class="cart-line">
               <div class="cl-top">${x.adhoc ? `<input type="text" class="cl-name" data-name="${i}" value="${esc(x.name)}" placeholder="Nome do produto (se quiser)" autocapitalize="sentences">` : `<b>${esc(x.name)}</b>`}<button type="button" class="rm" data-rm="${i}" aria-label="Tirar ${esc(x.name || 'item')}">✕</button></div>
+              ${x.descOpen || x.desc ? `<input type="text" class="cl-desc" data-desc="${i}" value="${esc(x.desc || '')}" placeholder="Descrição (ex.: cor, tamanho, marca, modelo)" autocapitalize="sentences" maxlength="120">`
+                : `<button type="button" class="linkish cl-desc-open" data-descopen="${i}">📝 Descrição</button>`}
               ${x.adhoc ? `<div class="cl-tag"><span class="muted">${x.keep ? '📦 Vai ser cadastrado na lista de produtos' : '🏷️ Sem cadastro — não entra no estoque'}</span><button type="button" class="chip mini-chip ${x.keep ? 'on' : ''}" data-keep="${i}">${x.keep ? '✓ Vai para a lista' : '📦 Salvar na lista'}</button></div>` : ''}
               ${warn}
               <div class="cl-bottom">
@@ -2652,9 +2654,14 @@ function vSell(_, q) {
         $('#save', el).textContent = `✓ Lançar venda${total() ? ' · ' + brl(total()) : ''}`;
       }
       // nome do item avulso: guarda sem redesenhar (não perde o foco)
-      $('#cart', el).addEventListener('input', e => { const i = e.target.dataset.name; if (i !== undefined) { cart[+i].name = e.target.value; } });
+      $('#cart', el).addEventListener('input', e => {
+        const i = e.target.dataset.name, j = e.target.dataset.desc;
+        if (i !== undefined) cart[+i].name = e.target.value;
+        if (j !== undefined) cart[+j].desc = e.target.value;
+      });
       $('#cart', el).addEventListener('click', e => {
         const t = e.target;
+        if (t.dataset.descopen) { cart[+t.dataset.descopen].descOpen = true; paint(); el.querySelector(`[data-desc="${t.dataset.descopen}"]`)?.focus(); return; }
         if (t.dataset.keep) cart[+t.dataset.keep].keep = !cart[+t.dataset.keep].keep;
         else if (t.dataset.plus) cart[+t.dataset.plus].qty++;
         else if (t.dataset.minus) { const x = cart[+t.dataset.minus]; x.qty > 1 ? x.qty-- : cart.splice(+t.dataset.minus, 1); }
@@ -2743,6 +2750,7 @@ function vSell(_, q) {
           if (fromAppt && fromAppt.clientId === clientId) sale.apptId = fromAppt.id;
           if (plan) sale.plan = plan;
           if (!p) sale.adhoc = true;
+          if (x.desc?.trim()) sale.desc = x.desc.trim().slice(0, 120);
           if (method !== 'depois' && sale.total > 0) addPayment(sale, sale.total, method, date);
           db.sales.push(sale);
         }
@@ -2786,7 +2794,7 @@ function vSaleView(_, q) {
       </div>
 
       <div class="card extrato moneybox">
-        ${o.lines.map(x => `<a class="ex-row" href="#/venda?id=${x.id}&editar=1"><span>🛍️ ${esc(x.product)} <small class="muted">${x.qty > 1 ? `${x.qty} × ${brl(x.unitPrice || 0)}` : ''}${x.discount ? ` · 🏷️ −${brl(x.discount)}` : ''}</small></span><b>${brl(valueOf(x))}</b><i>✏️</i></a>`).join('')}
+        ${o.lines.map(x => `<a class="ex-row" href="#/venda?id=${x.id}&editar=1"><span>🛍️ ${esc(x.product)}${x.desc ? `<small class="muted paid-how">📝 ${esc(x.desc)}</small>` : ''} <small class="muted">${x.qty > 1 ? `${x.qty} × ${brl(x.unitPrice || 0)}` : ''}${x.discount ? ` · 🏷️ −${brl(x.discount)}` : ''}</small></span><b>${brl(valueOf(x))}</b><i>✏️</i></a>`).join('')}
         <div class="ex-row"><span><b>Total</b></span><b>${brl(o.total)}</b></div>
       </div>
 
@@ -2881,6 +2889,10 @@ function vSaleForm(_, q) {
           <small id="h-prod" class="hint"></small>
         </div>
         <div class="field">
+          <label for="f-desc">Descrição <span class="opt">(se quiser — cor, tamanho, marca, modelo…)</span></label>
+          <input type="text" id="f-desc" value="${esc(s.desc || '')}" maxlength="120" autocapitalize="sentences" placeholder="Ex.: cor 42, marca Ruby Rose">
+        </div>
+        <div class="field">
           <span class="lbl">Quantidade</span>
           <div class="row" style="align-items:center">
             <button type="button" class="btn" id="minus" style="flex:0 0 3.4rem">−</button>
@@ -2963,7 +2975,7 @@ function vSaleForm(_, q) {
         const known = findByName(db.products, prod);
         const p = edit?.adhoc && !known ? null : known || findOrCreate(db.products, prod, { price: unit });
         if (p && !p.price && unit) p.price = unit;
-        const data = { clientId: c.id, product: p?.name || niceName(prod), qty, unitPrice: unit, total: Math.round((unit || 0) * qty * 100) / 100, date: $('#f-date', el).value || today() };
+        const data = { clientId: c.id, product: p?.name || niceName(prod), desc: $('#f-desc', el).value.trim().slice(0, 120), qty, unitPrice: unit, total: Math.round((unit || 0) * qty * 100) / 100, date: $('#f-date', el).value || today() };
         const apptId = edit ? edit.apptId : fromAppt?.id;
         if (apptId && db.appts.find(x => x.id === apptId)?.clientId === c.id) data.apptId = apptId; else delete data.apptId;
         if (!hasPlan && paid && data.total > 0 && !method && !isPaid({ ...s, ...data })) { err('Toque em Pix, Dinheiro ou Cartão (como pagou).'); return; }
@@ -2975,7 +2987,8 @@ function vSaleForm(_, q) {
         };
         if (edit) moveStock(edit.product, +edit.qty); // devolve o da venda antiga…
         moveStock(data.product, -qty);                 // …e tira o da venda nova
-        if (edit) { Object.assign(edit, data); if (!data.apptId) delete edit.apptId; if (hasPlan) refreshPaid(edit); else setPay(edit); }
+        if (!data.desc) delete data.desc;
+        if (edit) { Object.assign(edit, data); if (!data.apptId) delete edit.apptId; if (!data.desc) delete edit.desc; if (hasPlan) refreshPaid(edit); else setPay(edit); }
         else { const n = { id: uid(), createdAt: Date.now(), ...data, paid: false }; setPay(n); db.sales.push(n); }
         const pr = findByName(db.products, data.product);
         if (lowStock(pr)) setTimeout(() => toast(`📦 ${pr.name}: ${pr.stock <= 0 ? 'acabou o estoque' : `só restam ${pr.stock}`}`), 2300);
@@ -3210,7 +3223,7 @@ function vFin(_, q) {
     const cell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const rows = [['Data', 'Tipo', 'Descrição', 'Cliente', 'Forma', 'Valor (R$)']];
     const all = [
-      ...received.map(p => [p.d, 'Entrada', p.k === 'a' ? (p.it.service || 'Serviço') : `${p.it.product}${p.it.qty > 1 ? ` (${p.it.qty}x)` : ''}`, clientName(p.it.clientId), PAY[p.m] || '', moneyVal(p.v)]),
+      ...received.map(p => [p.d, 'Entrada', p.k === 'a' ? (p.it.service || 'Serviço') : `${p.it.product}${p.it.desc ? ` (${p.it.desc})` : ''}${p.it.qty > 1 ? ` (${p.it.qty}x)` : ''}`, clientName(p.it.clientId), PAY[p.m] || '', moneyVal(p.v)]),
       ...expenses.map(e => [e.date, 'Saída', [e.desc, e.cat].filter(Boolean).join(' · ') || 'Despesa', '', '', '-' + moneyVal(e.amount)]),
     ].sort((a, b) => a[0].localeCompare(b[0])).map(r => [fmtShort(r[0]), ...r.slice(1)]);
     rows.push(...all, [], ['', 'Entrou', '', '', '', moneyVal(recTotal)], ['', 'Saiu', '', '', '', '-' + moneyVal(spent)], ['', 'Lucro', '', '', '', moneyVal(profit)]);

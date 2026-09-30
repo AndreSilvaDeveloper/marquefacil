@@ -746,13 +746,13 @@ test('venda lançada: a cliente recebe o comprovante (pago ou com as parcelas)',
 
   // paga na hora (2 produtos, uma compra só): uma mensagem com os dois
   await call('POST', '/api/sync', { changes: [
-    { coll: 'sales', id: 'p1', data: { clientId: 'c1', product: 'Shampoo', qty: 1, total: 40, date: T, orderId: 'o1', payments: [{ v: 40, m: 'pix', d: T }] } },
+    { coll: 'sales', id: 'p1', data: { clientId: 'c1', product: 'Shampoo', desc: 'Kérastase 250 ml', qty: 1, total: 40, date: T, orderId: 'o1', payments: [{ v: 40, m: 'pix', d: T }] } },
     { coll: 'sales', id: 'p2', data: { clientId: 'c1', product: 'Pente', qty: 2, total: 16, date: T, orderId: 'o1', payments: [{ v: 16, m: 'pix', d: T }] } },
   ] });
   await wait();
   const paid = evo.sent.filter(m => /foi registrada/.test(m.text));
   assert.equal(paid.length, 1);
-  assert.match(paid[0].text, /Shampoo — R\$\s?40,00/);
+  assert.match(paid[0].text, /Shampoo \(Kérastase 250 ml\) — R\$\s?40,00/);
   assert.match(paid[0].text, /Pente \(2x\)/);
   assert.match(paid[0].text, /Total: R\$\s?56,00/);
   assert.match(paid[0].text, /✅ Pago \(Pix\)/);

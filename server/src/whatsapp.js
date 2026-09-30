@@ -259,7 +259,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
     }
     const tpl = s.whatsapp.templates.saleNew || DEFAULTS.whatsapp.templates.saleNew;
     const body = renderTemplate(tpl, {
-      nome: (client?.name || '').split(' ')[0], salao: t.name, produtos: o.lines.map(x => `• ${x.product}${x.qty > 1 ? ` (${x.qty}x)` : ''} — ${brl(valueOfSale(x))}`).join('\n'),
+      nome: (client?.name || '').split(' ')[0], salao: t.name, produtos: o.lines.map(x => `• ${x.product}${x.desc ? ` (${x.desc})` : ''}${x.qty > 1 ? ` (${x.qty}x)` : ''} — ${brl(valueOfSale(x))}`).join('\n'),
       total: brl(o.total), pagamento, pix: o.left > 0 ? s.whatsapp.pixKey || '' : '',
     });
     if (manual && !waNumber(client?.phone)) return 'nophone';

@@ -799,3 +799,5 @@ details.ready { padding: .7rem 1rem; }
 .mcal-d.closed:not(.busy) { background: repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(0,0,0,.04) 4px, rgba(0,0,0,.04) 8px); }
 .viewtoggle { grid-template-columns: repeat(3, 1fr) !important; display: grid; }
 .mcal-d i.pend { background: var(--warn); }
+.cl-desc { width: 100%; min-height: 2.4rem !important; padding: .25rem .6rem !important; font-size: .92rem; margin-top: .35rem; }
+.cl-desc-open { display: block; font-size: .85rem; padding: .15rem 0; }

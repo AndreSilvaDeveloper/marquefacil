@@ -46,6 +46,6 @@ export function installments(o) {
 
 // "Shampoo e Pente (2x)"
 export function productsText(o) {
-  const names = o.lines.map(s => `${s.product}${s.qty > 1 ? ` (${s.qty}x)` : ''}`);
+  const names = o.lines.map(s => `${s.product}${s.desc ? ` (${s.desc})` : ''}${s.qty > 1 ? ` (${s.qty}x)` : ''}`);
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} e ${names.at(-1)}` : names[0] || 'compra';
 }
