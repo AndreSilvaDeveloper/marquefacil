@@ -15,6 +15,9 @@ const app = buildApp({
   evolution: { url: env.EVOLUTION_URL, apikey: env.EVOLUTION_APIKEY },
   publicUrl: env.PUBLIC_URL || (env.DOMAIN ? `https://${env.DOMAIN}` : ''),
   logger: { level: env.LOG_LEVEL || 'info' },
+  // proteção contra bloqueio do WhatsApp: 8 a 20 s entre mensagens e 1,5 a 3,5 s de "digitando…"
+  sendGap: [Number(env.WA_GAP_MIN || 8000), Number(env.WA_GAP_MAX || 20000)],
+  typing: [Number(env.WA_TYPING_MIN || 1500), Number(env.WA_TYPING_MAX || 3500)],
 });
 
 startBackups(app.db, path.join(dataDir, 'backups'));

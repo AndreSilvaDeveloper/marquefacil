@@ -40,7 +40,8 @@ export function evolutionClient({ url, apikey, fetchImpl = fetch, timeoutMs = 15
     connect: (name, number) => call('GET', `/instance/connect/${enc(name)}${number ? '?number=' + enc(number) : ''}`),
     state: name => call('GET', `/instance/connectionState/${enc(name)}`),
     info: name => call('GET', `/instance/fetchInstances?instanceName=${enc(name)}`),
-    send: (name, number, text) => call('POST', `/message/sendText/${enc(name)}`, { number, text }),
+    // delay (ms): o WhatsApp mostra "digitando…" antes de a mensagem chegar
+    send: (name, number, text, delay = 0) => call('POST', `/message/sendText/${enc(name)}`, { number, text, ...(delay > 0 ? { delay } : {}) }),
     logout: name => call('DELETE', `/instance/logout/${enc(name)}`),
     remove: name => call('DELETE', `/instance/delete/${enc(name)}`),
   };
@@ -57,7 +58,22 @@ export function renderTemplate(tpl, vars) {
 const brl = v => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 /* ------------------------- envio das mensagens ------------------------- */
-export function createMessenger({ db, evo, publicUrl = '', log = console }) {
+/* Para o WhatsApp não bloquear o número: as mensagens de cada número saem uma por vez, com um intervalo
+   aleatório entre elas (sendGap) e "digitando…" antes de cada uma (typing). A primeira depois de um tempo
+   parado sai na hora; numa leva grande (lembretes, resumo do mês) elas vão saindo espaçadas. */
+export function createMessenger({ db, evo, publicUrl = '', log = console, sendGap = [0, 0], typing = [0, 0] }) {
+  const rand = ([a, b]) => a + Math.random() * Math.max(0, b - a);
+  const queues = new Map(), lastAt = new Map();
+  function queuedSend(inst, number, text) {
+    const run = (queues.get(inst) || Promise.resolve()).catch(() => {}).then(async () => {
+      const wait = (lastAt.get(inst) || 0) + rand(sendGap) - Date.now();
+      if (wait > 0) await new Promise(r => setTimeout(r, wait));
+      try { return await evo.send(inst, number, text, Math.round(rand(typing))); }
+      finally { lastAt.set(inst, Date.now()); }
+    });
+    queues.set(inst, run);
+    return run;
+  }
   const q = {
     tenant: db.prepare('SELECT id, name, slug, settings FROM tenants WHERE id = ?'),
     record: db.prepare('SELECT data FROM records WHERE tenant_id = ? AND coll = ? AND id = ? AND deleted = 0'),
@@ -132,7 +148,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
     if (!q.claim.run(row).changes && !q.reclaim.run(row).changes) return 'already';
     if (!phone) { q.doneBy.run('skipped', 'sem telefone', tenantId, apptId, key); return 'skip'; }
     try {
-      await evo.send(s.whatsapp.instance, phone, body);
+      await queuedSend(s.whatsapp.instance, phone, body);
       q.doneBy.run('sent', null, tenantId, apptId, key);
       return 'sent';
     } catch (e) {
@@ -150,7 +166,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
     const number = waNumber(phone);
     if (!number) fail(400, 'Telefone inválido. Exemplo: (11) 99999-9999');
     try {
-      await evo.send(s.whatsapp.instance, number, body);
+      await queuedSend(s.whatsapp.instance, number, body);
       q.log.run(tenantId, kind, number, '', body, 'sent', null, Date.now());
     } catch (e) {
       q.log.run(tenantId, kind, number, '', body, 'error', String(e.message).slice(0, 300), Date.now());
@@ -207,7 +223,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
     if (!q.claim.run(row).changes && !q.reclaim.run(row).changes) return 'already';
     if (!phone) { q.doneBy.run('skipped', 'sem telefone', t.id, apptId, kind); return 'skip'; }
     try {
-      await evo.send(s.whatsapp.instance, phone, body);
+      await queuedSend(s.whatsapp.instance, phone, body);
       q.doneBy.run('sent', null, t.id, apptId, kind);
       return 'sent';
     } catch (e) {

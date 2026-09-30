@@ -873,3 +873,21 @@ test('link: pedir vários serviços de uma vez (tempo somado, todos no pedido)',
   assert.equal(appt.serviceCustom, true);
   await app.close();
 });
+
+test('WhatsApp: mensagens saem uma por vez, espaçadas e com "digitando…"', async () => {
+  const evo = fakeEvolution();
+  const times = [];
+  const fetchImpl = async (url, opts) => { if (String(url).includes('/message/sendText/')) times.push(Date.now()); return evo.fetchImpl(url, opts); };
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl }, sendGap: [120, 120], typing: [900, 900] });
+  const call = await salon(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  await call('GET', '/api/whatsapp/status');
+  const tenantId = (await call('GET', '/api/me')).body.tenant.id;
+  await Promise.all([1, 2, 3].map(i => app.messenger.sendText(tenantId, '11977776666', `oi ${i}`)));
+  assert.equal(evo.sent.length, 3);
+  assert.deepEqual(evo.sent.map(m => m.text), ['oi 1', 'oi 2', 'oi 3'], 'na ordem');
+  assert.ok(evo.sent.every(m => m.delay === 900), 'mostra "digitando…"');
+  assert.ok(times[1] - times[0] >= 110 && times[2] - times[1] >= 110, 'espaçadas');
+  await app.close();
+});

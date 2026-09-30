@@ -58,6 +58,8 @@ export function buildApp({
   publicUrl = '',        // endereço do sistema, para links nas mensagens
   pushSender = null,     // para testes
   saleDelay = 4000,      // espera antes do comprovante de venda (os produtos da compra chegam juntos)
+  sendGap = [0, 0],      // intervalo aleatório entre mensagens do mesmo WhatsApp (ms)
+  typing = [0, 0],       // "digitando…" antes de cada mensagem (ms)
   logger = false,
 } = {}) {
   const db = openDb(dbFile);
@@ -70,7 +72,7 @@ export function buildApp({
   const limitAccess = rateLimiter({ max: 5, windowMs: 60 * 60 * 1000 });
 
   const evo = evolutionClient(evolution);
-  const messenger = createMessenger({ db, evo, publicUrl, log: app.log });
+  const messenger = createMessenger({ db, evo, publicUrl, log: app.log, sendGap, typing });
   app.decorate('messenger', messenger);
   const push = createPush({ db, sender: pushSender, log: app.log });
   app.decorate('push', push);

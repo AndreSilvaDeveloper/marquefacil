@@ -742,10 +742,11 @@ function weekStart(d) { const x = toDate(d); x.setDate(x.getDate() - ((x.getDay(
 function vAgenda(_, q) {
   const d = q.d || today();
   const t = today();
-  const view = q.v === 'semana' ? 'semana' : 'dia';
+  const view = q.v === 'semana' || q.v === 'mes' ? q.v : 'dia';
   const pend = pendingAppts();
-  const url = o => `#/agenda?${Object.entries({ d, v: view === 'semana' ? 'semana' : '', ...o }).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join('&')}`;
+  const url = o => `#/agenda?${Object.entries({ d, v: view === 'dia' ? '' : view, ...o }).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join('&')}`;
   const step = view === 'semana' ? 7 : 1;
+  const monthShift = n => { const x = toDate(d); return dstr(new Date(x.getFullYear(), x.getMonth() + n, 1)); };
 
   let body = '', title = '';
   if (view === 'dia') {
@@ -777,6 +778,36 @@ function vAgenda(_, q) {
         const tm = addDays(t, 1), l = db.appts.filter(a => a.date === tm && a.status !== 'cancelado').sort(byWhen);
         return `<a class="tomorrow" href="${url({ d: tm })}" data-nav><span>Amanhã</span><b>${l.length ? `${l.length} ${l.length === 1 ? 'horário' : 'horários'} · 1º às ${l[0].time}` : 'nada marcado'}</b><i>›</i></a>`;
       })() : ''}`;
+  } else if (view === 'mes') {
+    // Calendário do mês: quantos horários em cada dia; tocar abre o dia
+    const x0 = toDate(d), y0 = x0.getFullYear(), m0 = x0.getMonth();
+    const first = dstr(new Date(y0, m0, 1)), last = dstr(new Date(y0, m0 + 1, 0));
+    const start = weekStart(first), hours = salonHours();
+    const cells = [];
+    for (let day = start; day <= last || cells.length % 7; day = addDays(day, 1)) cells.push(day);
+    const monthAppts = db.appts.filter(a => a.date >= first && a.date <= last && a.status !== 'cancelado');
+    const mVal = round2(monthAppts.filter(a => a.status !== 'pendente').reduce((t0, a) => t0 + valueOf(a), 0));
+    const mPend = monthAppts.filter(a => a.status === 'pendente').length;
+    title = cap(new Date(y0, m0, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }));
+    body = `
+      ${monthAppts.length ? `<p class="csum" style="text-align:center"><b>${monthAppts.length}</b> ${monthAppts.length === 1 ? 'horário' : 'horários'} no mês${mVal ? ` · <b>${brl(mVal).replace(',00', '')}</b>` : ''}${mPend ? ` · <b style="color:var(--warn)">${mPend} ${mPend === 1 ? 'pedido' : 'pedidos'}</b>` : ''}</p>` : ''}
+      <div class="mcal">
+        ${['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'].map(w => `<span class="mcal-w">${w}</span>`).join('')}
+        ${cells.map(day => {
+          const inMonth = day >= first && day <= last;
+          if (!inMonth) return '<span class="mcal-d out"></span>';
+          const list = monthAppts.filter(a => a.date === day);
+          const closed = hours?.days && hours.days[toDate(day).getDay()] === null;
+          const pendN = list.filter(a => a.status === 'pendente').length;
+          return `<a class="mcal-d ${day === t ? 'today' : ''} ${day < t ? 'past' : ''} ${closed ? 'closed' : ''} ${list.length ? 'busy' : ''}" href="${url({ d: day, v: '' })}" data-nav aria-label="${fmtShort(day)}: ${list.length} ${list.length === 1 ? 'horário' : 'horários'}">
+            <b>${toDate(day).getDate()}</b>${list.length ? `<i class="${pendN ? 'pend' : ''}">${list.length}</i>` : ''}</a>`;
+        }).join('')}
+      </div>
+      <p class="muted" style="font-size:.85rem;text-align:center;margin:.5rem 0 0">O número mostra quantos horários tem no dia${mPend ? ' (laranja: tem pedido para confirmar)' : ''}. Toque no dia para ver.</p>
+      <div class="row" style="margin-top:1rem">
+        <a class="btn small" href="${url({ d: monthShift(-1) })}" data-nav>‹ ${cap(new Date(y0, m0 - 1, 1).toLocaleDateString('pt-BR', { month: 'long' }))}</a>
+        <a class="btn small" href="${url({ d: monthShift(1) })}" data-nav>${cap(new Date(y0, m0 + 1, 1).toLocaleDateString('pt-BR', { month: 'long' }))} ›</a>
+      </div>`;
   } else {
     const ws = weekStart(d);
     const hours = salonHours();
@@ -818,6 +849,7 @@ function vAgenda(_, q) {
       <div class="viewtoggle">
         <a href="${url({ d: t, v: '' })}" data-nav class="${view === 'dia' && d === t ? 'on' : ''}">Hoje</a>
         <a href="${url({ v: 'semana' })}" data-nav class="${view === 'semana' ? 'on' : ''}">Semana</a>
+        <a href="${url({ v: 'mes' })}" data-nav class="${view === 'mes' ? 'on' : ''}">Mês</a>
       </div>
       <label class="daypick ${view === 'dia' && d !== t ? 'other' : ''}">
         <span><b>${esc(title)}</b></span><em>📆 Trocar dia</em>
@@ -830,7 +862,7 @@ function vAgenda(_, q) {
         <a class="fab" href="#/agendar?d=${d}">📅 Agendar</a>
       </div>`,
     bind(el) {
-      const goDay = n => replaceTo(url({ d: addDays(d, n * step) }));
+      const goDay = n => replaceTo(url({ d: view === 'mes' ? monthShift(n) : addDays(d, n * step) }));
       $('#pick', el).onchange = e => e.target.value && replaceTo(url({ d: e.target.value }));
       el.addEventListener('click', e => {
         const nav = e.target.closest('a[data-nav]');

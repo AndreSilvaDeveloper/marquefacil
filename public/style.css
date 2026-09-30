@@ -784,3 +784,18 @@ details.ready { padding: .7rem 1rem; }
 .cl-name { flex: 1; min-width: 0; min-height: 2.5rem !important; padding: .3rem .6rem !important; font-weight: 700; }
 .cl-tag { display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex-wrap: wrap; margin-top: .3rem; font-size: .82rem; }
 .chip.mini-chip { min-height: 2rem; padding: .2rem .6rem; font-size: .82rem; }
+
+/* ---------- Agenda: mês ---------- */
+.mcal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .3rem; }
+.mcal-w { text-align: center; font-size: .75rem; font-weight: 700; color: var(--muted); padding-bottom: .1rem; }
+.mcal-d { position: relative; aspect-ratio: 1; border-radius: 10px; background: #fff; border: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; justify-content: center; text-decoration: none; color: var(--ink); min-width: 0; }
+.mcal-d.out { background: none; border: 0; }
+.mcal-d b { font-size: .95rem; }
+.mcal-d i { font-style: normal; font-size: .72rem; font-weight: 800; color: #fff; background: var(--brand); border-radius: 999px; min-width: 1.3rem; padding: 0 .3rem; line-height: 1.3rem; text-align: center; margin-top: .1rem; }
+.mcal-d em { position: absolute; top: .1rem; right: .15rem; font-style: normal; font-size: .7rem; }
+.mcal-d.busy { background: var(--brand-soft); border-color: transparent; }
+.mcal-d.today { border: 2px solid var(--brand); }
+.mcal-d.past { opacity: .5; }
+.mcal-d.closed:not(.busy) { background: repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(0,0,0,.04) 4px, rgba(0,0,0,.04) 8px); }
+.viewtoggle { grid-template-columns: repeat(3, 1fr) !important; display: grid; }
+.mcal-d i.pend { background: var(--warn); }
