@@ -46,8 +46,8 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
   const onlineServices = tenantId => all(tenantId, 'services')
     .filter(s => s.online !== false && s.name)
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
-    // a cliente vê só nome e descrição; o tempo fica aqui dentro para reservar a agenda
-    .map(s => ({ id: s.id, name: s.name, description: s.description || '', duration: s.duration || null }));
+    // a cliente vê nome, descrição e o "a partir de"; o tempo fica aqui dentro para reservar a agenda
+    .map(s => ({ id: s.id, name: s.name, description: s.description || '', duration: s.duration || null, priceFrom: s.priceFrom > 0 ? s.priceFrom : null }));
   function durationFor(tenantId, s, serviceId, dur) {
     const d = parseInt(dur, 10);
     if (!serviceId && d >= 5 && d <= 600) return { service: null, duration: d }; // remarcar: tempo do horário
@@ -64,7 +64,7 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
     const { t, s, now } = load(req.params.slug);
     return {
       name: t.name, slug: t.slug, enabled: s.booking.enabled, message: s.booking.message, approval: s.booking.requireApproval,
-      services: s.booking.enabled ? onlineServices(t.id).map(({ id, name, description }) => ({ id, name, description })) : [],
+      services: s.booking.enabled ? onlineServices(t.id).map(({ id, name, description, priceFrom }) => ({ id, name, description, priceFrom: priceFrom > 0 ? priceFrom : null })) : [],
       today: now.date,
     };
   });

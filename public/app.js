@@ -886,9 +886,21 @@ function busyList(date, exceptId) {
 }
 
 // Serviços mais usados
+// Serviços de um horário (pode ter vários) e quanto de cada valor é daquele serviço
+const svcNamesOf = a => (a.items?.length ? a.items.map(i => i.name) : a.service ? [a.service] : []);
+function svcShare(a, name) {
+  if (!a.items?.length) return norm(a.service) === norm(name) ? 1 : 0;
+  const it = a.items.find(i => norm(i.name) === norm(name));
+  if (!it) return 0;
+  const sum = a.items.reduce((t, i) => t + (i.price || 0), 0);
+  return sum > 0 ? (it.price || 0) / sum : 1 / a.items.length;
+}
+// Valor cobrado por um serviço dentro de um horário (o preço dele, ou a parte do total)
+const svcPriceIn = (a, name) => { const it = a.items?.find(i => norm(i.name) === norm(name)); return it?.price > 0 ? it.price : round2(valueOf(a) * svcShare(a, name)); };
+
 function topServices(n = 6) {
   const count = {};
-  for (const a of db.appts) if (a.service) count[norm(a.service)] = (count[norm(a.service)] || 0) + 1;
+  for (const a of db.appts) for (const n of svcNamesOf(a)) count[norm(n)] = (count[norm(n)] || 0) + 1;
   return [...db.services].sort((a, b) => (count[norm(b.name)] || 0) - (count[norm(a.name)] || 0) || byName(a, b)).slice(0, n);
 }
 
@@ -935,6 +947,10 @@ function vApptForm(_, q) {
   let pre = a.status === PRE;
   let pkgId = a.packageId || (q.pk && pkgOf(q.pk) ? q.pk : '');
   let method = paymentsOf(a).at(-1)?.m || '';
+  // Serviços do horário: [{ name, price }] (preço de cada é opcional); o total soma sozinho ou é digitado
+  const svcs = edit ? (a.items?.length ? a.items.map(i => ({ name: i.name, price: i.price ?? null })) : a.service ? [{ name: a.service, price: a.price ?? null }] : []) : [];
+  let manualTotal = edit && a.price != null && round2(svcs.reduce((t, x) => t + (x.price || 0), 0)) !== a.price;
+  let durAuto = !a.duration;
 
   return {
     title: edit ? 'Editar horário' : 'Novo horário', tab: 'agenda', back: true,
@@ -971,10 +987,21 @@ function vApptForm(_, q) {
         </div>
 
         <div class="field">
-          <label for="f-service">Serviço <span class="opt">(se quiser)</span></label>
+          <span class="lbl">Serviços <span class="opt">(se quiser — pode escolher mais de um)</span></span>
           ${topServices().length ? `<div class="chips mini" id="svc-chips" style="margin-bottom:.5rem">${topServices().map(sv => `<button type="button" class="chip" data-svc="${esc(sv.name)}">${esc(sv.name)}</button>`).join('')}</div>` : ''}
-          <div class="ac"><input type="text" id="f-service" value="${esc(a.service || '')}" placeholder="Ou escreva: Escova, Unha, Corte…" autocapitalize="sentences"><div class="sug" hidden></div></div>
+          <div class="searchadd">
+            <div class="ac" style="flex:1;min-width:0"><input type="text" id="f-service" placeholder="${topServices().length ? 'Ou escreva outro serviço' : 'Ex.: Escova, Unha, Corte…'}" autocapitalize="sentences" enterkeyhint="done"><div class="sug" hidden></div></div>
+            <button type="button" class="btn small main" id="svc-add" style="min-height:3.2rem">+ Pôr</button>
+          </div>
           <small id="h-service" class="hint"></small>
+          <div id="svc-list"></div>
+        </div>
+
+        <div class="field">
+          <label for="f-price">Valor total <span class="opt">(se quiser)</span></label>
+          <div class="money"><input type="text" id="f-price" inputmode="numeric" placeholder="0,00" value="${moneyVal(a.price)}"></div>
+          <small class="hint" id="price-hint"></small>
+          <button type="button" class="chip ${a.priceLater && !(a.price > 0) ? 'on' : ''}" id="f-later" style="margin-top:.5rem">🔎 Avaliar na hora</button>
         </div>
 
         <div class="field">
@@ -993,8 +1020,8 @@ function vApptForm(_, q) {
 
         <div id="pkgbox"></div>
 
-        <details class="more" ${edit && (a.price > 0 || a.priceLater || a.notes || paid) ? 'open' : ''}>
-          <summary>➕ Mais detalhes <small>${edit ? 'valor, pagamento, observação' : 'repetir, valor, pagamento, observação'}</small></summary>
+        <details class="more" ${edit && (a.notes || paid) ? 'open' : ''}>
+          <summary>➕ Mais detalhes <small>${edit ? 'pagamento, observação' : 'repetir, pagamento, observação'}</small></summary>
 
         ${edit ? '' : `<div class="field">
           <span class="lbl">Cliente fixa? Repetir este horário <span class="opt">(se quiser)</span></span>
@@ -1010,12 +1037,6 @@ function vApptForm(_, q) {
             <small class="hint" id="rep-hint"></small>
           </div>
         </div>`}
-
-        <div class="field">
-          <label for="f-price">Valor deste atendimento <span class="opt">(se quiser)</span></label>
-          <div class="money"><input type="text" id="f-price" inputmode="numeric" placeholder="0,00" value="${moneyVal(a.price)}"></div>
-          <button type="button" class="chip ${a.priceLater && !(a.price > 0) ? 'on' : ''}" id="f-later" style="margin-top:.5rem">🔎 Avaliar na hora</button>
-        </div>
 
         <div class="field">
           <span class="lbl">Já está pago?</span>
@@ -1066,7 +1087,7 @@ function vApptForm(_, q) {
           d ? esc(cap(fmtDate(d, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', ''))) : ask('dia'),
           t ? `${t}${dur ? '–' + hhmm(mins(t) + dur) : ''}` : ask('hora'),
         ];
-        if (iService.value.trim()) parts.push(esc(iService.value.trim()));
+        if (svcs.length) parts.push(esc(svcs.map(x => x.name).join(' + ')));
         $('#sum', el).innerHTML = parts.join(' · ');
       };
       const iDText = $('#f-dtext', el);
@@ -1110,27 +1131,60 @@ function vApptForm(_, q) {
       suggest(iClient, clientItems, () => {});
       bindClientPhone(el, iClient, $('#f-phone', el));
 
-      // Serviço já conhecido: completa tempo e valor (sem apagar o que ela já escreveu)
-      const fillFromService = s => {
-        if (s?.duration && !dur) { dur = s.duration; paintDur(); checkConflict(); }
-        paintSum();
-      };
+      // Serviços: vários por horário, cada um com preço (se quiser); o total soma sozinho e pode ser mudado
+      const svcSum = () => round2(svcs.reduce((t, x) => t + (x.price || 0), 0));
+      const pkgSvc = () => svcs.find(x => svcPackage(x.name))?.name || '';
       const onService = () => {
         nameHint($('#h-service', el), db.services, iService.value, '✨ Serviço novo — vai ficar salvo na lista', '✓ Serviço da sua lista');
       };
-      suggest(iService, serviceItems, it => {
-        const s = db.services.find(x => x.id === it.id);
-        if (s?.duration) dur = null; // escolheu da lista: usa o tempo do serviço
-        fillFromService(s);
-      }, { showOnEmpty: true });
+      function syncTotal() {
+        const sum = svcSum();
+        if (!manualTotal) iPrice.value = sum ? moneyVal(sum) : '';
+        const typed = parseMoney(iPrice.value);
+        $('#price-hint', el).innerHTML = svcs.length > 1 && sum && !manualTotal ? `Soma dos ${svcs.length} serviços. Pode mudar o total, se quiser.`
+          : manualTotal && sum && typed !== sum ? `Soma dos serviços: ${brl(sum)} · <button type="button" class="linkish" id="use-sum">usar a soma</button>` : '';
+        if (durAuto) { // tempo = soma dos tempos dos serviços da lista
+          const d = svcs.reduce((t, x) => t + (findByName(db.services, x.name)?.duration || 0), 0);
+          dur = d || null; paintDur(); checkConflict();
+        }
+        paintSum();
+      }
+      function paintSvcs() {
+        el.querySelectorAll('#svc-chips [data-svc]').forEach(b => b.classList.toggle('on', svcs.some(x => norm(x.name) === norm(b.dataset.svc))));
+        $('#svc-list', el).innerHTML = svcs.length ? `<div class="svc-list">${svcs.map((x, i) => {
+          const sv = findByName(db.services, x.name);
+          return `<div class="svc-line"><span class="grow"><b>${esc(x.name)}</b>${sv?.duration ? `<small>${fmtDur(sv.duration)}</small>` : ''}</span>
+            <div class="money small"><input type="text" inputmode="numeric" data-sprice="${i}" value="${moneyVal(x.price)}" placeholder="${sv?.priceFrom ? 'a partir ' + moneyVal(sv.priceFrom) : 'valor'}" aria-label="Valor de ${esc(x.name)}"></div>
+            <button type="button" class="rm" data-srm="${i}" aria-label="Tirar ${esc(x.name)}">✕</button></div>`;
+        }).join('')}</div>` : '';
+        syncTotal();
+      }
+      function addSvc(name) {
+        name = String(name || '').trim();
+        iService.value = ''; onService();
+        if (!name || svcs.some(x => norm(x.name) === norm(name))) return;
+        svcs.push({ name: findByName(db.services, name)?.name || niceName(name), price: null });
+        paintSvcs(); applyServicePackage();
+      }
+      suggest(iService, serviceItems, it => addSvc(db.services.find(x => x.id === it.id)?.name || it.label), { showOnEmpty: true });
       iService.addEventListener('input', onService);
-      iService.addEventListener('change', () => { onService(); fillFromService(findByName(db.services, iService.value)); applyServicePackage(); });
+      iService.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addSvc(iService.value); } });
+      $('#svc-add', el).onclick = () => addSvc(iService.value);
+      $('#svc-list', el).addEventListener('input', e => {
+        const i = e.target.dataset.sprice;
+        if (i === undefined) return;
+        svcs[+i].price = parseMoney(e.target.value);
+        if (svcs[+i].price > 0) $('#f-later', el).classList.remove('on');
+        syncTotal();
+      });
+      $('#svc-list', el).addEventListener('click', e => { const b = e.target.closest('[data-srm]'); if (b) { svcs.splice(+b.dataset.srm, 1); paintSvcs(); } });
+      $('#price-hint', el).addEventListener('click', e => { if (e.target.id === 'use-sum') { manualTotal = false; syncTotal(); } });
       // Serviço que é pacote: se a cliente já tem esse cronograma em andamento, usa ele; senão, já monta um novo
       function applyServicePackage() {
-        const cfg = svcPackage(iService.value);
+        const cfg = svcPackage(pkgSvc());
         if (!cfg || edit || pkgId || newPkg) return;
         const c = findByName(db.clients, iClient.value);
-        const going = c && clientPackages(c.id).find(p => pkgActive(p) && norm(p.service || p.name) === norm(iService.value));
+        const going = c && clientPackages(c.id).find(p => pkgActive(p) && norm(p.service || p.name) === norm(pkgSvc()));
         if (going && pkgLeftToBook(going) > 0) { pkgId = going.id; toast(`📦 Continuando o ${going.name}: ${pkgBefore(going) + pkgAppts(going).length + 1}ª sessão`); }
         else if (going) return; // já tem todas as sessões marcadas: horário avulso (ela escolhe se quiser)
         else { newPkg = { total: cfg.total, seq: 1, preset: true }; every = cfg.every || ''; }
@@ -1141,9 +1195,10 @@ function vApptForm(_, q) {
         const c = e.target.closest('.chip[data-m]');
         if (!c) return;
         dur = dur === +c.dataset.m ? null : +c.dataset.m;
+        durAuto = false;
         paintDur(); checkConflict(); paintSum();
       });
-      iDur.addEventListener('input', () => { const n = parseInt(iDur.value, 10); dur = n > 0 ? n : null; paintDur(); checkConflict(); paintSum(); });
+      iDur.addEventListener('input', () => { const n = parseInt(iDur.value, 10); dur = n > 0 ? n : null; durAuto = false; paintDur(); checkConflict(); paintSum(); });
 
       // Data digitada (dd/mm/aaaa, dd/mm ou dd/mm/aa) ou escolhida no calendário
       iDText.addEventListener('input', () => {
@@ -1174,13 +1229,9 @@ function vApptForm(_, q) {
       $('#svc-chips', el)?.addEventListener('click', e => {
         const b = e.target.closest('[data-svc]');
         if (!b) return;
-        iService.value = b.dataset.svc;
-        const sv = findByName(db.services, b.dataset.svc);
-        if (sv?.duration) dur = null;
-        iService.dispatchEvent(new Event('change'));
-        el.querySelectorAll('#svc-chips .chip').forEach(x => x.classList.toggle('on', x === b));
+        const i = svcs.findIndex(x => norm(x.name) === norm(b.dataset.svc));
+        if (i >= 0) { svcs.splice(i, 1); paintSvcs(); } else addSvc(b.dataset.svc);
       });
-      iService.addEventListener('input', paintSum);
       bindToggle2($('#f-paid', el), v => { paid = v; $('#f-method', el).hidden = !v; });
       $('#f-method', el).onclick = e => {
         const b = e.target.closest('[data-m]');
@@ -1248,7 +1299,7 @@ function vApptForm(_, q) {
           newPkg = null;
           pkgId = b.dataset.pk;
           const p = pkgOf(pkgId);
-          if (p && !iService.value.trim()) { iService.value = p.service || p.name; iService.dispatchEvent(new Event('change')); }
+          if (p && !svcs.length) addSvc(p.service || p.name);
           if (!pkgId) every = '';
           paintPkg(); paintSum();
           return;
@@ -1260,13 +1311,18 @@ function vApptForm(_, q) {
       iClient.addEventListener('input', paintPkg);
       paintPkg();
       // veio de "marcar a próxima sessão": o serviço é o do pacote
-      if (pkgId && !edit && !iService.value.trim()) { const p0 = pkgOf(pkgId); iService.value = p0.service || p0.name; iService.dispatchEvent(new Event('change')); }
-      $('#f-later', el).onclick = e => { const on = !e.currentTarget.classList.contains('on'); e.currentTarget.classList.toggle('on', on); if (on) iPrice.value = ''; };
-      iPrice.addEventListener('input', () => { if (iPrice.value.trim()) $('#f-later', el).classList.remove('on'); });
+      if (pkgId && !edit && !svcs.length) { const p0 = pkgOf(pkgId); addSvc(p0.service || p0.name); }
+      $('#f-later', el).onclick = e => { const on = !e.currentTarget.classList.contains('on'); e.currentTarget.classList.toggle('on', on); if (on) { iPrice.value = ''; manualTotal = true; syncTotal(); } };
+      // digitou o total: vale o que ela escreveu (apagou: volta a somar os serviços)
+      iPrice.addEventListener('input', () => {
+        if (iPrice.value.trim()) $('#f-later', el).classList.remove('on');
+        manualTotal = !!iPrice.value.trim();
+        syncTotal();
+      });
+      paintSvcs();
 
       paintDur(); checkConflict(); paintDay(); paintSum();
       if (cName) iClient.dispatchEvent(new Event('change'));
-      if (a.service) onService();
       if (!cName) setTimeout(() => iClient.focus(), 50);
 
       f.addEventListener('submit', e => {
@@ -1275,6 +1331,7 @@ function vApptForm(_, q) {
         const name = iClient.value.trim();
         if (!name) { err('Escreva o nome da cliente.'); iClient.focus(); return; }
         if (!iDate.value || parseDateBR(iDText.value) !== iDate.value) { err('Escreva o dia. Exemplo: 25/09/2026'); iDText.focus(); return; }
+        if (iService.value.trim()) addSvc(iService.value); // escreveu e não tocou em "+ Pôr"
         if (paid && !method && parseMoney(iPrice.value) > 0) $('details.more', el).open = true;
         const time = parseTime(iTime.value);
         if (!time) { err(iTime.value.trim() ? 'O horário não está certo. Exemplo: 12:10' : 'Escreva o horário. Exemplo: 12:10'); iTime.focus(); return; }
@@ -1285,25 +1342,29 @@ function vApptForm(_, q) {
         const c = findOrCreate(db.clients, name, { phone: '', notes: '' });
         const phone = $('#f-phone', el).value.trim();
         if (phone) c.phone = phone;
-        const svcName = iService.value.trim();
-        if (svcName) {
-          const s = findOrCreate(db.services, svcName, { duration: dur, description: '' });
-          if (!s.duration && dur) s.duration = dur;
+        // cada serviço fica salvo na lista (o tempo só vai para a lista quando é um serviço só)
+        for (const x of svcs) {
+          const s0 = findOrCreate(db.services, x.name, { duration: svcs.length === 1 ? dur : null, description: '' });
+          if (svcs.length === 1 && !s0.duration && dur) s0.duration = dur;
+          x.name = s0.name;
         }
+        const svcName = pkgSvc() || svcs[0]?.name || '';
         if (newPkg) {
-          const pk = { id: uid(), clientId: c.id, name: svcName ? findByName(db.services, svcName).name : 'Cronograma', total: newPkg.total,
-            doneBefore: newPkg.seq - 1, service: svcName ? findByName(db.services, svcName).name : '', notes: '', createdAt: Date.now() };
+          const pk = { id: uid(), clientId: c.id, name: svcName || 'Cronograma', total: newPkg.total,
+            doneBefore: newPkg.seq - 1, service: svcName, notes: '', createdAt: Date.now() };
           db.packages.push(pk);
           pkgId = pk.id;
         }
         const data = {
           clientId: c.id, date: iDate.value, time,
-          service: svcName ? findByName(db.services, svcName).name : '',
+          service: svcs.map(x => x.name).join(' + '),
+          items: svcs.length > 1 || svcs.some(x => x.price != null) ? svcs.map(x => ({ name: x.name, price: x.price })) : undefined,
           duration: dur, price, notes: $('#f-notes', el).value.trim(),
           priceLater: !(price > 0) && $('#f-later', el).classList.contains('on'),
           packageId: pkgId || undefined,
         };
         if (!data.packageId) delete data.packageId;
+        if (!data.items) delete data.items;
         // pagamento: "Já pagou" lança o que falta; "Ainda não" desfaz
         const setPay = x => {
           if (!paid) { if (isPaid(x) || x.paid) clearPayments(x); return; }
@@ -1314,6 +1375,7 @@ function vApptForm(_, q) {
         if (edit) {
           Object.assign(edit, data);
           if (!pkgId) delete edit.packageId;
+          if (!data.items) delete edit.items;
           if (edit.status === 'marcado' && pre) edit.status = PRE;
           else if (edit.status === PRE && !pre) edit.status = 'marcado';
           setPay(edit);
@@ -1364,7 +1426,8 @@ function vAppt(id) {
       <div class="hero appt-hero">
         <a class="big" href="#/cliente/${a.clientId}">${esc(clientName(a.clientId))} ›</a>
         <p class="when"><b>${cap(dayName(a.date))}</b>, ${fmtShort(a.date).slice(0, 5)} · <b>${a.time}</b>${a.duration ? ` até ${hhmm(apptEnd(a))}` : ''}</p>
-        ${a.service || pos ? `<p>💇 ${esc(a.service || pos.p.name)}${a.duration ? ' · ' + fmtDur(a.duration) : ''}${pos ? ` · <a href="#/cliente/${a.clientId}">📦 ${pos.n}ª sessão de ${pos.total}</a>` : ''}</p>` : ''}
+        ${a.items?.length > 1 ? `<div class="appt-items">${a.items.map(i => `<div><span>💇 ${esc(i.name)}</span><b>${i.price > 0 ? brl(i.price) : ''}</b></div>`).join('')}${a.duration ? `<small class="muted">⏱️ ${fmtDur(a.duration)}</small>` : ''}</div>`
+          : a.service || pos ? `<p>💇 ${esc(a.service || pos.p.name)}${a.duration ? ' · ' + fmtDur(a.duration) : ''}${pos ? ` · <a href="#/cliente/${a.clientId}">📦 ${pos.n}ª sessão de ${pos.total}</a>` : ''}</p>` : ''}
         <p class="status-line">${statusPill}${a.seriesId && !a.packageId ? ` <span class="badge">🔁 Fixa · ${seriesLabel(a.seriesEvery)}</span>` : ''}${a.source === 'online' && a.status !== 'pendente' ? ' <span class="badge">🌐 Pelo link</span>' : ''}</p>
         ${a.notes ? `<p class="muted">📝 ${esc(a.notes)}</p>` : ''}
         ${c?.notes ? `<p class="muted">👩 ${esc(c.notes)}</p>` : ''}
@@ -2350,6 +2413,11 @@ function vSell(_, q) {
             <button type="button" class="linkish" id="disc-x" style="color:var(--bad)">Tirar desconto</button>
           </div>
         </div>
+        <div class="field total-f" id="total-f" hidden>
+          <label for="f-total">Valor total da venda</label>
+          <div class="money"><input type="text" id="f-total" inputmode="numeric" placeholder="0,00"></div>
+          <small class="hint" id="total-hint"></small>
+        </div>
 
         <div class="field">
           <span class="lbl">Como pagou?</span>
@@ -2410,6 +2478,8 @@ function vSell(_, q) {
       $('#otherday', el).onclick = () => { $('#otherday', el).hidden = true; $('#dayfield', el).hidden = false; $('#f-date', el).focus(); };
 
       let paintedClient = null;
+      $('#f-total', el).addEventListener('input', e => { manualTotal = e.target.value.trim() ? parseMoney(e.target.value) : null; paint(); });
+      $('#total-f', el).addEventListener('click', e => { if (e.target.id === 'use-sum') { manualTotal = null; $('#f-total', el).value = ''; paint(); } });
       // desconto: em R$ ou %
       $('#disc-open', el).onclick = () => { $('#disc-open', el).hidden = true; $('#disc-f', el).hidden = false; $('#disc-v', el).focus(); };
       $('#disc-v', el).addEventListener('input', e => { disc.v = parseMoney(e.target.value) || 0; paint(); });
@@ -2452,7 +2522,9 @@ function vSell(_, q) {
       const gross = () => round2(cart.reduce((t, x) => t + (x.price || 0) * x.qty, 0));
       const disc = { v: 0, pct: false };
       const discAmount = () => Math.min(gross(), disc.pct ? round2(gross() * Math.min(disc.v, 100) / 100) : round2(disc.v));
-      const total = () => Math.max(0, round2(gross() - discAmount()));
+      let manualTotal = null; // total digitado à mão (vale mais que a soma)
+      const autoTotal = () => Math.max(0, round2(gross() - discAmount()));
+      const total = () => (manualTotal != null ? manualTotal : autoTotal());
       const planDates = () => (later.mode === 'uma' ? [later.first] : seriesByCount(later.first, later.every, later.n));
       // Prévia das parcelas (mesma conta de installmentsOf)
       function paintLater() {
@@ -2490,8 +2562,8 @@ function vSell(_, q) {
               </div>
             </div>`;
           }).join('')}
-          ${discAmount() > 0 ? `<div class="cart-sub"><span>Subtotal</span><span>${brl(gross())}</span></div><div class="cart-sub" style="color:var(--ok)"><span>🏷️ Desconto${disc.pct ? ` (${disc.v}%)` : ''}</span><span>− ${brl(discAmount())}</span></div>` : ''}
-          <div class="cart-total"><span>Total</span><b>${brl(total())}</b></div></div>`
+          <div class="cart-sub"><span>Soma dos produtos</span><span>${gross() ? brl(gross()) : '—'}</span></div>
+          ${discAmount() > 0 ? `<div class="cart-sub" style="color:var(--ok)"><span>🏷️ Desconto${disc.pct ? ` (${disc.v}%)` : ''}</span><span>− ${brl(discAmount())}</span></div>` : ''}</div>`
           : '<p class="muted" style="text-align:center">Toque nos produtos acima para pôr na venda.</p>';
         el.querySelectorAll('#pay [data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === method));
         // quadrados dos produtos: quantos já estão na venda
@@ -2501,6 +2573,15 @@ function vSell(_, q) {
           const i = $('.incart', b); i.hidden = !q; i.textContent = q;
         });
         $('#disc-box', el).hidden = !cart.length;
+        // total: soma sozinho (com o desconto); se ela digitou, vale o que ela escreveu
+        $('#total-f', el).hidden = !cart.length;
+        const fT = $('#f-total', el);
+        if (manualTotal == null && document.activeElement !== fT) fT.value = autoTotal() ? moneyVal(autoTotal()) : '';
+        const noPrice = cart.some(x => x.price == null);
+        $('#total-hint', el).innerHTML = manualTotal != null && gross() && manualTotal !== autoTotal()
+          ? `Soma dos produtos: ${brl(autoTotal())} · <button type="button" class="linkish" id="use-sum">usar a soma</button>`
+          : noPrice && manualTotal == null ? 'Coloque o preço de cada produto ou escreva aqui o valor total.'
+          : cart.length > 1 ? 'Soma dos produtos. Pode mudar o total, se quiser.' : '';
         // telefone só para cliente nova; troco só no dinheiro
         const nm = iClient.value.trim();
         // cliente conhecida: se deve alguma coisa, e o que levou da última vez
@@ -2577,7 +2658,7 @@ function vSell(_, q) {
         const name = iClient.value.trim();
         if (!counter && !name) return err('Escreva o nome da cliente ou toque em "Balcão".');
         if (!cart.length) return err('Ponha pelo menos um produto.');
-        if (cart.some(x => x.price == null)) return err('Coloque o preço de todos os produtos.');
+        if (cart.some(x => x.price == null) && manualTotal == null) return err('Coloque o preço de cada produto ou escreva o valor total.');
         if (!method) return err('Toque em como pagou (Pix, Dinheiro, Cartão ou Depois / parcelado).');
         if (method === 'depois') {
           if (counter) return err('Para vender a prazo, escreva o nome da cliente (não pode ser balcão).');
@@ -2595,21 +2676,23 @@ function vSell(_, q) {
         const date = $('#f-date', el).value || today();
         const plan = method === 'depois' ? { entrada: round2(later.entrada || 0), dates: planDates() } : null;
         const orderId = cart.length > 1 || plan ? uid() : null;
-        const off = discAmount(), g = gross();
-        let offLeft = off;
-        const shares = cart.map((x, i) => {
-          if (i === cart.length - 1) return round2(offLeft);
-          const sh = g ? round2(off * (x.price * x.qty) / g) : 0;
-          offLeft = round2(offLeft - sh);
-          return sh;
+        // quanto do total fica em cada produto: pelo valor de cada um (ou igual por unidade, se algum ficou sem preço)
+        const tt = total(), byPrice = cart.every(x => x.price != null) && gross() > 0;
+        const weight = x => (byPrice ? x.price * x.qty : x.qty), wsum = cart.reduce((t, x) => t + weight(x), 0);
+        let rest = tt;
+        const lineTotals = cart.map((x, i) => {
+          if (i === cart.length - 1) return round2(rest);
+          const v = wsum ? round2(tt * weight(x) / wsum) : 0;
+          rest = round2(rest - v);
+          return v;
         });
         for (const [xi, x] of cart.entries()) {
           const p = findOrCreate(db.products, x.name, { price: x.price });
           if (!p.price && x.price) p.price = x.price;
           moveStock(p.name, -x.qty);
-          const sale = { id: uid(), createdAt: Date.now(), clientId, product: p.name, qty: x.qty, unitPrice: x.price,
-            total: round2(x.price * x.qty - shares[xi]), date, paid: false, payments: [] };
-          if (shares[xi] > 0) sale.discount = shares[xi];
+          const sale = { id: uid(), createdAt: Date.now(), clientId, product: p.name, qty: x.qty, unitPrice: x.price ?? round2(lineTotals[xi] / x.qty),
+            total: lineTotals[xi], date, paid: false, payments: [] };
+          if (x.price != null && round2(x.price * x.qty - lineTotals[xi]) > 0) sale.discount = round2(x.price * x.qty - lineTotals[xi]);
           if (orderId) sale.orderId = orderId;
           if (fromAppt && fromAppt.clientId === clientId) sale.apptId = fromAppt.id;
           if (plan) sale.plan = plan;
@@ -3112,7 +3195,8 @@ function vFin(_, q) {
     const doneAppts = monthAppts.filter(a => a.status === 'feito' || (a.status === 'marcado' && isPast(a)));
     const paidAppts = doneAppts.filter(a => paidOf(a) > 0);
     const ticket = paidAppts.length ? round2(paidAppts.reduce((t, a) => t + paidOf(a), 0) / paidAppts.length) : 0;
-    const svcRank = group(received.filter(p => p.k === 'a'), p => p.it.service || 'Sem serviço');
+    // vários serviços no mesmo horário: o valor é dividido entre eles
+    const svcRank = group(received.filter(p => p.k === 'a').flatMap(p => (svcNamesOf(p.it).length ? svcNamesOf(p.it) : ['Sem serviço']).map(n => ({ ...p, v: n === 'Sem serviço' ? p.v : p.v * svcShare(p.it, n), name: n }))), p => p.name);
     const cliRank = group(received.filter(p => p.it.clientId), p => clientName(p.it.clientId));
     const tips = [];
     if (fixedTodo.length) tips.push(`<a class="card line" href="${url({ f: 'saiu' })}" data-f><div class="grow"><b>📌 ${plural(fixedTodo.length, 'despesa fixa para lançar', 'despesas fixas para lançar')}</b><span>${fixedTodo.map(e => esc(e.desc || e.cat)).join(', ')} · ${brl(sumBy(fixedTodo, e => e.amount))}</span></div><span class="muted">›</span></a>`);
@@ -3664,9 +3748,9 @@ const KINDS = {
 };
 
 // Atendimentos de um serviço (pelo nome): feitos = 'feito' ou marcado que já passou
-const apptsOfService = sv => db.appts.filter(a => a.status !== 'cancelado' && norm(a.service) === norm(sv.name));
+const apptsOfService = sv => db.appts.filter(a => a.status !== 'cancelado' && svcShare(a, sv.name) > 0);
 const doneOfService = (sv, month = '') => apptsOfService(sv).filter(a => (a.status === 'feito' || (a.status === 'marcado' && isPast(a))) && (!month || a.date.startsWith(month)));
-const earnedOfService = (sv, month = '') => round2(apptsOfService(sv).reduce((t, a) => t + paymentsOf(a).filter(p => !month || p.d?.startsWith(month)).reduce((u, p) => u + (p.v || 0), 0), 0));
+const earnedOfService = (sv, month = '') => round2(apptsOfService(sv).reduce((t, a) => t + svcShare(a, sv.name) * paymentsOf(a).filter(p => !month || p.d?.startsWith(month)).reduce((u, p) => u + (p.v || 0), 0), 0));
 
 let servicesSearch = '';
 const SERVICE_FILTERS = {
@@ -3697,7 +3781,7 @@ function vServices(kind, q) {
       }).join('')}</div>` : ''}
       <div class="list clist" id="slist">${list.length ? list.map(sv => {
         const n = doneOfService(sv, month).length;
-        const info = [sv.duration ? '⏱️ ' + fmtDur(sv.duration) : '', n ? `${n}× no mês` : ''].filter(Boolean).join(' · ') || 'Nenhum este mês';
+        const info = [sv.priceFrom ? `a partir de ${brl(sv.priceFrom).replace(',00', '')}` : '', sv.duration ? '⏱️ ' + fmtDur(sv.duration) : '', n ? `${n}× no mês` : ''].filter(Boolean).join(' · ') || 'Nenhum este mês';
         const on = sv.online !== false;
         return `<div class="crow prow" data-name="${esc(norm(sv.name + ' ' + (sv.description || '')))}">
           <a class="crow-main" href="#/item/services?id=${sv.id}">
@@ -3860,7 +3944,9 @@ function vItemForm(kind, q) {
         <div class="field"><label for="cost">Quanto você paga (custo) <span class="opt">(se quiser)</span></label>
           <div class="money"><input type="text" id="cost" inputmode="numeric" placeholder="0,00" value="${moneyVal(it?.cost)}"></div>
           <small class="hint" id="margin"></small></div>` : `
-        <p class="muted">💰 O valor é colocado em cada atendimento (muda conforme o serviço e a cliente).</p>`}
+        <div class="field"><label for="pf">💰 Valor a partir de <span class="opt">(se quiser — ex.: Escova a partir de R$ 40)</span></label>
+          <div class="money"><input type="text" id="pf" inputmode="numeric" placeholder="0,00" value="${moneyVal(it?.priceFrom)}"></div>
+          <small class="hint">No link, a cliente vê "a partir de" com o aviso de que o valor final é definido na avaliação presencial. O valor de cada atendimento você coloca na hora.</small></div>`}
         ${!K.withDur ? `
         <div class="field"><label for="st">Quantos tem em estoque? <span class="opt">(se quiser controlar)</span></label>
           <input type="number" id="st" inputmode="numeric" min="0" step="1" value="${hasStock(it) ? it.stock : ''}" placeholder="Deixe vazio para não controlar">
@@ -3872,8 +3958,8 @@ function vItemForm(kind, q) {
         ${K.withDur && it ? (() => {
           const done = doneOfService(it).sort(byWhen).reverse();
           if (!done.length) return '<p class="muted" style="margin-top:1.5rem">Este serviço ainda não foi feito.</p>';
-          const charged = done.filter(a => valueOf(a) > 0);
-          const avg = charged.length ? round2(charged.reduce((t, a) => t + valueOf(a), 0) / charged.length) : 0;
+          const charged = done.filter(a => svcPriceIn(a, it.name) > 0);
+          const avg = charged.length ? round2(charged.reduce((t, a) => t + svcPriceIn(a, it.name), 0) / charged.length) : 0;
           const durs = done.filter(a => a.duration > 0);
           const avgDur = durs.length ? Math.round(durs.reduce((t, a) => t + a.duration, 0) / durs.length / 5) * 5 : 0;
           const seen = new Set(), recent = [];
@@ -3882,12 +3968,12 @@ function vItemForm(kind, q) {
             <div class="stats">
               <div class="stat"><span>Feito (total)</span><b>${done.length}×</b></div>
               <div class="stat"><span>Este mês</span><b>${doneOfService(it, today().slice(0, 7)).length}×</b></div>
-              <div class="stat"><span>Média cobrada</span><b>${avg ? brl(avg) : '—'}</b><small class="muted">${charged.length ? `de ${brl(Math.min(...charged.map(a => valueOf(a))))} a ${brl(Math.max(...charged.map(a => valueOf(a))))}` : ''}</small></div>
+              <div class="stat"><span>Média cobrada</span><b>${avg ? brl(avg) : '—'}</b><small class="muted">${charged.length ? `de ${brl(Math.min(...charged.map(a => svcPriceIn(a, it.name))))} a ${brl(Math.max(...charged.map(a => svcPriceIn(a, it.name))))}` : ''}</small></div>
               <div class="stat"><span>Já rendeu</span><b>${brl(earnedOfService(it))}</b></div>
               ${avgDur ? `<div class="stat"><span>Tempo médio marcado</span><b>${fmtDur(avgDur)}</b></div>` : ''}
             </div>
             <h2>👩 Últimas clientes</h2>
-            <div class="list">${recent.map(a => `<a class="card line" href="#/cliente/${a.clientId}">${avatar(clientName(a.clientId))}<div class="grow"><b>${esc(clientName(a.clientId))}</b><span>${fmtShort(a.date)}${valueOf(a) > 0 ? ' · ' + brl(valueOf(a)) : ''}</span></div><span class="muted">›</span></a>`).join('')}</div>`;
+            <div class="list">${recent.map(a => `<a class="card line" href="#/cliente/${a.clientId}">${avatar(clientName(a.clientId))}<div class="grow"><b>${esc(clientName(a.clientId))}</b><span>${fmtShort(a.date)}${svcPriceIn(a, it.name) > 0 ? ' · ' + brl(svcPriceIn(a, it.name)) : ''}</span></div><span class="muted">›</span></a>`).join('')}</div>`;
         })() : ''}
         ${!K.withDur && it ? (() => {
           const sales = salesOfProduct(it).sort((a, b) => b.date.localeCompare(a.date));
@@ -3934,6 +4020,9 @@ function vItemForm(kind, q) {
           data.online = $('#online .yes', el).classList.contains('on');
           data.description = $('#ds', el).value.trim();
           data.price = null; // valor é por atendimento
+          const pf = $('#pf', el).value, pfv = parseMoney(pf);
+          if (pf.trim() && pfv == null) { $('#err', el).innerHTML = '<div class="error">O valor "a partir de" não está certo. Exemplo: 40,00</div>'; return; }
+          data.priceFrom = pfv > 0 ? pfv : null;
           data.package = isPkg ? { total: pk.total, every: pk.every } : null;
         } else {
           const pv = $('#p', el).value, price = parseMoney(pv);

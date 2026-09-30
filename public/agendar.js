@@ -84,12 +84,14 @@ function frame(title, body, { back = true } = {}) {
     ${back && st.step > firstStep() ? '<button type="button" class="btn" id="back">‹ Voltar</button>' : ''}`;
 }
 
+const money = v => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(',00', '');
+
 /* ------------------------------ passos ------------------------------ */
 function stepService() {
   return frame('Qual serviço você quer?', `
     <div class="pick" id="services">
       ${st.info.services.map(s => `<button type="button" data-id="${s.id}" class="${st.service?.id === s.id ? 'on' : ''}">${esc(s.name)}
-        ${s.description ? `<small>${esc(s.description)}</small>` : ''}</button>`).join('')}
+        ${s.description ? `<small>${esc(s.description)}</small>` : ''}${s.priceFrom ? `<small class="from">a partir de ${money(s.priceFrom)}*</small>` : ''}</button>`).join('')}
       <button type="button" data-id="" class="${st.writing ? 'on' : ''}">✏️ Outro serviço (escrever)</button>
     </div>
     ${st.writing ? `
@@ -99,7 +101,7 @@ function stepService() {
         <small class="hint">O salão confirma se faz esse serviço.</small></div>
       <button class="btn main" type="submit">Continuar ›</button>
     </form>` : ''}
-    <p class="price-note">💬 O valor varia conforme o serviço e cada cliente. O salão informa o valor quando confirmar o seu horário.</p>`, { back: false })
+    <p class="price-note">${st.info.services.some(s => s.priceFrom) ? '* <b>Valores "a partir de":</b> o preço final pode mudar de acordo com o seu perfil (tipo, comprimento e volume do cabelo, por exemplo) e é definido na <b>avaliação presencial</b> com a profissional.' : '💬 O valor varia conforme o serviço e cada cliente. O salão informa o valor quando confirmar o seu horário.'}</p>`, { back: false })
     + `<button type="button" class="btn" id="to-meus" style="margin-top:1rem">📋 ${meusToken() ? 'Meus horários — ver ou remarcar' : 'Já tenho horário — ver ou remarcar'}</button>`;
 }
 
@@ -157,6 +159,7 @@ function stepData() {
         <input type="tel" id="phone" autocomplete="tel" placeholder="(11) 99999-9999" value="${esc(remembered.phone || '')}"></div>
       <div class="field"><label for="notes">Observação <span class="opt">(se quiser)</span></label>
         <textarea id="notes" placeholder="Algo que a profissional precisa saber?"></textarea></div>
+      ${st.service?.priceFrom ? `<p class="price-note" style="margin-top:0">💰 <b>${esc(st.service.name)}: a partir de ${money(st.service.priceFrom)}.</b> O valor final é definido na avaliação presencial, de acordo com o seu perfil.</p>` : ''}
       <input class="hp" type="text" id="website" tabindex="-1" autocomplete="off" aria-hidden="true">
       <button class="btn main" type="submit">${submitLabel()}</button>
     </form>`);

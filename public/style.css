@@ -764,3 +764,18 @@ details.ready { padding: .7rem 1rem; }
 .disc-f { background: var(--ok-soft); border-radius: 12px; padding: .7rem .8rem; }
 .disc-f .money { flex: 1; }
 .cart-sub { display: flex; justify-content: space-between; padding: .35rem 0 0; font-size: .95rem; color: var(--muted); }
+
+/* ---------- Horário: vários serviços ---------- */
+.svc-list { margin-top: .6rem; background: #fff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.svc-line { display: flex; align-items: center; gap: .5rem; padding: .45rem .6rem .45rem .8rem; border-top: 1px solid var(--line); }
+.svc-line:first-child { border-top: 0; }
+.svc-line .grow { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.svc-line .grow small { color: var(--muted); font-size: .8rem; }
+.svc-line .money.small { flex: 0 0 8.5rem; }
+.svc-line .money.small input { min-height: 2.5rem; padding: .2rem .5rem .2rem 2.2rem; font-size: .95rem; }
+.svc-line .money.small::before { left: .6rem; font-size: .85rem; }
+.total-f input { font-size: 1.4rem; font-weight: 800; }
+.svc-line .money.small { width: 8.5rem; }
+.svc-line .money.small input { width: 100%; }
+.appt-items { margin: .3rem 0; }
+.appt-items > div { display: flex; justify-content: space-between; gap: .5rem; padding: .15rem 0; }

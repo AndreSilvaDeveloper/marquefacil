@@ -100,7 +100,7 @@ test('link público: serviços, dias, horários e agendar', async () => {
   const info = await pub('GET', '/api/public/studio-ana');
   assert.equal(info.body.name, 'Studio Ana');
   assert.deepEqual(info.body.services.map(s => s.name), ['Escova'], 'serviço fora do link não aparece');
-  assert.deepEqual(Object.keys(info.body.services[0]).sort(), ['description', 'id', 'name'], 'cliente não vê valor nem tempo');
+  assert.deepEqual(Object.keys(info.body.services[0]).sort(), ['description', 'id', 'name', 'priceFrom'], 'cliente vê só o "a partir de" (nada de tempo nem preço fechado)');
   assert.equal((await pub('GET', '/api/public/nao-existe')).status, 404);
 
   const days = (await pub('GET', '/api/public/studio-ana/days?service=s1')).body.days;
@@ -828,5 +828,27 @@ test('mandar o comprovante de novo pelo botão', async () => {
   assert.equal((await call('POST', '/api/sales/v1/receipt')).status, 200);
   assert.equal((await call('POST', '/api/sales/v1/receipt')).status, 200, 'pode mandar de novo');
   assert.equal(evo.sent.filter(m => /foi registrada/.test(m.text)).length, 2);
+  await app.close();
+});
+
+test('link mostra o "a partir de" do serviço; horário com vários serviços manda todos na mensagem', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl } });
+  const call = await salon(app);
+  const pub = client(app);
+  await call('POST', '/api/sync', { changes: [{ coll: 'services', id: 's3', data: { name: 'Mechas', duration: 120, priceFrom: 150 } }] });
+  const info = (await pub('GET', '/api/public/studio-ana')).body;
+  assert.equal(info.services.find(x => x.name === 'Mechas').priceFrom, 150);
+  assert.equal(info.services.find(x => x.name === 'Escova').priceFrom, null);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  await call('GET', '/api/whatsapp/status');
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'c1', data: { name: 'Maria Souza', phone: '(11) 97777-6666' } },
+    { coll: 'appts', id: 'm1', data: { clientId: 'c1', date: nextWeekday(3), time: '10:00', status: 'marcado', service: 'Escova + Hidratação', items: [{ name: 'Escova', price: 50 }, { name: 'Hidratação', price: 30 }], price: 70, createdAt: Date.now() } },
+  ] });
+  await new Promise(r => setTimeout(r, 60));
+  assert.match(evo.sent.at(-1).text, /Escova \+ Hidratação/);
+  assert.match(evo.sent.at(-1).text, /Valor: R\$\s?70,00/);
   await app.close();
 });
