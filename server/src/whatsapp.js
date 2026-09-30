@@ -101,6 +101,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
       hora: appt.time,
       servico: appt.service || '',
       valor: appt.price > 0 ? brl(appt.price) : appt.priceLater ? 'avaliado na hora do atendimento' : '',
+      pix: readSettings(tenant.settings).whatsapp.pixKeyService || '', // chave Pix dos serviços
       sinal: appt.price > 0 ? brl(Math.round(appt.price * (readSettings(tenant.settings).whatsapp.depositPercent / 100) * 100) / 100) : '',
       pacote: packageLabel(tenant.id, appt),
       link: base ? `${base.replace(/\/+$/, '')}/${tenant.slug}` : '',
@@ -122,7 +123,9 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
     const tpl = s.whatsapp.templates[kind] || DEFAULTS.whatsapp.templates[kind];
     const vars = varsFor(tenant, appt, client, kind);
     // horário de pacote: a cliente sempre fica sabendo em qual sessão está, mesmo se o texto foi editado sem {pacote}
-    const tplFinal = vars.pacote && ['confirm', 'reminder', 'prereserve'].includes(kind) && !tpl.includes('{pacote}') ? `${tpl}\n📦 {pacote}` : tpl;
+    let tplFinal = vars.pacote && ['confirm', 'reminder', 'prereserve'].includes(kind) && !tpl.includes('{pacote}') ? `${tpl}\n📦 {pacote}` : tpl;
+    // pré-reserva: a cliente precisa da chave para pagar o sinal, mesmo se o texto foi editado sem {pix}
+    if (kind === 'prereserve' && vars.pix && !tplFinal.includes('{pix}')) tplFinal += '\n🔑 Pix para o sinal: {pix}';
     const body = renderTemplate(tplFinal, vars);
     const row = { tenantId, apptId, kind: key, phone, name: client?.name || '', body, now: Date.now() };
 

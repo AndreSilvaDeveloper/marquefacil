@@ -4110,14 +4110,17 @@ function vWhats(_, q = {}) {
             <small class="hint">No máximo 3 dias antes.</small></div>
           <div class="field"><span class="lbl">🛍️ Comprovante da venda para a cliente <span class="opt">(logo depois de lançar; a prazo vai com as parcelas)</span></span>${toggle2('saleConfirm', w.saleConfirm !== false, '✓ Mandar', 'Não')}</div>
           <div class="field"><span class="lbl">🛍️ Cobrar compras a prazo <span class="opt">(lembrete no dia do vencimento e resumo no 1º dia útil do mês, às 9h)</span></span>${toggle2('saleReminders', w.saleReminders !== false, '✓ Mandar', 'Não')}</div>
-          <div class="field"><label for="pix">Chave Pix <span class="opt">(vai nas cobranças — se quiser)</span></label>
-            <input type="text" id="pix" value="${esc(w.pixKey || '')}" placeholder="CPF, telefone, e-mail ou chave aleatória"></div>
+          <div class="field"><label for="pix-s">💇 Chave Pix dos serviços <span class="opt">(vai na pré-reserva, para o sinal — se quiser)</span></label>
+            <input type="text" id="pix-s" value="${esc(w.pixKeyService || '')}" placeholder="CPF, telefone, e-mail ou chave aleatória"></div>
+          <div class="field"><label for="pix">🛍️ Chave Pix dos produtos <span class="opt">(vai nas mensagens de venda — se quiser)</span></label>
+            <input type="text" id="pix" value="${esc(w.pixKey || '')}" placeholder="CPF, telefone, e-mail ou chave aleatória">
+            <small class="hint">Se for a mesma chave, escreva nas duas.</small></div>
           <div class="field"><span class="lbl">Também me avisar pelo WhatsApp quando chegar pedido</span>${toggle2('notifyOwner', w.notifyOwner, '✓ Avisar', 'Não')}</div>
           <div class="field"><label for="own">Número que recebe o aviso <span class="opt">(vazio = o próprio WhatsApp conectado)</span></label>
             <input type="tel" id="own" placeholder="(11) 99999-9999" value="${esc(w.ownerPhone || '')}"></div>
 
           <details id="textos" ${openTexts ? 'open' : ''}><summary class="btn">✏️ Mudar o texto das mensagens</summary>
-            <p class="muted">Pode usar: {nome} (só o primeiro nome), {dia}, {hora}, {servico}, {valor}, {sinal}, {pacote}, {salao}, {telefone}, {meus_horarios}. Linha com campo vazio (ex.: sem serviço) some sozinha.</p>
+            <p class="muted">Pode usar: {nome} (só o primeiro nome), {dia}, {hora}, {servico}, {valor}, {sinal}, {pix} (chave dos serviços), {pacote}, {salao}, {telefone}, {meus_horarios}. Linha com campo vazio (ex.: sem serviço) some sozinha.</p>
             <div class="field"><label for="t-confirm">Confirmação</label><textarea id="t-confirm" rows="6">${esc(w.templates.confirm)}</textarea></div>
             <div class="field"><label for="t-change">Horário mudou <span class="opt">(quando você muda o dia ou a hora de um horário já marcado)</span></label><textarea id="t-change" rows="6">${esc(w.templates.change)}</textarea></div>
             <div class="field"><label for="t-reminder">Lembrete</label><textarea id="t-reminder" rows="6">${esc(w.templates.reminder)}</textarea></div>
@@ -4159,7 +4162,7 @@ function vWhats(_, q = {}) {
             depositPercent: +$('#dep', box).value,
             templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value, decline: $('#t-decline', box).value, prereserve: $('#t-prereserve', box).value, change: $('#t-change', box).value,
               saleDue: $('#t-saleDue', box).value, saleMonth: $('#t-saleMonth', box).value, saleNew: $('#t-saleNew', box).value },
-            pixKey: $('#pix', box).value.trim(),
+            pixKey: $('#pix', box).value.trim(), pixKeyService: $('#pix-s', box).value.trim(),
           } }));
           toast('Salvo ✓');
           $('#err', box).innerHTML = '';

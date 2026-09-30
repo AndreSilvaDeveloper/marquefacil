@@ -29,7 +29,8 @@ export const DEFAULTS = {
     reminderMinutes: 1440,  // lembrete X minutos antes (0 = não manda; até 3 dias)
     saleConfirm: true,      // comprovante para a cliente logo depois de lançar a venda (com as parcelas, se for a prazo)
     saleReminders: true,    // compras pagas depois: resumo no 1º dia útil do mês e lembrete no vencimento
-    pixKey: '',             // chave Pix que vai nas cobranças (vazio = a linha some)
+    pixKey: '',             // chave Pix dos produtos: vai nas mensagens de venda (vazio = a linha some)
+    pixKeyService: '',      // chave Pix dos serviços: vai na pré-reserva (sinal) e onde o texto tiver {pix}
     notifyOwner: true,      // avisar a profissional de agendamento pelo link
     ownerPhone: '',         // número que recebe o aviso (vazio = o próprio número conectado)
     templates: {
@@ -127,6 +128,7 @@ export function updateSettings(current, input) {
     if (w.depositPercent !== undefined) s.whatsapp.depositPercent = int(w.depositPercent, 0, 100, 'sinal');
     for (const k of ['confirmOnline', 'confirmManual', 'notifyOwner', 'declineMessage', 'prereserveMessage', 'saleReminders', 'saleConfirm']) if (w[k] !== undefined) s.whatsapp[k] = bool(w[k]);
     if (w.pixKey !== undefined) s.whatsapp.pixKey = text(w.pixKey, 140).trim();
+    if (w.pixKeyService !== undefined) s.whatsapp.pixKeyService = text(w.pixKeyService, 140).trim();
     if (w.reminderMinutes !== undefined) s.whatsapp.reminderMinutes = int(w.reminderMinutes, 0, 3 * 24 * 60, 'lembrete');
     else if (w.reminderHours !== undefined) s.whatsapp.reminderMinutes = int(w.reminderHours, 0, 72, 'lembrete') * 60;
     if (w.ownerPhone !== undefined) s.whatsapp.ownerPhone = text(w.ownerPhone, 30);

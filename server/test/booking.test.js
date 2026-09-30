@@ -781,3 +781,28 @@ test('venda lançada: a cliente recebe o comprovante (pago ou com as parcelas)',
   assert.equal(evo.sent.length, n);
   await app.close();
 });
+
+test('duas chaves Pix: a dos serviços vai na pré-reserva, a dos produtos nas vendas', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl }, saleDelay: 0 });
+  const call = await salon(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  await call('GET', '/api/whatsapp/status');
+  const r = await call('PUT', '/api/settings', { whatsapp: { pixKeyService: 'servicos@pix', pixKey: 'produtos@pix' } });
+  assert.deepEqual([r.body.whatsapp.pixKeyService, r.body.whatsapp.pixKey], ['servicos@pix', 'produtos@pix']);
+  const wait = () => new Promise(res => setTimeout(res, 60));
+  const date = nextWeekday(2), T = nowIn('America/Sao_Paulo').date;
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'c1', data: { name: 'Maria Souza', phone: '(11) 97777-6666' } },
+    { coll: 'appts', id: 'p1', data: { clientId: 'c1', date, time: '10:00', status: 'prereserva', service: 'Mechas', price: 200, createdAt: Date.now() } },
+  ] });
+  await wait();
+  const pre = evo.sent.find(m => /pré-reservado/.test(m.text));
+  assert.match(pre.text, /Pix para o sinal: servicos@pix/);
+  assert.doesNotMatch(pre.text, /produtos@pix/);
+  await call('POST', '/api/sync', { changes: [{ coll: 'sales', id: 's1', data: { clientId: 'c1', product: 'Máscara', qty: 1, total: 90, date: T, orderId: 'o1', payments: [], plan: { entrada: 0, dates: [addDays(T, 30)] } } }] });
+  await wait();
+  assert.match(evo.sent.at(-1).text, /Pix: produtos@pix/);
+  await app.close();
+});
