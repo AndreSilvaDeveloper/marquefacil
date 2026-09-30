@@ -2398,6 +2398,7 @@ function vSell(_, q) {
             <b>${esc(p.name)}</b><small>${p.price ? brl(p.price).replace(',00', '') : 'sem preço'}${hasStock(p) ? ` · ${p.stock <= 0 ? 'sem estoque' : `tem ${p.stock}`}` : ''}</small><i class="incart" hidden></i></button>`).join('')}</div>` : ''}
           <small class="hint" id="prods-more">${db.products.length > SHOW ? `Mostrando os ${SHOW} mais vendidos · procure para ver os outros ${db.products.length - SHOW}` : ''}</small>
           <button type="button" class="btn small main" id="add" style="margin-top:.5rem" hidden></button>
+          <button type="button" class="linkish" id="add-blank" style="display:block;margin-top:.4rem">➕ Item sem cadastro <span class="muted" style="font-weight:400">— produto que não está na lista</span></button>
         </div>
 
         <div id="cart"></div>
@@ -2472,7 +2473,7 @@ function vSell(_, q) {
         $('#prods-more', el).hidden = !!n;
         const exact = n && findByName(db.products, iProd.value);
         $('#add', el).hidden = !n || !!exact;
-        $('#add', el).textContent = `+ Pôr "${iProd.value.trim()}"${shown ? ' (produto novo)' : ''}`;
+        $('#add', el).textContent = `+ Pôr "${iProd.value.trim()}" (sem cadastro)`;
       };
       iProd.addEventListener('input', filterProds);
       $('#otherday', el).onclick = () => { $('#otherday', el).hidden = true; $('#dayfield', el).hidden = false; $('#f-date', el).focus(); };
@@ -2505,13 +2506,20 @@ function vSell(_, q) {
         const p = findByName(db.products, name);
         const line = cart.find(x => norm(x.name) === norm(name));
         if (line) line.qty++;
-        else cart.push({ name: p?.name || niceName(name), qty: 1, price: p?.price ?? null });
+        // produto que não está na lista: vende "avulso" (não cadastra nem mexe no estoque, a menos que ela peça)
+        else cart.push({ name: p?.name || niceName(name), qty: 1, price: p?.price ?? null, adhoc: !p, keep: false });
         paint();
         if (!$(`#prods [data-p="${CSS.escape(p?.name || '')}"]`, el)) toast(`+1 ${p?.name || niceName(name)}`); // produto fora dos quadrados
       }
       const clearSearch = () => { iProd.value = ''; filterProds(); };
       $('#prods', el)?.addEventListener('click', e => { const b = e.target.closest('[data-p]'); if (b) { addItem(b.dataset.p); if (iProd.value) clearSearch(); } });
       $('#add', el).onclick = () => { addItem(iProd.value); clearSearch(); };
+      // item sem cadastro: linha em branco para escrever nome (se quiser) e preço
+      $('#add-blank', el).onclick = () => {
+        cart.push({ name: '', qty: 1, price: null, adhoc: true, keep: false });
+        paint();
+        setTimeout(() => el.querySelector(`[data-name="${cart.length - 1}"]`)?.focus(), 50);
+      };
       iProd.addEventListener('keydown', e => {
         if (e.key !== 'Enter') return;
         e.preventDefault();
@@ -2551,9 +2559,10 @@ function vSell(_, q) {
         $('#cart', el).innerHTML = cart.length ? `<div class="cart">
           ${cart.map((x, i) => {
             const p = findByName(db.products, x.name);
-            const warn = hasStock(p) && x.qty > p.stock ? `<small class="warnline">⚠️ ${p.stock <= 0 ? 'sem estoque' : `só tem ${p.stock} em estoque`}</small>` : '';
+            const warn = hasStock(p) && x.qty > p.stock ? `<small class="warnline">⚠️ ${p.stock <= 0 ? 'sem estoque' : `só tem ${p.stock} em estoque`} — pode vender assim mesmo</small>` : '';
             return `<div class="cart-line">
-              <div class="cl-top"><b>${esc(x.name)}</b><button type="button" class="rm" data-rm="${i}" aria-label="Tirar ${esc(x.name)}">✕</button></div>
+              <div class="cl-top">${x.adhoc ? `<input type="text" class="cl-name" data-name="${i}" value="${esc(x.name)}" placeholder="Nome do produto (se quiser)" autocapitalize="sentences">` : `<b>${esc(x.name)}</b>`}<button type="button" class="rm" data-rm="${i}" aria-label="Tirar ${esc(x.name || 'item')}">✕</button></div>
+              ${x.adhoc ? `<div class="cl-tag"><span class="muted">${x.keep ? '📦 Vai ser cadastrado na lista de produtos' : '🏷️ Sem cadastro — não entra no estoque'}</span><button type="button" class="chip mini-chip ${x.keep ? 'on' : ''}" data-keep="${i}">${x.keep ? '✓ Vai para a lista' : '📦 Salvar na lista'}</button></div>` : ''}
               ${warn}
               <div class="cl-bottom">
                 <div class="money small" title="Preço de cada"><input type="text" inputmode="numeric" data-price="${i}" value="${moneyVal(x.price)}" placeholder="preço"></div>
@@ -2610,9 +2619,12 @@ function vSell(_, q) {
         $('#sum', el).innerHTML = `${counter ? who : esc(iClient.value.trim()) || who} · ${items ? `${items} ${items === 1 ? 'item' : 'itens'}` : '<span class="muted">produtos?</span>'} · <b>${brl(total())}</b>`;
         $('#save', el).textContent = `✓ Lançar venda${total() ? ' · ' + brl(total()) : ''}`;
       }
+      // nome do item avulso: guarda sem redesenhar (não perde o foco)
+      $('#cart', el).addEventListener('input', e => { const i = e.target.dataset.name; if (i !== undefined) { cart[+i].name = e.target.value; } });
       $('#cart', el).addEventListener('click', e => {
         const t = e.target;
-        if (t.dataset.plus) cart[+t.dataset.plus].qty++;
+        if (t.dataset.keep) cart[+t.dataset.keep].keep = !cart[+t.dataset.keep].keep;
+        else if (t.dataset.plus) cart[+t.dataset.plus].qty++;
         else if (t.dataset.minus) { const x = cart[+t.dataset.minus]; x.qty > 1 ? x.qty-- : cart.splice(+t.dataset.minus, 1); }
         else if (t.dataset.rm) cart.splice(+t.dataset.rm, 1);
         else return;
@@ -2687,15 +2699,18 @@ function vSell(_, q) {
           return v;
         });
         for (const [xi, x] of cart.entries()) {
-          const p = findOrCreate(db.products, x.name, { price: x.price });
-          if (!p.price && x.price) p.price = x.price;
-          moveStock(p.name, -x.qty);
-          const sale = { id: uid(), createdAt: Date.now(), clientId, product: p.name, qty: x.qty, unitPrice: x.price ?? round2(lineTotals[xi] / x.qty),
+          // da lista (ou avulso que ela mandou salvar): cadastra/usa o produto e baixa o estoque; avulso: só registra a venda
+          const nm = niceName(x.name.trim()) || 'Produto avulso';
+          const p = !x.adhoc || x.keep ? findOrCreate(db.products, nm, { price: x.price }) : null;
+          if (p && !p.price && x.price) p.price = x.price;
+          if (p) moveStock(p.name, -x.qty);
+          const sale = { id: uid(), createdAt: Date.now(), clientId, product: p?.name || nm, qty: x.qty, unitPrice: x.price ?? round2(lineTotals[xi] / x.qty),
             total: lineTotals[xi], date, paid: false, payments: [] };
           if (x.price != null && round2(x.price * x.qty - lineTotals[xi]) > 0) sale.discount = round2(x.price * x.qty - lineTotals[xi]);
           if (orderId) sale.orderId = orderId;
           if (fromAppt && fromAppt.clientId === clientId) sale.apptId = fromAppt.id;
           if (plan) sale.plan = plan;
+          if (!p) sale.adhoc = true;
           if (method !== 'depois' && sale.total > 0) addPayment(sale, sale.total, method, date);
           db.sales.push(sale);
         }
@@ -2913,9 +2928,10 @@ function vSaleForm(_, q) {
         const c = findOrCreate(db.clients, name, { phone: '', notes: '' });
         const phone = $('#f-phone', el).value.trim();
         if (phone) c.phone = phone;
-        const p = findOrCreate(db.products, prod, { price: unit });
-        if (!p.price && unit) p.price = unit;
-        const data = { clientId: c.id, product: p.name, qty, unitPrice: unit, total: Math.round((unit || 0) * qty * 100) / 100, date: $('#f-date', el).value || today() };
+        const known = findByName(db.products, prod);
+        const p = edit?.adhoc && !known ? null : known || findOrCreate(db.products, prod, { price: unit });
+        if (p && !p.price && unit) p.price = unit;
+        const data = { clientId: c.id, product: p?.name || niceName(prod), qty, unitPrice: unit, total: Math.round((unit || 0) * qty * 100) / 100, date: $('#f-date', el).value || today() };
         const apptId = edit ? edit.apptId : fromAppt?.id;
         if (apptId && db.appts.find(x => x.id === apptId)?.clientId === c.id) data.apptId = apptId; else delete data.apptId;
         if (!hasPlan && paid && data.total > 0 && !method && !isPaid({ ...s, ...data })) { err('Toque em Pix, Dinheiro ou Cartão (como pagou).'); return; }
