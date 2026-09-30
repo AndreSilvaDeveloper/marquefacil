@@ -852,3 +852,24 @@ test('link mostra o "a partir de" do serviço; horário com vários serviços ma
   assert.match(evo.sent.at(-1).text, /Valor: R\$\s?70,00/);
   await app.close();
 });
+
+test('link: pedir vários serviços de uma vez (tempo somado, todos no pedido)', async () => {
+  const app = buildApp();
+  const call = await salon(app);
+  const pub = client(app);
+  await call('POST', '/api/sync', { changes: [{ coll: 'services', id: 's3', data: { name: 'Hidratação', duration: 30 } }] });
+  const date = nextWeekday(3);
+  // Escova 60 + Hidratação 30 = 90 min: 16:30 não cabe (fecha às 18:00), 16:30 cabe só com um
+  const one = (await pub('GET', `/api/public/studio-ana/slots?date=${date}&service=s1`)).body.slots;
+  const two = (await pub('GET', `/api/public/studio-ana/slots?date=${date}&services=s1,s3`)).body.slots;
+  assert.ok(one.includes('17:00') && !two.includes('17:00') && two.includes('16:30'));
+  assert.equal((await pub('GET', `/api/public/studio-ana/slots?date=${date}&services=s1,s2`)).status, 400, 'serviço fora do link não vale');
+  const r = await pub('POST', '/api/public/studio-ana/book', { date, time: '09:00', serviceIds: ['s1', 's3'], serviceText: 'Sobrancelha', name: 'Joana Lima', phone: '(11) 98888-7777' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.service, 'Escova + Hidratação + Sobrancelha');
+  const appt = (await call('GET', '/api/changes?since=0')).body.changes.find(c => c.coll === 'appts').data;
+  assert.equal(appt.duration, 90);
+  assert.deepEqual(appt.items.map(i => i.name), ['Escova', 'Hidratação', 'Sobrancelha']);
+  assert.equal(appt.serviceCustom, true);
+  await app.close();
+});

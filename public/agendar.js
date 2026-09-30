@@ -33,7 +33,7 @@ async function api(path, body) {
 // O que a cliente já escolheu
 const st = {
   info: null, step: 1,
-  service: undefined,   // objeto da lista, ou null (escreveu / não tem lista)
+  picked: [],           // ids dos serviços da lista escolhidos (pode ser mais de um)
   serviceText: '',      // o que ela escreveu, quando não está na lista
   writing: false,
   days: [], month: null, date: null, slots: [], loadingSlots: false, time: null,
@@ -43,8 +43,9 @@ const hasServices = () => st.info.services.length > 0;
 const firstStep = () => (hasServices() ? 1 : 2);
 const totalSteps = () => (hasServices() ? 4 : 3);
 const stepNumber = n => n - (hasServices() ? 0 : 1);
-const serviceLabel = () => st.service?.name || st.serviceText || '';
-const serviceQuery = () => (st.service ? `service=${encodeURIComponent(st.service.id)}` : '');
+const pickedServices = () => st.picked.map(id => st.info.services.find(s => s.id === id)).filter(Boolean);
+const serviceLabel = () => [...pickedServices().map(s => s.name), st.serviceText].filter(Boolean).join(' + ');
+const serviceQuery = () => (st.picked.length ? `services=${st.picked.map(encodeURIComponent).join(',')}` : '');
 
 /* ------------------------------ navegação entre passos ------------------------------ */
 // Cada passo entra no histórico: o "voltar" do celular volta um passo em vez de sair da página
@@ -88,19 +89,21 @@ const money = v => Number(v).toLocaleString('pt-BR', { style: 'currency', curren
 
 /* ------------------------------ passos ------------------------------ */
 function stepService() {
-  return frame('Qual serviço você quer?', `
+  const n = st.picked.length + (st.serviceText ? 1 : 0);
+  return frame('Quais serviços você quer?', `
+    <p class="muted" style="margin:-.4rem 0 .7rem">Pode escolher mais de um.</p>
     <div class="pick" id="services">
-      ${st.info.services.map(s => `<button type="button" data-id="${s.id}" class="${st.service?.id === s.id ? 'on' : ''}">${esc(s.name)}
+      ${st.info.services.map(s => `<button type="button" data-id="${s.id}" class="${st.picked.includes(s.id) ? 'on' : ''}" aria-pressed="${st.picked.includes(s.id)}"><span class="tick">${st.picked.includes(s.id) ? '✓' : ''}</span>${esc(s.name)}
         ${s.description ? `<small>${esc(s.description)}</small>` : ''}${s.priceFrom ? `<small class="from">a partir de ${money(s.priceFrom)}*</small>` : ''}</button>`).join('')}
-      <button type="button" data-id="" class="${st.writing ? 'on' : ''}">✏️ Outro serviço (escrever)</button>
+      <button type="button" data-id="" class="${st.writing ? 'on' : ''}"><span class="tick">${st.writing ? '✓' : ''}</span>✏️ Outro serviço (escrever)</button>
     </div>
     ${st.writing ? `
-    <form class="form" id="own" style="margin-top:1rem" novalidate>
+    <div class="form" style="margin-top:1rem">
       <div class="field"><label for="svc">O que você quer fazer?</label>
         <input type="text" id="svc" maxlength="80" value="${esc(st.serviceText)}" placeholder="Ex.: Luzes, progressiva, unha em gel…" autocapitalize="sentences">
         <small class="hint">O salão confirma se faz esse serviço.</small></div>
-      <button class="btn main" type="submit">Continuar ›</button>
-    </form>` : ''}
+    </div>` : ''}
+    <button type="button" class="btn main" id="svc-go" style="margin-top:1rem" ${n ? '' : 'disabled'}>${n ? `Continuar com ${n === 1 ? '1 serviço' : `${n} serviços`} ›` : 'Escolha pelo menos um serviço'}</button>
     <p class="price-note">${st.info.services.some(s => s.priceFrom) ? '* <b>Valores "a partir de":</b> o preço final pode mudar de acordo com o seu perfil (tipo, comprimento e volume do cabelo, por exemplo) e é definido na <b>avaliação presencial</b> com a profissional.' : '💬 O valor varia conforme o serviço e cada cliente. O salão informa o valor quando confirmar o seu horário.'}</p>`, { back: false })
     + `<button type="button" class="btn" id="to-meus" style="margin-top:1rem">📋 ${meusToken() ? 'Meus horários — ver ou remarcar' : 'Já tenho horário — ver ou remarcar'}</button>`;
 }
@@ -159,7 +162,7 @@ function stepData() {
         <input type="tel" id="phone" autocomplete="tel" placeholder="(11) 99999-9999" value="${esc(remembered.phone || '')}"></div>
       <div class="field"><label for="notes">Observação <span class="opt">(se quiser)</span></label>
         <textarea id="notes" placeholder="Algo que a profissional precisa saber?"></textarea></div>
-      ${st.service?.priceFrom ? `<p class="price-note" style="margin-top:0">💰 <b>${esc(st.service.name)}: a partir de ${money(st.service.priceFrom)}.</b> O valor final é definido na avaliação presencial, de acordo com o seu perfil.</p>` : ''}
+      ${pickedServices().some(s => s.priceFrom) ? `<p class="price-note" style="margin-top:0">💰 ${pickedServices().filter(s => s.priceFrom).map(s => `<b>${esc(s.name)}: a partir de ${money(s.priceFrom)}</b>`).join('<br>')}<br>O valor final é definido na avaliação presencial, de acordo com o seu perfil.</p>` : ''}
       <input class="hp" type="text" id="website" tabindex="-1" autocomplete="off" aria-hidden="true">
       <button class="btn main" type="submit">${submitLabel()}</button>
     </form>`);
@@ -172,8 +175,7 @@ function paint() {
 }
 
 /* ------------------------------ ações ------------------------------ */
-async function chooseService(service, text = '', push = true) {
-  st.service = service; st.serviceText = text;
+async function chooseService(push = true) {
   st.days = []; st.date = null; st.time = null; st.month = null;
   go(2, push);
   try { st.days = (await api(`/days${serviceQuery() ? '?' + serviceQuery() : ''}`)).days; }
@@ -195,20 +197,29 @@ function bind() {
   $('#to-meus')?.addEventListener('click', () => portalGo(meusToken() ? 'meus' : 'acesso'));
   document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => go(+b.dataset.go));
 
+  // Serviços: tocar liga/desliga (pode vários); "Outro" abre o campo para escrever
   $('#services')?.addEventListener('click', e => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.dataset.id) { st.writing = false; chooseService(st.info.services.find(s => s.id === b.dataset.id)); return; }
-    st.writing = true;
+    if (b.dataset.id) {
+      const id = b.dataset.id;
+      st.picked = st.picked.includes(id) ? st.picked.filter(x => x !== id) : [...st.picked, id];
+    } else {
+      st.writing = !st.writing;
+      if (!st.writing) st.serviceText = '';
+    }
+    const y = window.scrollY;
     paint();
-    setTimeout(() => $('#svc')?.focus(), 50);
+    window.scrollTo(0, y);
+    if (st.writing && !b.dataset.id) setTimeout(() => $('#svc')?.focus(), 50);
   });
-  $('#own')?.addEventListener('submit', e => {
-    e.preventDefault();
-    const text = $('#svc').value.trim();
-    if (!text) { $('#svc').focus(); $('#svc').placeholder = 'Escreva o serviço aqui'; return; }
-    chooseService(null, text);
+  $('#svc')?.addEventListener('input', e => {
+    st.serviceText = e.target.value.trim();
+    const n = st.picked.length + (st.serviceText ? 1 : 0), go2 = $('#svc-go');
+    go2.disabled = !n;
+    go2.textContent = n ? `Continuar com ${n === 1 ? '1 serviço' : `${n} serviços`} ›` : 'Escolha pelo menos um serviço';
   });
+  $('#svc-go')?.addEventListener('click', () => chooseService());
 
   $('#cal')?.addEventListener('click', e => {
     const b = e.target.closest('button[data-date]');
@@ -231,7 +242,7 @@ function bind() {
     const btn = $('#f button[type=submit]');
     const data = {
       name: $('#name').value, phone: $('#phone').value, notes: $('#notes').value, website: $('#website').value,
-      date: st.date, time: st.time, serviceId: st.service?.id || null, serviceText: st.service ? '' : st.serviceText,
+      date: st.date, time: st.time, serviceIds: st.picked, serviceText: st.serviceText,
     };
     btn.disabled = true;
     btn.textContent = 'Enviando…';
@@ -270,7 +281,7 @@ function done(r) {
     </div>`;
   $('#see-meus').onclick = () => portalGo('meus');
   $('#again').onclick = () => {
-    Object.assign(st, { service: undefined, serviceText: '', writing: false, date: null, time: null, month: null });
+    Object.assign(st, { picked: [], serviceText: '', writing: false, date: null, time: null, month: null });
     start();
   };
 }
@@ -296,7 +307,7 @@ async function start() {
   }
   // salão sem serviços na lista: começa direto pelo dia
   history.replaceState({ step: firstStep() }, '');
-  if (hasServices()) go(1, false); else chooseService(null, '', false);
+  if (hasServices()) go(1, false); else chooseService(false);
 }
 
 /* ============================ MEUS HORÁRIOS ============================ */
@@ -353,9 +364,9 @@ async function showMeus() {
     <button type="button" class="btn" id="notme" style="margin-top:1.5rem">Não é você? Sair</button>`;
   pv.msg = '';
   $('#new')?.addEventListener('click', () => {
-    Object.assign(st, { service: undefined, serviceText: '', writing: false, date: null, time: null, month: null });
+    Object.assign(st, { picked: [], serviceText: '', writing: false, date: null, time: null, month: null });
     history.pushState({ step: firstStep() }, '');
-    if (hasServices()) go(1, false); else chooseService(null, '', false);
+    if (hasServices()) go(1, false); else chooseService(false);
   });
   $('#notme').onclick = () => { forgetMeus(); location.reload(); };
   $('#app').onclick = async e => {

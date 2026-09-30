@@ -48,13 +48,15 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
     // a cliente vê nome, descrição e o "a partir de"; o tempo fica aqui dentro para reservar a agenda
     .map(s => ({ id: s.id, name: s.name, description: s.description || '', duration: s.duration || null, priceFrom: s.priceFrom > 0 ? s.priceFrom : null }));
-  function durationFor(tenantId, s, serviceId, dur) {
+  // Um ou vários serviços (ids separados por vírgula, ou lista): o tempo é a soma dos tempos deles
+  function durationFor(tenantId, s, ids, dur) {
+    const list = [...new Set((Array.isArray(ids) ? ids : String(ids || '').split(',')).map(String).map(x => x.trim()).filter(Boolean))].slice(0, 10);
     const d = parseInt(dur, 10);
-    if (!serviceId && d >= 5 && d <= 600) return { service: null, duration: d }; // remarcar: tempo do horário
-    if (!serviceId) return { service: null, duration: s.booking.defaultDuration };
-    const service = onlineServices(tenantId).find(x => x.id === serviceId);
-    if (!service) fail(400, 'Serviço não encontrado.');
-    return { service, duration: service.duration || s.booking.defaultDuration };
+    if (!list.length && d >= 5 && d <= 600) return { services: [], duration: d }; // remarcar: tempo do horário
+    if (!list.length) return { services: [], duration: s.booking.defaultDuration };
+    const online = onlineServices(tenantId);
+    const services = list.map(id => online.find(x => x.id === id) || fail(400, 'Serviço não encontrado.'));
+    return { services, duration: services.reduce((t, x) => t + (x.duration || 0), 0) || s.booking.defaultDuration };
   }
   // remarcando: o próprio horário (e o pedido de troca dele) não conta como ocupado
   const notMine = except => a => !except || (a.id !== except && a.replaces !== except);
@@ -73,7 +75,7 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
   app.get('/api/public/:slug/days', async req => {
     const { t, s, now } = load(req.params.slug);
     needOpen(s);
-    const { duration } = durationFor(t.id, s, req.query.service, req.query.dur);
+    const { duration } = durationFor(t.id, s, req.query.services ?? req.query.service, req.query.dur);
     const end = addDays(now.date, s.booking.maxDays);
     const appts = q.apptsBetween.all(t.id, now.date, end).map(r => JSON.parse(r.data)).filter(notMine(req.query.except));
     const days = [];
@@ -88,7 +90,7 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
     needOpen(s);
     const date = String(req.query.date || '');
     if (!DATE_RE.test(date)) fail(400, 'Data inválida.');
-    const { duration } = durationFor(t.id, s, req.query.service, req.query.dur);
+    const { duration } = durationFor(t.id, s, req.query.services ?? req.query.service, req.query.dur);
     const appts = q.apptsBetween.all(t.id, date, date).map(r => JSON.parse(r.data)).filter(notMine(req.query.except));
     return { date, slots: computeSlots({ booking: s.booking, appts, date, duration, now }) };
   });
@@ -106,9 +108,10 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
     if (name.length < 2) fail(400, 'Escreva o seu nome.');
     if (!waNumber(phone)) fail(400, 'Escreva o seu WhatsApp com DDD. Exemplo: (11) 99999-9999');
     if (!DATE_RE.test(date) || !TIME_RE.test(time)) fail(400, 'Escolha o dia e o horário.');
-    const { service, duration } = durationFor(t.id, s, b.serviceId || null);
+    const { services, duration } = durationFor(t.id, s, b.serviceIds ?? b.serviceId ?? null);
     // Serviço que não está na lista, escrito pela cliente (a profissional decide ao confirmar)
-    const serviceText = service ? '' : String(b.serviceText || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    const serviceText = String(b.serviceText || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    const names = [...services.map(x => x.name), serviceText].filter(Boolean);
 
     // Confere de novo e grava junto, para duas pessoas não pegarem o mesmo horário
     const result = db.transaction(() => {
@@ -129,7 +132,8 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
       }
       const appt = {
         id: uid(), clientId: client.id, date, time, duration,
-        service: service?.name || serviceText, price: null, paid: false, // valor é por atendimento: a profissional coloca ao confirmar
+        service: names.join(' + '), price: null, paid: false, // valor é por atendimento: a profissional coloca ao confirmar
+        ...(names.length > 1 ? { items: names.map(name => ({ name, price: null })) } : {}),
         ...(serviceText ? { serviceCustom: true } : {}),
         status: s.booking.requireApproval ? 'pendente' : 'marcado',
         notes: String(b.notes || '').trim().slice(0, 300), source: 'online', createdAt: Date.now(),

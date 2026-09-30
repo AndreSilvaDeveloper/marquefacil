@@ -21,6 +21,10 @@
     .pick button small { display: block; font-weight: 400; color: var(--muted); }
     .pick button.on { border-color: var(--brand); background: var(--brand-soft); }
     .pick button small.from { color: var(--brand); font-weight: 700; margin-top: .15rem; }
+    .pick button { position: relative; padding-right: 2.8rem; }
+    .pick button .tick { position: absolute; right: .8rem; top: 50%; transform: translateY(-50%); width: 1.6rem; height: 1.6rem; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: .95rem; color: #fff; }
+    .pick button.on .tick { background: var(--brand); border-color: var(--brand); }
+    #svc-go:disabled { opacity: .5; }
     /* calendário do mês */
     .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .6rem; }
     .cal-head b { font-size: 1.15rem; }
