@@ -2322,6 +2322,7 @@ function vSell(_, q) {
               ${fromAppt ? '' : '<button type="button" class="btn small" id="counter" style="min-height:3.2rem">🧍 Balcão</button>'}
             </div>
             <small id="h-client" class="hint"></small>
+            <div id="c-extra"></div>
             <input type="tel" id="f-phone" value="${esc(client(startClient)?.phone || '')}" placeholder="Telefone da cliente nova (se quiser)" style="margin-top:.5rem" hidden>
           </div>
           <div id="who-counter" hidden><div class="card line"><b class="grow">🧍 Venda de balcão</b><button type="button" class="btn small" id="uncounter">Trocar</button></div></div>
@@ -2337,6 +2338,18 @@ function vSell(_, q) {
         </div>
 
         <div id="cart"></div>
+        <div id="disc-box" hidden>
+          <button type="button" class="linkish" id="disc-open">🏷️ Dar desconto</button>
+          <div id="disc-f" class="disc-f" hidden>
+            <span class="lbl">🏷️ Desconto</span>
+            <div class="row" style="align-items:center">
+              <div class="money" id="disc-money"><input type="text" id="disc-v" inputmode="numeric" placeholder="0,00"></div>
+              <input type="number" id="disc-p" inputmode="numeric" min="1" max="100" placeholder="%" hidden style="max-width:6rem">
+              <div class="toggle2 neutral" id="disc-kind" style="flex:0 0 7rem"><button type="button" class="yes on" data-v="1">R$</button><button type="button" class="no" data-v="0">%</button></div>
+            </div>
+            <button type="button" class="linkish" id="disc-x" style="color:var(--bad)">Tirar desconto</button>
+          </div>
+        </div>
 
         <div class="field">
           <span class="lbl">Como pagou?</span>
@@ -2396,6 +2409,17 @@ function vSell(_, q) {
       iProd.addEventListener('input', filterProds);
       $('#otherday', el).onclick = () => { $('#otherday', el).hidden = true; $('#dayfield', el).hidden = false; $('#f-date', el).focus(); };
 
+      let paintedClient = null;
+      // desconto: em R$ ou %
+      $('#disc-open', el).onclick = () => { $('#disc-open', el).hidden = true; $('#disc-f', el).hidden = false; $('#disc-v', el).focus(); };
+      $('#disc-v', el).addEventListener('input', e => { disc.v = parseMoney(e.target.value) || 0; paint(); });
+      $('#disc-p', el).addEventListener('input', e => { disc.v = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)); paint(); });
+      bindToggle2($('#disc-kind', el), v => {
+        disc.pct = !v; disc.v = 0; $('#disc-v', el).value = ''; $('#disc-p', el).value = '';
+        $('#disc-money', el).hidden = disc.pct; $('#disc-p', el).hidden = !disc.pct;
+        (disc.pct ? $('#disc-p', el) : $('#disc-v', el)).focus(); paint();
+      });
+      $('#disc-x', el).onclick = () => { disc.v = 0; $('#disc-v', el).value = ''; $('#disc-p', el).value = ''; $('#disc-f', el).hidden = true; $('#disc-open', el).hidden = false; paint(); };
       const setCounter = on => {
         counter = on;
         $('#who', el).hidden = on;
@@ -2425,7 +2449,10 @@ function vSell(_, q) {
         if (iProd.value.trim()) { addItem(vis.length === 1 ? vis[0].dataset.p : iProd.value); clearSearch(); }
       });
 
-      const total = () => round2(cart.reduce((t, x) => t + (x.price || 0) * x.qty, 0));
+      const gross = () => round2(cart.reduce((t, x) => t + (x.price || 0) * x.qty, 0));
+      const disc = { v: 0, pct: false };
+      const discAmount = () => Math.min(gross(), disc.pct ? round2(gross() * Math.min(disc.v, 100) / 100) : round2(disc.v));
+      const total = () => Math.max(0, round2(gross() - discAmount()));
       const planDates = () => (later.mode === 'uma' ? [later.first] : seriesByCount(later.first, later.every, later.n));
       // Prévia das parcelas (mesma conta de installmentsOf)
       function paintLater() {
@@ -2463,6 +2490,7 @@ function vSell(_, q) {
               </div>
             </div>`;
           }).join('')}
+          ${discAmount() > 0 ? `<div class="cart-sub"><span>Subtotal</span><span>${brl(gross())}</span></div><div class="cart-sub" style="color:var(--ok)"><span>🏷️ Desconto${disc.pct ? ` (${disc.v}%)` : ''}</span><span>− ${brl(discAmount())}</span></div>` : ''}
           <div class="cart-total"><span>Total</span><b>${brl(total())}</b></div></div>`
           : '<p class="muted" style="text-align:center">Toque nos produtos acima para pôr na venda.</p>';
         el.querySelectorAll('#pay [data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === method));
@@ -2472,8 +2500,23 @@ function vSell(_, q) {
           b.classList.toggle('on', q > 0);
           const i = $('.incart', b); i.hidden = !q; i.textContent = q;
         });
+        $('#disc-box', el).hidden = !cart.length;
         // telefone só para cliente nova; troco só no dinheiro
         const nm = iClient.value.trim();
+        // cliente conhecida: se deve alguma coisa, e o que levou da última vez
+        const ck = !counter && nm && findByName(db.clients, nm);
+        if (ck?.id !== paintedClient) {
+          paintedClient = ck?.id;
+          const owes = ck ? clientOwes(ck.id) : 0;
+          const last = ck && db.sales.filter(x => x.clientId === ck.id).sort((a, b) => (b.date + (b.createdAt || 0)).localeCompare(a.date + (a.createdAt || 0)))[0];
+          // compra antiga sem orderId: junta os produtos da cliente naquele mesmo dia
+          const lastLines = !last ? [] : last.orderId ? orderOf(last).lines : db.sales.filter(x => x.clientId === ck.id && !x.orderId && x.date === last.date);
+          $('#c-extra', el).innerHTML = [
+            owes > 0 ? `<a class="hint new" href="#/cliente/${ck.id}" style="display:block;color:var(--warn)">⚠️ ${esc(firstName(ck))} deve ${brl(owes)} · ver ›</a>` : '',
+            lastLines.length ? `<button type="button" class="chip" id="repeat" style="margin-top:.4rem">↻ Mesmo da última vez: ${esc(lastLines.map(x => x.product + (x.qty > 1 ? ` (${x.qty}x)` : '')).join(', '))}</button>` : '',
+          ].join('');
+          $('#repeat', el) && ($('#repeat', el).onclick = () => { for (const x of lastLines) for (let k = 0; k < (x.qty || 1); k++) addItem(x.product); });
+        }
         $('#f-phone', el).hidden = counter || !nm || !!findByName(db.clients, nm);
         $('#change', el).hidden = method !== 'dinheiro';
         $('#later', el).hidden = method !== 'depois';
@@ -2552,12 +2595,21 @@ function vSell(_, q) {
         const date = $('#f-date', el).value || today();
         const plan = method === 'depois' ? { entrada: round2(later.entrada || 0), dates: planDates() } : null;
         const orderId = cart.length > 1 || plan ? uid() : null;
-        for (const x of cart) {
+        const off = discAmount(), g = gross();
+        let offLeft = off;
+        const shares = cart.map((x, i) => {
+          if (i === cart.length - 1) return round2(offLeft);
+          const sh = g ? round2(off * (x.price * x.qty) / g) : 0;
+          offLeft = round2(offLeft - sh);
+          return sh;
+        });
+        for (const [xi, x] of cart.entries()) {
           const p = findOrCreate(db.products, x.name, { price: x.price });
           if (!p.price && x.price) p.price = x.price;
           moveStock(p.name, -x.qty);
           const sale = { id: uid(), createdAt: Date.now(), clientId, product: p.name, qty: x.qty, unitPrice: x.price,
-            total: round2(x.price * x.qty), date, paid: false, payments: [] };
+            total: round2(x.price * x.qty - shares[xi]), date, paid: false, payments: [] };
+          if (shares[xi] > 0) sale.discount = shares[xi];
           if (orderId) sale.orderId = orderId;
           if (fromAppt && fromAppt.clientId === clientId) sale.apptId = fromAppt.id;
           if (plan) sale.plan = plan;
@@ -2604,7 +2656,7 @@ function vSaleView(_, q) {
       </div>
 
       <div class="card extrato moneybox">
-        ${o.lines.map(x => `<a class="ex-row" href="#/venda?id=${x.id}&editar=1"><span>🛍️ ${esc(x.product)} <small class="muted">${x.qty > 1 ? `${x.qty} × ${brl(x.unitPrice || 0)}` : ''}</small></span><b>${brl(valueOf(x))}</b><i>✏️</i></a>`).join('')}
+        ${o.lines.map(x => `<a class="ex-row" href="#/venda?id=${x.id}&editar=1"><span>🛍️ ${esc(x.product)} <small class="muted">${x.qty > 1 ? `${x.qty} × ${brl(x.unitPrice || 0)}` : ''}${x.discount ? ` · 🏷️ −${brl(x.discount)}` : ''}</small></span><b>${brl(valueOf(x))}</b><i>✏️</i></a>`).join('')}
         <div class="ex-row"><span><b>Total</b></span><b>${brl(o.total)}</b></div>
       </div>
 

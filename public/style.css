@@ -758,3 +758,9 @@ details.ready { padding: .7rem 1rem; }
 .moneybox .paid-how { display: block; font-size: .8rem; margin-top: .15rem; }
 .moneybox .dayrow { border-top: 1px solid var(--line); }
 .moneybox + .btn { margin-top: .8rem; }
+
+/* ---------- Vender: desconto ---------- */
+#disc-box { margin: -.4rem 0 1rem; }
+.disc-f { background: var(--ok-soft); border-radius: 12px; padding: .7rem .8rem; }
+.disc-f .money { flex: 1; }
+.cart-sub { display: flex; justify-content: space-between; padding: .35rem 0 0; font-size: .95rem; color: var(--muted); }
