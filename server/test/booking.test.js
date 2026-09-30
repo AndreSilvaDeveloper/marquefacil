@@ -768,10 +768,14 @@ test('venda lançada: a cliente recebe o comprovante (pago ou com as parcelas)',
   assert.match(later, /2ª parcela: R\$\s?40,00/);
   assert.match(later, /Pix: chave@pix\.com/);
 
-  // editar a venda depois não manda de novo; venda de outro dia (lançada atrasada) não manda
+  // venda com data de dias atrás, lançada agora: manda
+  await call('POST', '/api/sync', { changes: [{ coll: 'sales', id: 'r0', data: { clientId: 'c1', product: 'Escova de cabelo', qty: 1, total: 25, date: addDays(T, -3), createdAt: Date.now(), payments: [] } }] });
+  await wait();
+  assert.match(evo.sent.at(-1).text, /Escova de cabelo/);
+  // editar a venda depois não manda de novo; registro criado há dias (sincronizou atrasado) não manda
   const n = evo.sent.length;
   await call('POST', '/api/sync', { changes: [{ coll: 'sales', id: 'q1', data: { clientId: 'c1', product: 'Máscara', qty: 1, total: 90, date: T, orderId: 'o2', payments: [], plan } }] });
-  await call('POST', '/api/sync', { changes: [{ coll: 'sales', id: 'r1', data: { clientId: 'c1', product: 'Pente', qty: 1, total: 8, date: addDays(T, -3), payments: [] } }] });
+  await call('POST', '/api/sync', { changes: [{ coll: 'sales', id: 'r1', data: { clientId: 'c1', product: 'Pente', qty: 1, total: 8, date: addDays(T, -5), createdAt: Date.now() - 5 * 86400e3, payments: [] } }] });
   await wait();
   assert.equal(evo.sent.length, n);
   // desligado: não manda
@@ -804,5 +808,25 @@ test('duas chaves Pix: a dos serviços vai na pré-reserva, a dos produtos nas v
   await call('POST', '/api/sync', { changes: [{ coll: 'sales', id: 's1', data: { clientId: 'c1', product: 'Máscara', qty: 1, total: 90, date: T, orderId: 'o1', payments: [], plan: { entrada: 0, dates: [addDays(T, 30)] } } }] });
   await wait();
   assert.match(evo.sent.at(-1).text, /Pix: produtos@pix/);
+  await app.close();
+});
+
+test('mandar o comprovante de novo pelo botão', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl }, saleDelay: 0 });
+  const call = await salon(app);
+  assert.equal((await call('POST', '/api/sales/xx/receipt')).status, 404);
+  const T = nowIn('America/Sao_Paulo').date;
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'c1', data: { name: 'Maria Souza', phone: '(11) 97777-6666' } },
+    { coll: 'sales', id: 'v1', data: { clientId: 'c1', product: 'Shampoo', qty: 1, total: 40, date: T, createdAt: Date.now() - 9 * 86400e3, payments: [{ v: 40, m: 'pix', d: T }] } },
+  ] });
+  assert.equal((await call('POST', '/api/sales/v1/receipt')).status, 400, 'sem WhatsApp conectado');
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  await call('GET', '/api/whatsapp/status');
+  assert.equal((await call('POST', '/api/sales/v1/receipt')).status, 200);
+  assert.equal((await call('POST', '/api/sales/v1/receipt')).status, 200, 'pode mandar de novo');
+  assert.equal(evo.sent.filter(m => /foi registrada/.test(m.text)).length, 2);
   await app.close();
 });

@@ -217,11 +217,12 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
     }
   }
   // Comprovante da venda, logo depois de lançar: paga (forma de pagamento) ou a prazo (entrada e parcelas)
-  async function sendSaleNew(tenantId, key) {
+  // manual = a profissional pediu pelo botão: manda mesmo com a opção desligada e mesmo se já mandou antes
+  async function sendSaleNew(tenantId, key, { manual = false } = {}) {
     const t = q.tenant.get(tenantId);
     if (!t || !evo.enabled) return 'off';
     const s = readSettings(t.settings);
-    if (!s.whatsapp.instance || !s.whatsapp.saleConfirm) return 'off';
+    if (!s.whatsapp.instance || (!s.whatsapp.saleConfirm && !manual)) return 'off';
     const o = groupOrders(salesOf.all(tenantId).map(r => JSON.parse(r.data)).filter(x => (x.orderId || x.id) === key))[0];
     if (!o?.clientId) return 'skip';
     const client = getRecord(tenantId, 'clients', o.clientId);
@@ -245,7 +246,8 @@ export function createMessenger({ db, evo, publicUrl = '', log = console }) {
       nome: (client?.name || '').split(' ')[0], salao: t.name, produtos: o.lines.map(x => `• ${x.product}${x.qty > 1 ? ` (${x.qty}x)` : ''} — ${brl(valueOfSale(x))}`).join('\n'),
       total: brl(o.total), pagamento, pix: o.left > 0 ? s.whatsapp.pixKey || '' : '',
     });
-    return sendSale(t, s, { apptId: `sale:${key}`, kind: 'salenew', client, body });
+    if (manual && !waNumber(client?.phone)) return 'nophone';
+    return sendSale(t, s, { apptId: `sale:${key}`, kind: manual ? `salenew:${Date.now()}` : 'salenew', client, body });
   }
   const valueOfSale = x => ('total' in x ? x.total : x.price) || 0;
 

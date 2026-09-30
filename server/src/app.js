@@ -274,8 +274,10 @@ export function buildApp({
     // Espera uns segundos para os outros produtos da mesma compra chegarem.
     if (newSales.length) {
       s ||= getSettings(tenantId);
-      const t = nowIn(s.timezone).date;
-      const keys = new Set(newSales.filter(c => c.data.clientId && c.data.date >= t).map(c => c.data.orderId || c.id));
+      // conta quando a venda foi lançada no app (não a data escrita nela): venda de dias atrás lançada agora também manda;
+      // registro criado há mais de 2 dias (ex.: ficou sem internet) não manda
+      const recent = c => !c.data.createdAt || c.data.createdAt > Date.now() - 2 * 86400e3;
+      const keys = new Set(newSales.filter(c => c.data.clientId && recent(c)).map(c => c.data.orderId || c.id));
       if (s.whatsapp.saleConfirm) for (const k of keys) setTimeout(() => messenger.sendSaleNew(tenantId, k).catch(e => app.log.error(e)), saleDelay);
     }
     return { seq };
@@ -302,6 +304,18 @@ export function buildApp({
   });
 
   /* ------------------------------ configurações ------------------------------ */
+  // Mandar (de novo) o comprovante de uma venda pelo WhatsApp do salão
+  app.post('/api/sales/:id/receipt', { preHandler: auth }, async req => {
+    const r = db.prepare("SELECT data FROM records WHERE tenant_id = ? AND coll = 'sales' AND id = ? AND deleted = 0").get(req.s.tenant_id, req.params.id);
+    if (!r) fail(404, 'Venda não encontrada. Espere sincronizar e tente de novo.');
+    const x = JSON.parse(r.data);
+    const res = await messenger.sendSaleNew(req.s.tenant_id, x.orderId || req.params.id, { manual: true });
+    if (res === 'off') fail(400, 'Conecte o WhatsApp automático primeiro (Mais → WhatsApp automático).');
+    if (res === 'nophone' || res === 'skip') fail(400, 'Essa cliente não tem telefone cadastrado.');
+    if (res === 'error') fail(502, 'O WhatsApp não conseguiu enviar agora. Tente de novo em instantes.');
+    return { ok: true };
+  });
+
   app.get('/api/settings', { preHandler: auth }, async req => {
     const s = getSettings(req.s.tenant_id);
     return { ...s, slug: req.s.slug, today: nowIn(s.timezone).date, whatsappAvailable: evo.enabled };

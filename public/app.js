@@ -2670,6 +2670,7 @@ function vSaleView(_, q) {
       ${o.left > 0 ? `<button class="btn ok" id="recv">💰 Receber ${brl(next ? next.left : o.left)}${next && next.of > 1 ? ` · ${next.n}ª parcela` : ''}</button>` : ''}
 
       <div class="menu" style="margin-top:1rem">
+        ${c?.phone ? '<button type="button" class="menu-item" id="receipt"><span class="mi-icon">📨</span><span class="mi-text"><b>Mandar comprovante no WhatsApp</b><small>Sai pelo WhatsApp automático do salão</small></span></button>' : ''}
         ${cobrar ? `<a class="menu-item" target="_blank" rel="noopener" href="${cobrar}"><span class="mi-icon">💬</span><span class="mi-text"><b>Cobrar pelo WhatsApp</b></span><span class="mi-go">›</span></a>` : ''}
         ${o.lines.length === 1 ? `<a class="menu-item" href="#/venda?id=${s.id}&editar=1"><span class="mi-icon">✏️</span><span class="mi-text"><b>Mudar produto, quantidade ou valor</b></span><span class="mi-go">›</span></a>` : ''}
         ${pays.length ? '<button type="button" class="menu-item" id="unpay"><span class="mi-icon">↩️</span><span class="mi-text"><b>Desfazer pagamentos</b><small>Volta a compra para "não paga"</small></span></button>' : ''}
@@ -2677,6 +2678,16 @@ function vSaleView(_, q) {
       </div>`,
     bind(el) {
       $('#recv', el) && ($('#recv', el).onclick = () => receiveSale(s));
+      $('#receipt', el) && ($('#receipt', el).onclick = async e => {
+        const b = e.currentTarget;
+        b.disabled = true;
+        try {
+          await syncNow(); // a venda precisa estar no servidor
+          await api('POST', `/api/sales/${encodeURIComponent(s.id)}/receipt`);
+          toast(`📨 Comprovante enviado para ${c.name.split(' ')[0]} ✓`);
+        } catch (err) { alert(err.offline ? 'Precisa de internet para mandar.' : err.message); }
+        finally { b.disabled = false; }
+      });
       $('#unpay', el) && ($('#unpay', el).onclick = () => {
         if (!confirm('Apagar os pagamentos lançados nesta compra?')) return;
         o.lines.forEach(clearPayments); save(); toast('Pagamentos desfeitos'); render();
