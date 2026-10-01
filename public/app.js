@@ -687,7 +687,7 @@ function dayTimeline(d, active, tags = {}) {
   const open = hours?.days?.[toDate(d).getDay()];
   const closedDay = hours && hours.days && open === null;
   const isToday = d === today(), now = nowMins();
-  const items = active.map(a => ({ t: mins(a.time), html: dayRow(a, tags[a.id]) }));
+  const items = active.map(a => ({ t: mins(a.time), html: dayRow(a, tags[a.id], { flags: true }) }));
   if (open && hours.lunch && !(isToday && mins(hours.lunch[1]) <= now)) items.push({ t: mins(hours.lunch[0]), html: `<div class="lunch">🍽️ Almoço ${hours.lunch[0]}–${hours.lunch[1]}</div>` });
   if (isToday && active.length && active.some(a => mins(a.time) > now) && active.some(a => mins(a.time) <= now)) items.push({ t: now + 0.5, html: `<div class="nowline"><span>agora ${hhmm(now)}</span></div>` });
   items.sort((a, b) => a.t - b.t);
@@ -695,7 +695,19 @@ function dayTimeline(d, active, tags = {}) {
 }
 
 // Linha enxuta da agenda do dia: hora | cliente e serviço | valor. No máximo um aviso curto embaixo.
-function dayRow(a, tag = '', { date = false, who = true } = {}) {
+// Sinais da cliente na agenda do dia: 1ª vez, aniversário, observação, devendo
+const FLAG_TXT = { nova: '✨ 1ª vez', aniver: '🎂 aniversário', obs: '📝 tem observação', deve: '💸 está devendo' };
+function clientFlags(a) {
+  const c = client(a.clientId);
+  if (!c) return [];
+  const f = [];
+  if (a.status !== 'cancelado' && !db.appts.some(x => x.clientId === a.clientId && x.id !== a.id && x.status !== 'cancelado' && x.status !== 'pendente' && x.date + x.time < a.date + a.time)) f.push('nova');
+  if (c.birthday && c.birthday === a.date.slice(5)) f.push('aniver');
+  if (c.notes) f.push('obs');
+  if (clientOwes(c.id) > 0) f.push('deve');
+  return f;
+}
+function dayRow(a, tag = '', { date = false, who = true, flags = false } = {}) {
   const past = isPast(a) || a.status === 'feito' || a.status === 'cancelado';
   const clash = conflictsFor(a.date, a.time, a.duration, a.id);
   const pos = pkgPos(a);
@@ -716,7 +728,7 @@ function dayRow(a, tag = '', { date = false, who = true } = {}) {
     : `<span class="dr-time"><b>${a.time}</b>${a.duration ? `<small>${hhmm(apptEnd(a))}</small>` : ''}</span>`;
   return `<a class="dayrow ${past ? 'past' : ''} ${tag ? 'is-next' : ''} ${a.status}" href="#/agendamento/${a.id}">
     ${when}
-    <span class="dr-info">${who ? `<b>${esc(clientName(a.clientId))}</b>${a.service ? `<span>${esc(a.service)}</span>` : ''}` : `<b>${esc(a.service || 'Atendimento')}</b>`}${note}</span>
+    <span class="dr-info">${who ? `<b>${esc(clientName(a.clientId))}${flags ? clientFlags(a).map(k => `<span class="flag" title="${FLAG_TXT[k]}">${FLAG_TXT[k].split(' ')[0]}</span>`).join('') : ''}</b>${a.service ? `<span>${esc(a.service)}</span>` : ''}` : `<b>${esc(a.service || 'Atendimento')}</b>`}${note}</span>
     ${money}</a>`;
 }
 
@@ -773,6 +785,7 @@ function vAgenda(_, q) {
       <div class="list timeline">
         ${tl.html || `<div class="empty">Nenhum horário marcado neste dia.${d >= t ? `<br><a class="btn main" href="#/agendar?d=${d}" style="margin-top:1rem">📅 Agendar neste dia</a>` : ''}</div>`}
       </div>
+      ${(() => { const used = [...new Set(active.flatMap(clientFlags))]; return used.length ? `<p class="flag-legend">${used.map(k => FLAG_TXT[k]).join(' · ')}</p>` : ''; })()}
       ${cancelled.length ? `<details class="cancelled"><summary>Cancelados (${cancelled.length})</summary><div class="list">${cancelled.map(a => apptCard(a)).join('')}</div></details>` : ''}
       ${d === t ? (() => {
         const tm = addDays(t, 1), l = db.appts.filter(a => a.date === tm && a.status !== 'cancelado').sort(byWhen);
@@ -2049,6 +2062,25 @@ function vClient(id, q) {
   const due = allHistory.filter(hFilters.deve[1]).reverse(); // mais antigo primeiro
   const url = h => `#/cliente/${id}${h ? '?h=' + h : ''}`;
   const first = c.name.split(' ')[0];
+  // O que ajuda no atendimento: de quanto em quanto tempo ela vem, se está demorando, o que faz e o que compra
+  const visits = appts.filter(a => a.status === 'feito' || (a.status === 'marcado' && isPast(a))).sort(byWhen);
+  const vdates = [...new Set(visits.map(a => a.date))];
+  const dayDiff = (a, b) => Math.round((toDate(b) - toDate(a)) / 86400000);
+  const lastSix = vdates.slice(-6);
+  const every = lastSix.length >= 2 ? Math.round(dayDiff(lastSix[0], lastSix.at(-1)) / (lastSix.length - 1)) : 0;
+  const sinceLast = vdates.length ? dayDiff(vdates.at(-1), today()) : null;
+  const upcoming = next.filter(a => a.status !== PRE);
+  const late = every >= 7 && !next.length && sinceLast > Math.round(every * 1.3) + 3;
+  const expectedBack = every >= 7 && !next.length && !late ? addDays(vdates.at(-1), every) : '';
+  const svcCount = {};
+  for (const a of visits) for (const n of svcNamesOf(a)) svcCount[n] = (svcCount[n] || 0) + 1;
+  const topSvcs = Object.entries(svcCount).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const prodCount = {};
+  for (const x of db.sales.filter(x => x.clientId === id)) prodCount[x.product] = (prodCount[x.product] || 0) + (x.qty || 1);
+  const topProds = Object.entries(prodCount).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const valued = visits.filter(a => valueOf(a) > 0);
+  const avgVisit = valued.length ? round2(valued.reduce((t, a) => t + valueOf(a), 0) / valued.length) : 0;
+  const whenTxt = a => `${cap(fmtDate(a.date, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', ',').replace('.', ''))} às ${a.time}`;
 
   let month = '';
   const historyHtml = history.map(h => {
@@ -2067,7 +2099,7 @@ function vClient(id, q) {
         <div class="grow">
           <p class="big">${esc(c.name)}</p>
           ${c.phone ? `<p>📞 ${esc(fmtPhone(c.phone))}</p>` : '<p class="muted">Sem telefone · <a href="#/cliente-editar?id=' + c.id + '">colocar</a></p>'}
-          <div class="badges">${c.birthday ? `<span class="badge ${bdayIn(c.birthday) === 0 ? 'warn' : ''}">🎂 ${bdayIn(c.birthday) === 0 ? 'Aniversário hoje!' : bdayLabel(c.birthday)}</span>` : ''}${st.online ? '<span class="badge">🌐 Veio pelo link</span>' : ''}${appts.some(a => a.seriesId && !a.packageId && !isPast(a) && a.status !== 'cancelado') ? '<span class="badge">🔁 Cliente fixa</span>' : ''}${activePkgs.length ? '<span class="badge">📦 Pacote</span>' : ''}</div>
+          <div class="badges">${c.birthday ? `<span class="badge ${bdayIn(c.birthday) === 0 ? 'warn' : ''}">🎂 ${bdayIn(c.birthday) === 0 ? 'Aniversário hoje!' : bdayLabel(c.birthday)}</span>` : ''}${st.online ? '<span class="badge">🌐 Veio pelo link</span>' : ''}${appts.some(a => a.seriesId && !a.packageId && !isPast(a) && a.status !== 'cancelado') ? '<span class="badge">🔁 Cliente fixa</span>' : ''}${activePkgs.length ? '<span class="badge">📦 Pacote</span>' : ''}${visits.length <= 1 ? '<span class="badge ok">✨ Cliente nova</span>' : ''}</div>
         </div>
       </div>
       <div class="actions3">
@@ -2078,32 +2110,44 @@ function vClient(id, q) {
       </div>
 
       ${c.phone && c.birthday && bdayIn(c.birthday) <= 0 ? `<a class="btn ok" style="margin-bottom:.8rem" target="_blank" rel="noopener" href="${waLink(c.phone, bdayText(c))}">🎂 Mandar parabéns</a>` : ''}
-      <div class="note ${c.notes ? '' : 'empty-note'}" id="note">📝 ${c.notes ? `<b>Observação:</b> ${esc(c.notes)}` : '<span class="muted">Sem observação (alergias, preferências…)</span>'}
-        <button type="button" class="btn small" id="edit-note">${c.notes ? '✏️' : '+ Escrever'}</button></div>
+      ${c.notes ? `<div class="note-full"><div class="line"><b class="grow">📝 Observação</b><button type="button" class="btn small" id="edit-note">✏️ Mudar</button></div><p>${esc(c.notes)}</p></div>`
+        : '<button type="button" class="linkish" id="edit-note" style="margin:0 0 .8rem">📝 + Escrever observação <span class="muted" style="font-weight:400">(alergias, preferências…)</span></button>'}
 
+      ${upcoming[0] ? `<a class="card nextcard" href="#/agendamento/${upcoming[0].id}"><small>📅 Próximo horário${upcoming[0].status === 'pendente' ? ' · ⏳ pedido para confirmar' : ''}</small>
+          <b>${whenTxt(upcoming[0])}</b>${upcoming[0].service ? `<span>${esc(upcoming[0].service)}</span>` : ''}<i>›</i></a>`
+        : `<div class="card nextcard none"><small>📅 Próximo horário</small><b>Nenhum marcado</b><a class="btn small main" href="#/agendar?c=${c.id}">📅 Agendar</a></div>`}
+
+      ${st.owes > 0 ? `<div class="card owebox">
+        <a class="line" href="${url(hf === 'deve' ? '' : 'deve')}" data-f style="color:inherit;text-decoration:none"><b class="grow">💸 Deve ${brl(st.owes)}</b><span class="muted">ver ›</span></a>
+        <div class="row" style="margin-top:.5rem">
+          <button class="btn small ok" id="pay-all">💰 Receber</button>
+          ${c.phone ? `<a class="btn small" target="_blank" rel="noopener" href="${waLink(c.phone, `Olá, ${first}! Tudo bem? 😊 Passando para lembrar que ficou um valor em aberto de ${brl(st.owes)} aqui no ${session.tenant.name}. Pode ser por Pix, dinheiro ou cartão. Obrigada! 💖`)}">💸 Cobrar</a>` : ''}
+        </div></div>` : ''}
+
+      ${late ? `<div class="card latebox"><b>⏰ Já passou do tempo dela</b><span>Costuma vir a cada ${every} dias e a última vez foi há ${sinceLast} dias.</span>
+        ${c.phone ? `<a class="btn small" target="_blank" rel="noopener" href="${waLink(c.phone, `Oi, ${first}! Quanto tempo! 😊 Estamos com saudade de você aqui no ${session.tenant.name}. Que tal marcar um horário esta semana?`)}">💬 Chamar de volta</a>` : ''}</div>` : ''}
+
+      <h2>Sobre ela</h2>
       <div class="card extrato">
         <div class="ex-row"><span>Visitas</span><b>${st.visits}${st.last ? ` <small class="muted">· última ${daysAgo(st.last.date)}</small>` : ''}</b></div>
-        ${st.fav ? `<div class="ex-row"><span>Serviço preferido</span><b>${esc(st.fav)}</b></div>` : ''}
-        ${st.since ? `<div class="ex-row"><span>Cliente desde</span><b>${fmtDate(st.since, { month: 'short', year: 'numeric' }).replace('.', '')}</b></div>` : ''}
-        <div class="ex-row"><span>Já pagou</span><b style="color:var(--ok)">${brl(st.paid)}</b></div>
+        ${every >= 7 ? `<div class="ex-row"><span>Costuma vir</span><b>a cada ~${every} dias</b></div>` : ''}
+        ${expectedBack ? `<div class="ex-row"><span>Deve voltar por volta de</span><b>${fmtShort(expectedBack).slice(0, 5)}</b></div>` : ''}
+        ${topSvcs.length ? `<div class="ex-row"><span>Faz</span><b class="ex-list">${topSvcs.map(([n, k]) => `${esc(n)} <small class="muted">${k}×</small>`).join('<br>')}</b></div>` : ''}
+        ${topProds.length ? `<div class="ex-row"><span>Compra</span><b class="ex-list">${topProds.map(([n, k]) => `${esc(n)} <small class="muted">${k}×</small>`).join('<br>')}</b></div>` : ''}
+        <div class="ex-row"><span>Já gastou</span><b style="color:var(--ok)">${brl(st.paid)}${avgVisit ? `<small class="muted" style="display:block;font-weight:600">média ${brl(avgVisit).replace(',00', '')} por visita</small>` : ''}</b></div>
         ${clientToCome(c.id) ? `<div class="ex-row"><span>Parcelas a vencer</span><b>${brl(clientToCome(c.id))}</b></div>` : ''}
-        <a class="ex-row ${hf === 'deve' ? 'on' : ''}" href="${url(hf === 'deve' ? '' : 'deve')}" data-f><span>Falta pagar</span><b style="${st.owes > 0 ? 'color:var(--warn)' : ''}">${st.owes > 0 ? brl(st.owes) : 'nada 🎉'}</b><i>${st.owes > 0 ? (hf === 'deve' ? '▾' : '›') : ''}</i></a>
+        ${st.since ? `<div class="ex-row"><span>Cliente desde</span><b>${fmtDate(st.since, { month: 'short', year: 'numeric' }).replace('.', '')}</b></div>` : ''}
       </div>
-      ${st.owes > 0 ? `<div class="row" style="margin-bottom:.7rem">
-        <button class="btn ok" id="pay-all">💰 Receber ${brl(st.owes)}</button>
-        ${c.phone ? `<a class="btn" target="_blank" rel="noopener" href="${waLink(c.phone, `Olá, ${first}! Tudo bem? 😊 Passando para lembrar que ficou um valor em aberto de ${brl(st.owes)} aqui no ${session.tenant.name}. Pode ser por Pix, dinheiro ou cartão. Obrigada! 💖`)}">💸 Cobrar</a>` : ''}
-      </div>` : ''}
 
       ${pres.length ? `<h2>💳 Pré-reservas esperando o sinal</h2>
         <div class="list clist">${pres.map(a => dayRow(a, '', { date: true, who: false })).join('')}</div>` : ''}
 
-      <h2 id="c-next">Próximos horários</h2>
-      <div class="list clist">${next.filter(a => a.status !== PRE).length ? next.filter(a => a.status !== PRE).map(a => dayRow(a, '', { date: true, who: false })).join('') : `<div class="empty">Nenhum horário marcado.<br><a class="btn small main" href="#/agendar?c=${c.id}" style="margin-top:.6rem">📅 Agendar</a></div>`}</div>
+      ${upcoming.length > 1 ? `<h2 id="c-next">Horários marcados · ${upcoming.length}</h2>
+      <div class="list clist">${upcoming.map(a => dayRow(a, '', { date: true, who: false })).join('')}</div>` : ''}
 
-      <h2 id="c-pkgs">📦 Pacotes</h2>
-      <div class="list">${activePkgs.map(packageCard).join('') || '<p class="muted" style="margin:0">Faz cronograma ou vende sessões em pacote? Crie um pacote e cada horário mostra "2ª de 4".</p>'}</div>
-      <a class="btn" href="#/pacote?c=${c.id}" style="margin-top:.6rem">+ Novo pacote</a>
-      ${donePkgs.length ? `<details class="cancelled"><summary>Pacotes concluídos (${donePkgs.length})</summary><div class="list">${donePkgs.map(packageCard).join('')}</div></details>` : ''}
+      ${pkgs.length ? `<h2 id="c-pkgs">📦 Pacotes</h2>
+      <div class="list">${activePkgs.map(packageCard).join('') || '<p class="muted" style="margin:0">Nenhum pacote em andamento.</p>'}</div>
+      ${donePkgs.length ? `<details class="cancelled"><summary>Pacotes concluídos (${donePkgs.length})</summary><div class="list">${donePkgs.map(packageCard).join('')}</div></details>` : ''}` : ''}
 
       <h2 id="hist">Histórico</h2>
       ${allHistory.length ? `<div class="chips filters hscroll">${Object.entries(hFilters).map(([k, [n, fn]]) => {
@@ -2112,9 +2156,10 @@ function vClient(id, q) {
       }).join('')}</div>` : ''}
       <div class="list clist">${historyHtml || `<div class="muted">${allHistory.length ? 'Nada neste filtro.' : 'Ainda não tem histórico.'}</div>`}</div>
 
-      <div class="row" style="margin-top:2rem">
-        <a class="btn" href="#/cliente-editar?id=${c.id}">✏️ Editar dados</a>
-        <button type="button" class="btn danger" id="del-client">🗑️ Apagar cliente</button>
+      <div class="menu" style="margin-top:1.5rem">
+        <a class="menu-item" href="#/cliente-editar?id=${c.id}"><span class="mi-icon">✏️</span><span class="mi-text"><b>Editar dados</b><small>Nome, telefone, aniversário, observação</small></span><span class="mi-go">›</span></a>
+        <a class="menu-item" href="#/pacote?c=${c.id}"><span class="mi-icon">📦</span><span class="mi-text"><b>Novo pacote</b><small>Cronograma ou sessões vendidas juntas</small></span><span class="mi-go">›</span></a>
+        <button type="button" class="menu-item danger" id="del-client"><span class="mi-icon">🗑️</span><span class="mi-text"><b>Apagar cliente</b><small>Apaga também o histórico dela</small></span></button>
       </div>`,
     bind(el) {
       bindQuickPay(el);

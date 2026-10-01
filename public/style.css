@@ -862,3 +862,21 @@ details.ready { padding: .7rem 1rem; }
 .preview-bar .btn.small { width: auto; }
 .preview-page { background: #fff; color: #222; max-width: 820px; margin: 0 auto; padding: 1rem .9rem; border-radius: 4px; box-shadow: 0 4px 18px rgba(0,0,0,.35); }
 @media print { .preview { display: none !important; } }
+
+/* ---------- Ficha da cliente ---------- */
+.note-full { background: var(--warn-soft); border-left: 5px solid var(--warn); border-radius: 12px; padding: .7rem .9rem; margin-bottom: .8rem; }
+.note-full p { margin: .35rem 0 0; font-size: 1rem; white-space: pre-line; }
+.nextcard { position: relative; display: flex; flex-direction: column; text-decoration: none; color: inherit; margin-bottom: .8rem; border-left: 5px solid var(--brand); }
+.nextcard small { color: var(--brand); font-weight: 700; font-size: .82rem; }
+.nextcard b { font-size: 1.15rem; }
+.nextcard span { color: var(--muted); }
+.nextcard i { position: absolute; right: 1rem; top: 50%; transform: translateY(-50%); font-style: normal; color: var(--muted); font-size: 1.3rem; }
+.nextcard.none { border-left-color: var(--line); }
+.nextcard.none .btn { align-self: flex-start; margin-top: .5rem; width: auto; }
+.owebox { border-color: var(--warn); background: var(--warn-soft); margin-bottom: .8rem; }
+.owebox b { color: var(--warn); font-size: 1.05rem; }
+.latebox { display: flex; flex-direction: column; gap: .3rem; border-color: var(--brand); background: var(--brand-soft); margin-bottom: .8rem; }
+.latebox .btn { align-self: flex-start; width: auto; }
+.ex-row .ex-list { text-align: right; line-height: 1.35; }
+.dr-info b .flag { font-size: .85rem; margin-left: .3rem; }
+.flag-legend { text-align: center; font-size: .8rem; color: var(--muted); margin: .5rem 0 0; }
