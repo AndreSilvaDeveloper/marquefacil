@@ -263,7 +263,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
       total: brl(o.total), pagamento, pix: o.left > 0 ? s.whatsapp.pixKey || '' : '',
     });
     if (manual && !waNumber(client?.phone)) return 'nophone';
-    return sendSale(t, s, { apptId: `sale:${key}`, kind: manual ? `salenew:${Date.now()}` : 'salenew', client, body });
+    return sendSale(t, s, { apptId: `sale:${key}`, kind: manual ? `salenew:${Date.now()}-${Math.random().toString(36).slice(2, 8)}` : 'salenew', client, body });
   }
   const valueOfSale = x => ('total' in x ? x.total : x.price) || 0;
 
