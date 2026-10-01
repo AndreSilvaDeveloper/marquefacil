@@ -3805,7 +3805,7 @@ function vRelatorio(_, q) {
         <div class="field"><span class="lbl">👩 Clientes <span class="opt">(se quiser — vazio = todas)</span></span>
           ${cls.length ? `<div class="chips mini" style="margin-bottom:.4rem">${cls.map(id => `<button type="button" class="chip on" data-rmcl="${id}">${esc(clientName(id))} ✕</button>`).join('')}</div>` : ''}
           <div class="ac"><input type="text" id="r-cl" placeholder="${cls.length ? '+ Outra cliente' : 'Todas as clientes · escreva um nome para escolher'}" autocapitalize="words"><div class="sug" hidden></div></div></div>
-        <button type="button" class="btn main" id="r-pdf">📄 Ver / baixar PDF</button>
+        <div class="row"><button type="button" class="btn main" id="r-view">👀 Ver relatório</button><button type="button" class="btn" id="r-pdf">⬇️ Baixar PDF</button></div>
       </div>
       <div class="report">
         <div class="rep-head"><b>${esc(session.tenant.name)}</b><span>Relatório · ${periodLabel}</span>
@@ -3828,11 +3828,24 @@ function vRelatorio(_, q) {
       $('#r-cl', el).addEventListener('change', addTyped);
       $('#r-cl', el).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addTyped(); } });
       el.addEventListener('click', e => { const b = e.target.closest('[data-rmcl]'); if (b) replaceTo(url({ cl: cls.filter(x => x !== b.dataset.rmcl).join(',') })); });
-      // PDF: a tela de impressão do celular/computador, só com o relatório ("Salvar como PDF")
-      $('#r-pdf', el).onclick = () => {
+      // PDF: a impressão do celular/computador, só com o relatório (em alguns celulares já baixa direto)
+      const pdf = () => {
         const old = document.title;
         document.title = `Relatório ${session.tenant.name} ${periodLabel.replaceAll('/', '-')}`;
         setTimeout(() => { window.print(); setTimeout(() => { document.title = old; }, 1000); }, 50);
+      };
+      $('#r-pdf', el).onclick = pdf;
+      // Ver: o relatório em tela cheia, como uma folha, antes de baixar
+      $('#r-view', el).onclick = () => {
+        const bg = document.createElement('div');
+        bg.className = 'preview';
+        bg.innerHTML = `<div class="preview-bar"><button type="button" class="btn small" id="pv-x">✕ Fechar</button><button type="button" class="btn small main" id="pv-pdf">⬇️ Baixar PDF</button></div>
+          <div class="preview-page">${$('.report', el).innerHTML}</div>`;
+        document.body.appendChild(bg);
+        document.body.style.overflow = 'hidden';
+        const close = () => { bg.remove(); document.body.style.overflow = ''; };
+        $('#pv-x', bg).onclick = close;
+        $('#pv-pdf', bg).onclick = () => { close(); pdf(); };
       };
     },
   };

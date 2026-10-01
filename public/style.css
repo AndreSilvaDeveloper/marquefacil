@@ -855,3 +855,10 @@ details.ready { padding: .7rem 1rem; }
 .rtable th { word-break: keep-all; overflow-wrap: normal; }
 .rtable td:first-child { word-break: normal; overflow-wrap: anywhere; }
 .rtable td:first-child { word-break: normal; overflow-wrap: anywhere; }
+
+/* Relatório em tela cheia (como uma folha) */
+.preview { position: fixed; inset: 0; z-index: 50; background: #6b6b6b; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 3.6rem .6rem 1.5rem; }
+.preview-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 51; display: flex; justify-content: space-between; gap: .5rem; padding: .6rem .8rem; background: #333; }
+.preview-bar .btn.small { width: auto; }
+.preview-page { background: #fff; color: #222; max-width: 820px; margin: 0 auto; padding: 1rem .9rem; border-radius: 4px; box-shadow: 0 4px 18px rgba(0,0,0,.35); }
+@media print { .preview { display: none !important; } }
