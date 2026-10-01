@@ -801,3 +801,9 @@ details.ready { padding: .7rem 1rem; }
 .mcal-d i.pend { background: var(--warn); }
 .cl-desc { width: 100%; min-height: 2.4rem !important; padding: .25rem .6rem !important; font-size: .92rem; margin-top: .35rem; }
 .cl-desc-open { display: block; font-size: .85rem; padding: .15rem 0; }
+
+/* ---------- Mais: menu ---------- */
+.mi-badge { flex: 0 0 auto; min-width: 1.6rem; height: 1.6rem; padding: 0 .4rem; border-radius: 999px; background: var(--brand); color: #fff; font-style: normal; font-weight: 800; font-size: .8rem; display: grid; place-items: center; }
+.mi-badge.alert { background: var(--warn); }
+.pk-bar { flex: 0 0 3.5rem; height: .5rem; background: var(--line); border-radius: 999px; overflow: hidden; }
+.pk-bar i { display: block; height: 100%; background: var(--ok); }

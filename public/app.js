@@ -422,7 +422,7 @@ function parseHash() {
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
   agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: (id, q) => (q.id ? (q.editar ? vSaleForm(id, q) : vSaleView(id, q)) : vSell(id, q)), financeiro: vFin, mais: vMore,
-  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, ajuda: vAjuda, conta: vConta, pacote: vPackageForm,
+  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, ajuda: vAjuda, aparelho: vAparelho, dados: vDados, configurar: vConfigurar, pacotes: vPacotes, conta: vConta, pacote: vPackageForm,
 };
 
 let lastHash = '';
@@ -1757,7 +1757,7 @@ function vBuscar(_, q) {
   }
 
   return {
-    title: 'Buscar', tab: 'buscar',
+    title: 'Buscar', tab: 'mais', back: true,
     html: `
       <div class="search ${SpeechRec ? 'with-mic' : ''}"><input type="search" id="s" placeholder="🔍 Nome, telefone, dia…" value="${esc(text)}" enterkeyhint="search">
         ${SpeechRec ? '<button type="button" class="mic" id="mic" aria-label="Buscar falando">🎤</button>' : ''}</div>
@@ -3502,22 +3502,15 @@ function vMore() {
   const salon = salonHours();
   const low = lowProducts().length;
   const pend = pendingAppts().length;
-  const link = salon?.slug ? `${location.origin}/${salon.slug}` : '';
-  const lastBk = db.settings.lastBackup ? daysAgo(dstr(new Date(db.settings.lastBackup))) : '';
   const tom = tomorrowList();
   const owing = db.clients.filter(c => clientOwes(c.id) > 0).length;
-  // [link, ícone, nome, número, destacar quando tem]
-  const tiles = [
-    ['#/pedidos', '⏳', 'Pedidos', pend, true],
-    ['#/lembretes', '💬', 'Lembrar amanhã', tom.filter(x => !x.remindedAt).length, false],
-    ['#/buscar?k=prereservas', '💳', 'Pré-reservas', preAppts().length, true],
-    ['#/buscar?k=devendo', '💸', 'Quem deve', owing, true],
-    ['#/buscar?k=aniver', '🎂', 'Aniversários', bdaysSoon().length, false],
-    ['#/despesa', '➖', 'Lançar despesa', 0, false],
-  ];
-  const item = (href, icon, title, sub, extra = '') => `
+  const steps = readySteps();
+  const stepsDone = steps.filter(x => x[1]).length;
+  const activePkgs = db.packages.filter(pkgActive).length;
+  // item do menu: abre uma página; o número em destaque quando pede atenção
+  const item = (href, icon, title, sub = '', n = 0, alert = false) => `
     <a class="menu-item" href="${href}"><span class="mi-icon">${icon}</span>
-      <span class="mi-text"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${extra}<span class="mi-go">›</span></a>`;
+      <span class="mi-text"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${n ? `<i class="mi-badge ${alert ? 'alert' : ''}">${n}</i>` : ''}<span class="mi-go">›</span></a>`;
   return {
     title: 'Mais', tab: 'mais',
     html: `
@@ -3530,58 +3523,49 @@ function vMore() {
         </div><span class="mi-go">›</span>
       </a>
 
-      <div id="ready"></div>
+      ${stepsDone < steps.length ? `<div class="menu" style="margin-bottom:.4rem">${item('#/configurar', '🚀', 'Primeiros passos', `${stepsDone} de ${steps.length} prontos · o que falta configurar`)}</div>` : ''}
 
-      <h2>Atalhos</h2>
-      <div class="tiles">
-        ${tiles.map(([href, icon, label, n, alert]) => `<a class="tile ${alert && n ? 'alert' : ''}" href="${href}"><span>${icon}</span><b>${label}</b>${n ? `<i>${n}</i>` : ''}</a>`).join('')}
+      <h2>Dia a dia</h2>
+      <div class="menu">
+        ${item('#/buscar', '🔍', 'Buscar', 'Cliente, horário, venda, dia…')}
+        ${item('#/pedidos', '⏳', 'Pedidos para confirmar', pend ? 'Pedidos que chegaram pelo link' : 'Nenhum esperando', pend, true)}
+        ${item('#/lembretes', '💬', 'Lembrar clientes de amanhã', tom.length ? `${tom.length} ${tom.length === 1 ? 'horário' : 'horários'} amanhã` : 'Nada marcado amanhã', tom.filter(x => !x.remindedAt).length)}
+        ${item('#/buscar?k=prereservas', '💳', 'Pré-reservas', 'Esperando o sinal', preAppts().length, true)}
+        ${item('#/buscar?k=devendo', '💸', 'Quem deve', owing ? `${owing} ${owing === 1 ? 'cliente' : 'clientes'}` : 'Ninguém devendo', owing, true)}
+        ${item('#/buscar?k=aniver', '🎂', 'Aniversários', 'Próximos 7 dias', bdaysSoon().length)}
+        ${item('#/despesa', '➖', 'Lançar despesa', 'Aluguel, produtos, contas…')}
       </div>
 
       <h2>Meu salão</h2>
       <div class="menu">
         ${item('#/itens/services', '💇', 'Serviços', `${db.services.length} ${db.services.length === 1 ? 'serviço' : 'serviços'}`)}
         ${item('#/itens/products', '🛍️', 'Produtos', `${db.products.length} ${db.products.length === 1 ? 'produto' : 'produtos'}${low ? ` · <span style="color:var(--bad)">⚠️ ${low} acabando</span>` : ''}`)}
-        ${item('#/itens/services', '📦', 'Pacotes (cronogramas)', (() => {
-          const presets = db.services.filter(sv => sv.package?.total).length, active = db.packages.filter(pkgActive).length;
-          return `${presets} ${presets === 1 ? 'serviço é pacote' : 'serviços são pacotes'} · ${active} ${active === 1 ? 'cronograma em andamento' : 'cronogramas em andamento'}`;
-        })())}
+        ${item('#/pacotes', '📦', 'Pacotes (cronogramas)', activePkgs ? `${activePkgs} em andamento` : 'Nenhum em andamento')}
       </div>
 
-      <h2>Clientes agendando sozinhas</h2>
+      <h2>Agendamento pelo link</h2>
       <div class="menu">
-        ${item('#/link', '🔗', 'Link para as clientes', salon ? (salon.enabled ? `<span style="color:var(--ok)">● Ligado</span> · ${esc(link.replace(/^https?:\/\//, ''))}` : '○ Desligado') : 'Clientes pedem horário pela internet')}
-        ${link && salon.enabled ? `<div class="menu-sub wide">
-          <button type="button" class="btn small" id="copy-link">📋 Copiar</button>
-          <button type="button" class="btn small" id="qr-link">📱 QR code</button>
-          <a class="btn small" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`Agende seu horário no ${session.tenant.name} por aqui: ${link}`)}">💬 Mandar</a></div>` : ''}
-        ${item('#/link', '🕐', 'Dias e horários de atendimento', salon?.days ? esc(hoursSummary(salon.days)) + (salon.lunch ? ` · almoço ${salon.lunch[0]}–${salon.lunch[1]}` : '') : 'Configure para ver os horários livres na agenda')}
-        ${item('#/whatsapp', '💬', 'WhatsApp automático', '<span id="wa-status">…</span>')}
-        ${item('#/whatsapp?textos=1', '✏️', 'Textos das mensagens', 'Confirmação, lembrete, pré-reserva…')}
+        ${item('#/link', '🔗', 'Link para as clientes', salon ? (salon.enabled ? '<span style="color:var(--ok)">● Ligado</span> · copiar, QR code, mandar' : '○ Desligado') : 'Clientes pedem horário pela internet')}
+        ${item('#/link?p=horarios', '🕐', 'Dias e horários de atendimento', salon?.days ? esc(hoursSummary(salon.days)) : 'Dias, almoço, folgas e feriados')}
       </div>
 
-      <h2>Neste aparelho</h2>
+      <h2>WhatsApp automático</h2>
       <div class="menu">
-        ${item('#/avisos', '🔔', 'Avisos no celular', '<span id="push-sub">…</span>')}
-        <div class="menu-item static"><span class="mi-icon">🔠</span><span class="mi-text"><b>Tamanho da letra</b></span></div>
-        <div class="menu-sub">${toggle2('big', !!db.settings.big, 'A+ Grande', 'A Normal', true)}</div>
-        ${isInstalled() ? '' : `<button type="button" class="menu-item" id="install"><span class="mi-icon">📲</span>
-          <span class="mi-text"><b>Instalar na tela inicial</b><small>Abre como um aplicativo, com ícone próprio</small></span><span class="mi-go">›</span></button>
-          <div class="menu-sub" id="install-help" hidden></div>`}
+        ${item('#/whatsapp', '📱', 'Conexão', '<span id="wa-status">…</span>')}
+        ${item('#/whatsapp?p=mandar', '✅', 'O que mandar', 'Confirmação, lembrete, cobranças, Pix…')}
+        ${item('#/whatsapp?p=textos', '✏️', 'Textos das mensagens', 'Escrever do seu jeito')}
       </div>
 
-      <h2>Seus dados</h2>
+      <h2>Configurações</h2>
       <div class="menu">
-        <button type="button" class="menu-item" id="exp"><span class="mi-icon">📤</span>
-          <span class="mi-text"><b>Fazer cópia de segurança</b><small>${lastBk ? `Última cópia: ${lastBk}` : 'Nunca fez · os dados já ficam guardados na internet'}</small></span><span class="mi-go">›</span></button>
-        <button type="button" class="menu-item" id="csv"><span class="mi-icon">📇</span>
-          <span class="mi-text"><b>Baixar lista de clientes</b><small>Planilha com nome, telefone, visitas e última vez (${db.clients.length})</small></span><span class="mi-go">›</span></button>
-        <details class="menu-item faq"><summary><span class="mi-icon">⚙️</span><span class="mi-text"><b>Mais opções</b><small>Recuperar de uma cópia</small></span></summary>
-          <label class="btn small danger" style="margin-top:.6rem">📥 Recuperar de uma cópia (troca tudo)
-            <input type="file" id="imp" accept=".json,application/json" hidden></label></details>
+        ${item('#/avisos', '🔔', 'Avisos no celular', pushSupported() && Notification.permission === 'granted' ? '<span style="color:var(--ok)">● Ligados</span>' : 'Pedidos, horário chegando, resumo do dia…')}
+        ${item('#/aparelho', '🔠', 'Letra e aplicativo', `Letra ${db.settings.big ? 'grande' : 'normal'}${isInstalled() ? '' : ' · instalar na tela inicial'}`)}
+        ${item('#/dados', '💾', 'Seus dados', 'Cópia de segurança e planilha de clientes')}
       </div>
 
       <h2>Conta</h2>
       <div class="menu">
+        ${item('#/conta', '👤', 'Minha conta', 'Nome do salão, seu nome e senha')}
         ${item('#/ajuda', '❓', 'Ajuda', 'Perguntas mais comuns')}
         <button type="button" class="menu-item danger" id="logout"><span class="mi-icon">🚪</span><span class="mi-text"><b>Sair da conta</b><small>Neste aparelho</small></span></button>
       </div>
@@ -3590,22 +3574,41 @@ function vMore() {
         ${db.clients.length} clientes · ${db.appts.length} horários · ${db.sales.length} vendas · ${db.expenses.length} despesas<br>
         ${esc(BRAND.name)}</p>`,
     bind(el) {
-      bindToggle2($('#big', el), v => { db.settings.big = v; save(); applySettings(); });
-      $('#push-sub', el).innerHTML = pushSupported() && Notification.permission === 'granted'
-        ? '<span style="color:var(--ok)">● Ligados</span> · escolher quais avisos' : 'Pedidos, horário chegando, resumo do dia…';
-      $('#qr-link', el) && ($('#qr-link', el).onclick = () => qrSheet(link, session.tenant.name));
-      $('#csv', el).onclick = exportClientsCsv;
-      paintReady($('#ready', el));
-      $('#copy-link', el) && ($('#copy-link', el).onclick = async () => {
-        try { await navigator.clipboard.writeText(link); toast('Link copiado ✓'); } catch { prompt('Copie o link:', link); }
-      });
-      // estado do WhatsApp (precisa de internet)
       api('GET', '/api/whatsapp/status').then(st => {
         const w = $('#wa-status', el);
         if (!w) return;
         w.innerHTML = st.state === 'open' ? `<span style="color:var(--ok)">● Conectado</span>${st.number ? ' · +' + esc(st.number) : ''}`
-          : st.available === false ? 'Ainda não disponível' : '○ Não conectado · confirmações e lembretes automáticos';
-      }).catch(() => { const w = $('#wa-status', el); if (w) w.textContent = 'Confirmações e lembretes automáticos'; });
+          : st.available === false ? 'Ainda não disponível' : '○ Não conectado';
+      }).catch(() => { const w = $('#wa-status', el); if (w) w.textContent = 'Conectar o WhatsApp do salão'; });
+      $('#logout', el).onclick = async () => {
+        const n = pendingChanges().length;
+        if (!confirm(n ? `Ainda tem ${n} alteração(ões) sem enviar (sem internet). Se sair agora, elas se perdem. Sair mesmo assim?` : 'Sair da conta neste aparelho?')) return;
+        await api('POST', '/api/logout').catch(() => {});
+        localStorage.removeItem(cacheKey());
+        logoutLocal();
+      };
+      paintSync();
+    },
+  };
+}
+
+// Letra e aplicativo: tamanho da letra e instalar na tela inicial
+function vAparelho() {
+  return {
+    title: 'Letra e aplicativo', tab: 'mais', back: true,
+    html: `
+      <div class="form">
+        <div class="field"><span class="lbl">🔠 Tamanho da letra</span>
+          ${toggle2('big', !!db.settings.big, 'A+ Grande', 'A Normal', true)}
+          <small class="hint">Deixa tudo maior, para ler sem óculos. Vale só neste aparelho.</small></div>
+      </div>
+      <h2>📲 Instalar na tela inicial</h2>
+      ${isInstalled() ? '<div class="card ready-ok">✅ <b>Já está instalado neste aparelho.</b></div>' : `
+        <p class="muted" style="margin-top:0">Abre como um aplicativo, com ícone próprio, sem precisar do navegador.</p>
+        <button type="button" class="btn main" id="install">📲 Instalar agora</button>
+        <div id="install-help" style="margin-top:.8rem" hidden></div>`}`,
+    bind(el) {
+      bindToggle2($('#big', el), v => { db.settings.big = v; save(); applySettings(); });
       $('#install', el) && ($('#install', el).onclick = async () => {
         if (installPrompt) {
           installPrompt.prompt();
@@ -3620,17 +3623,62 @@ function vMore() {
           ? '<ol class="steps"><li>Toque em <b>Compartilhar</b> (o quadrado com a seta ⬆️) embaixo do Safari</li><li>Toque em <b>Adicionar à Tela de Início</b></li><li>Toque em <b>Adicionar</b></li></ol>'
           : '<ol class="steps"><li>Toque nos <b>três pontinhos ⋮</b> do navegador</li><li>Toque em <b>Instalar app</b> ou <b>Adicionar à tela inicial</b></li></ol>';
       });
-      $('#exp', el).onclick = exportBackup;
-      $('#imp', el).onchange = e => importBackup(e.target.files[0]);
-      $('#logout', el).onclick = async () => {
-        const n = pendingChanges().length;
-        if (!confirm(n ? `Ainda tem ${n} alteração(ões) sem enviar (sem internet). Se sair agora, elas se perdem. Sair mesmo assim?` : 'Sair da conta neste aparelho?')) return;
-        await api('POST', '/api/logout').catch(() => {});
-        localStorage.removeItem(cacheKey());
-        logoutLocal();
-      };
-      paintSync();
     },
+  };
+}
+
+// Seus dados: cópia de segurança, planilha de clientes e recuperar cópia
+function vDados() {
+  const lastBk = db.settings.lastBackup ? daysAgo(dstr(new Date(db.settings.lastBackup))) : '';
+  return {
+    title: 'Seus dados', tab: 'mais', back: true,
+    html: `
+      <p class="muted" style="margin-top:0">Tudo já fica guardado na internet, na sua conta. A cópia é uma segurança a mais.</p>
+      <div class="menu">
+        <button type="button" class="menu-item" id="exp"><span class="mi-icon">📤</span>
+          <span class="mi-text"><b>Fazer cópia de segurança</b><small>${lastBk ? `Última cópia: ${lastBk}` : 'Nunca fez'}</small></span><span class="mi-go">›</span></button>
+        <button type="button" class="menu-item" id="csv"><span class="mi-icon">📇</span>
+          <span class="mi-text"><b>Baixar lista de clientes</b><small>Planilha com nome, telefone, visitas e última vez (${db.clients.length})</small></span><span class="mi-go">›</span></button>
+      </div>
+      <h2>Recuperar de uma cópia</h2>
+      <p class="muted" style="margin-top:0">⚠️ Troca <b>tudo</b> o que está na sua conta pelo que está no arquivo. Use só se precisar.</p>
+      <label class="btn danger">📥 Escolher o arquivo da cópia
+        <input type="file" id="imp" accept=".json,application/json" hidden></label>`,
+    bind(el) {
+      $('#exp', el).onclick = exportBackup;
+      $('#csv', el).onclick = exportClientsCsv;
+      $('#imp', el).onchange = e => importBackup(e.target.files[0]);
+    },
+  };
+}
+
+// Primeiros passos: o que falta configurar (cada item leva para onde se resolve)
+function vConfigurar() {
+  return {
+    title: 'Primeiros passos', tab: 'mais', back: true,
+    html: `<p class="muted" style="margin-top:0">Deixe o salão pronto para as clientes agendarem sozinhas e receberem as mensagens.</p><div id="ready"></div>`,
+    bind(el) { paintReady($('#ready', el)); },
+  };
+}
+
+// Pacotes (cronogramas) em andamento de todas as clientes
+function vPacotes() {
+  const active = db.packages.filter(pkgActive).sort((a, b) => clientName(a.clientId).localeCompare(clientName(b.clientId), 'pt-BR'));
+  const done = db.packages.filter(p => !pkgActive(p));
+  const presets = db.services.filter(sv => sv.package?.total);
+  return {
+    title: 'Pacotes', tab: 'mais', back: true,
+    html: `
+      <p class="csum"><b>${active.length}</b> ${active.length === 1 ? 'cronograma em andamento' : 'cronogramas em andamento'}${done.length ? ` · ${done.length} ${done.length === 1 ? 'concluído' : 'concluídos'}` : ''}</p>
+      <div class="list clist">${active.length ? active.map(p => {
+        const n = pkgDone(p), left = pkgLeftToBook(p);
+        return `<a class="crow" href="#/cliente/${p.clientId}" style="text-decoration:none;color:inherit">${avatar(clientName(p.clientId))}
+          <span class="dr-info"><b>${esc(clientName(p.clientId))}</b><span>📦 ${esc(p.name)} · ${n} de ${p.total} ${n === 1 ? 'feita' : 'feitas'}</span>
+          ${left ? `<em class="warn">Falta marcar ${left} ${left === 1 ? 'sessão' : 'sessões'}</em>` : '<em class="ok">Todas marcadas</em>'}</span>
+          <span class="pk-bar"><i style="width:${Math.round(n / p.total * 100)}%"></i></span></a>`;
+      }).join('') : '<div class="empty">Nenhum cronograma em andamento.<br><small>Para criar, abra a ficha da cliente → + Novo pacote, ou agende um serviço que é pacote.</small></div>'}</div>
+      <h2>Serviços que são pacote</h2>
+      <p class="muted" style="margin-top:0">${presets.length ? presets.map(sv => `<a href="#/item/services?id=${sv.id}">📦 ${esc(sv.name)} · ${sv.package.total} sessões</a>`).join('<br>') : 'Nenhum. Em <a href="#/itens/services">Serviços</a>, abra um serviço e marque "É um pacote".'}</p>`,
   };
 }
 
@@ -3665,24 +3713,28 @@ function vAvisos() {
 }
 
 // "Seu salão está pronto?": o que falta configurar, cada item leva direto para onde se resolve
-async function paintReady(box) {
-  if (!box) return;
+// Passos para deixar o salão pronto: [nome, feito?, onde resolver] (o WhatsApp é conferido na hora, na página)
+function readySteps() {
   const salon = salonHours();
-  const items = [
+  return [
     ['Serviços cadastrados', db.services.length > 0, '#/itens/services'],
-    ['Dias e horários de atendimento', !!salon?.days, '#/link'],
+    ['Dias e horários de atendimento', !!salon?.days, '#/link?p=horarios'],
     ['Link para as clientes ligado', !!salon?.enabled, '#/link'],
-    ['WhatsApp conectado', null, '#/whatsapp'],
     ['Avisos ligados neste aparelho', pushSupported() && Notification.permission === 'granted', '#/avisos'],
     ['Cópia de segurança nos últimos 30 dias', !!db.settings.lastBackup && Date.now() - db.settings.lastBackup < 30 * 86400000, '#exp'],
   ];
+}
+async function paintReady(box) {
+  if (!box) return;
+  const items = readySteps();
+  items.splice(3, 0, ['WhatsApp conectado', null, '#/whatsapp']);
   const draw = () => {
     const done = items.filter(i => i[1]).length;
-    if (done === items.length) { box.innerHTML = ''; return; }
-    box.innerHTML = `<details class="card ready"><summary class="line"><b class="grow">🚀 Falta configurar</b><span class="muted">${done} de ${items.length} ›</span></summary>
+    box.innerHTML = `<div class="card ready">
+      <div class="line"><b class="grow">${done === items.length ? '✅ Tudo pronto!' : '🚀 Falta configurar'}</b><span class="muted">${done} de ${items.length}</span></div>
       <div class="pkg"><div class="bar"><i style="width:${Math.round(done / items.length * 100)}%"></i></div></div>
       <ul>${items.map(([t, ok, href]) => `<li class="${ok ? 'ok' : ''}">${ok ? '✅' : ok === null ? '⏳' : '⬜'} ${href && !ok ? `<a href="${href}">${t} ›</a>` : t}</li>`).join('')}</ul>
-    </details>`;
+    </div>`;
   };
   draw();
   // itens que ficam nesta mesma página: rola até lá (a cópia já começa a ser feita)
@@ -4126,32 +4178,19 @@ function onlineView(title, load, paint) {
   };
 }
 
-function vLink() {
-  return onlineView('Link de agendamento', () => api('GET', '/api/settings'), (box, S) => {
+// Duas páginas: "Link para as clientes" (ligar, link, como aparecem os horários) e "Dias e horários" (expediente, almoço, folgas)
+function vLink(_, q = {}) {
+  const part = q.p === 'horarios' ? 'horarios' : '';
+  return onlineView(part ? 'Dias e horários' : 'Link para as clientes', () => api('GET', '/api/settings'), (box, S) => {
     cacheSalon(S);
     const b = S.booking;
     const url = `${location.origin}/${S.slug}`;
     const share = `Agende seu horário no ${session.tenant.name} por aqui: ${url}`;
     box.innerHTML = `
       <div class="form">
-        <span class="lbl">Clientes podem agendar pelo link?</span>
-        ${toggle2('enabled', b.enabled, '✓ Sim, ligado', 'Desligado')}
-
-        <div class="field" style="margin-top:1rem"><span class="lbl">Quando uma cliente pede um horário</span>
-          ${toggle2('approval', b.requireApproval, '✓ Eu confirmo cada pedido', 'Confirma sozinho', true)}
-          <small class="hint">Com "Eu confirmo", você recebe um aviso no celular e a cliente só recebe a confirmação depois que você aceitar.</small></div>
-
-        <div class="card" style="margin-top:1rem">
-          <div class="muted" style="font-size:.85rem">Seu link:</div>
-          <b style="word-break:break-all">${esc(url)}</b>
-          <div class="row" style="margin-top:.7rem;flex-wrap:wrap">
-            <button type="button" class="btn small" id="copy">📋 Copiar</button>
-            <a class="btn small" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(share)}">💬 Mandar</a>
-            <a class="btn small" target="_blank" rel="noopener" href="${esc(url)}">👀 Ver</a>
-          </div>
-        </div>
-
-        <h2>Dias e horários de atendimento</h2>
+        ${part === 'horarios' ? `
+        <p class="muted" style="margin-top:0">Os horários livres da agenda e do link seguem estes dias. Fora deles você ainda pode agendar pelo app.</p>
+        <h2 style="margin-top:0">Dias e horários de atendimento</h2>
         <div class="list" id="days">${WEEKDAYS.map((name, d) => {
           const r = b.days[d];
           return `<div class="card daysrow" data-d="${d}">
@@ -4173,6 +4212,29 @@ function vLink() {
           </div>
         </div>
 
+        <h2>Folgas e feriados</h2>
+        <div id="closed" class="chips"></div>
+        <div class="row" style="margin-top:.6rem"><input type="date" id="newclosed" min="${S.today}"><button type="button" class="btn small" id="addclosed" style="flex:0 0 auto">+ Adicionar</button></div>
+        ` : `
+        <span class="lbl">Clientes podem agendar pelo link?</span>
+        ${toggle2('enabled', b.enabled, '✓ Sim, ligado', 'Desligado')}
+
+        <div class="field" style="margin-top:1rem"><span class="lbl">Quando uma cliente pede um horário</span>
+          ${toggle2('approval', b.requireApproval, '✓ Eu confirmo cada pedido', 'Confirma sozinho', true)}
+          <small class="hint">Com "Eu confirmo", você recebe um aviso no celular e a cliente só recebe a confirmação depois que você aceitar.</small></div>
+
+        <div class="card" style="margin-top:1rem">
+          <div class="muted" style="font-size:.85rem">Seu link:</div>
+          <b style="word-break:break-all">${esc(url)}</b>
+          <div class="row" style="margin-top:.7rem;flex-wrap:wrap">
+            <button type="button" class="btn small" id="copy">📋 Copiar</button>
+            <a class="btn small" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(share)}">💬 Mandar</a>
+            <a class="btn small" target="_blank" rel="noopener" href="${esc(url)}">👀 Ver</a>
+            <button type="button" class="btn small" id="qr-link">📱 QR code</button>
+          </div>
+        </div>
+        <p class="muted" style="margin:.6rem 0 0">Os dias e horários de atendimento ficam em <a href="#/link?p=horarios">Dias e horários</a>.</p>
+
         <h2>Como aparecem os horários</h2>
         <div class="field"><label for="interval">Horários de quanto em quanto tempo</label>
           <select id="interval">${opts([15, 20, 30, 45, 60], b.interval, v => `A cada ${fmtDur(+v)}`)}</select></div>
@@ -4184,12 +4246,9 @@ function vLink() {
           <select id="dur">${opts([30, 45, 60, 90, 120], b.defaultDuration, v => fmtDur(+v))}</select></div>
         <p class="muted">Os serviços que aparecem no link são escolhidos em <a href="#/itens/services">Meus serviços</a>.</p>
 
-        <h2>Folgas e feriados</h2>
-        <div id="closed" class="chips"></div>
-        <div class="row" style="margin-top:.6rem"><input type="date" id="newclosed" min="${S.today}"><button type="button" class="btn small" id="addclosed" style="flex:0 0 auto">+ Adicionar</button></div>
-
         <h2>Recado no topo do link <span class="opt">(se quiser)</span></h2>
         <textarea id="msg" placeholder="Ex.: Chegue 5 minutos antes 😊">${esc(b.message)}</textarea>
+        `}
 
         <div id="err" style="margin-top:1rem"></div>
         <button type="button" class="btn main" id="save" style="margin-top:1rem">✓ Salvar</button>
@@ -4197,18 +4256,20 @@ function vLink() {
 
     let enabled = b.enabled;
     let requireApproval = b.requireApproval;
-    bindToggle2($('#approval', box), v => (requireApproval = v));
+    $('#approval', box) && bindToggle2($('#approval', box), v => (requireApproval = v));
     let closed = [...b.closedDates];
     const paintClosed = () => {
+      if (!$('#closed', box)) return;
       $('#closed', box).innerHTML = closed.length
         ? closed.map(d => `<button type="button" class="chip" data-del="${d}">${fmtShort(d)} ✕</button>`).join('')
         : '<span class="muted">Nenhuma.</span>';
     };
     paintClosed();
-    bindToggle2($('#enabled', box), v => (enabled = v));
-    $('#copy', box).onclick = async () => {
+    $('#enabled', box) && bindToggle2($('#enabled', box), v => (enabled = v));
+    $('#copy', box) && ($('#copy', box).onclick = async () => {
       try { await navigator.clipboard.writeText(url); toast('Link copiado ✓'); } catch { prompt('Copie o link:', url); }
-    };
+    });
+    $('#qr-link', box) && ($('#qr-link', box).onclick = () => qrSheet(url, session.tenant.name));
     box.querySelectorAll('.daysrow').forEach(row => {
       row.querySelectorAll('input').forEach(maskTime);
       $('[data-toggle]', row).onclick = e => {
@@ -4220,11 +4281,11 @@ function vLink() {
         if (closedLbl) closedLbl.hidden = on;
       };
     });
-    $('#closed', box).onclick = e => { const d = e.target.closest('[data-del]')?.dataset.del; if (d) { closed = closed.filter(x => x !== d); paintClosed(); } };
-    $('#addclosed', box).onclick = () => {
+    $('#closed', box) && ($('#closed', box).onclick = e => { const d = e.target.closest('[data-del]')?.dataset.del; if (d) { closed = closed.filter(x => x !== d); paintClosed(); } });
+    $('#addclosed', box) && ($('#addclosed', box).onclick = () => {
       const d = $('#newclosed', box).value;
       if (d && !closed.includes(d)) { closed = [...closed, d].sort(); paintClosed(); }
-    };
+    });
 
     const readRange = row => {
       if (!$('[data-toggle]', row).classList.contains('on')) return null;
@@ -4235,17 +4296,20 @@ function vLink() {
     $('#save', box).onclick = async () => {
       const btn = $('#save', box);
       try {
-        const days = {};
-        box.querySelectorAll('#days .daysrow').forEach(row => { days[row.dataset.d] = readRange(row); });
-        const booking = {
-          enabled, requireApproval, days, lunch: readRange($('#lunch', box)),
+        // cada página salva só o que ela mostra
+        const booking = part === 'horarios' ? (() => {
+          const days = {};
+          box.querySelectorAll('#days .daysrow').forEach(row => { days[row.dataset.d] = readRange(row); });
+          return { days, lunch: readRange($('#lunch', box)), closedDates: closed };
+        })() : {
+          enabled, requireApproval,
           interval: +$('#interval', box).value, minAdvanceHours: +$('#adv', box).value,
           maxDays: +$('#max', box).value, defaultDuration: +$('#dur', box).value,
-          closedDates: closed, message: $('#msg', box).value.trim(),
+          message: $('#msg', box).value.trim(),
         };
         btn.disabled = true;
         cacheSalon(await api('PUT', '/api/settings', { booking }));
-        toast(enabled ? 'Salvo ✓ O link está ligado' : 'Salvo ✓');
+        toast(part ? 'Dias e horários salvos ✓' : enabled ? 'Salvo ✓ O link está ligado' : 'Salvo ✓');
         $('#err', box).innerHTML = '';
       } catch (e) {
         $('#err', box).innerHTML = `<div class="error">${esc(e.offline ? 'Precisa de internet para salvar.' : e.message)}</div>`;
@@ -4267,9 +4331,9 @@ function reminderLabel(m) {
 let waPoll = null;
 function vWhats(_, q = {}) {
   clearInterval(waPoll);
-  const openTexts = q.textos === '1';
-  if (openTexts) setTimeout(() => $('#textos')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 900);
-  return onlineView('WhatsApp automático',
+  // Três páginas: conexão (e últimas mensagens), o que mandar, textos das mensagens
+  const part = q.p === 'mandar' || q.p === 'textos' ? q.p : q.textos === '1' ? 'textos' : '';
+  return onlineView(part === 'mandar' ? 'O que mandar' : part === 'textos' ? 'Textos das mensagens' : 'WhatsApp — conexão',
     async () => {
       const S = await api('GET', '/api/settings');
       const st = S.whatsappAvailable ? await api('GET', '/api/whatsapp/status') : { state: 'off' };
@@ -4286,7 +4350,8 @@ function vWhats(_, q = {}) {
       const kinds = { confirm: 'Confirmação', change: 'Horário mudou', saledue: 'Venda: vencimento', salemonth: 'Venda: resumo do mês', salenew: 'Venda: comprovante', reminder: 'Lembrete', owner: 'Aviso para você', decline: 'Pedido recusado', prereserve: 'Pré-reserva', rescheduleNo: 'Remarcação recusada', access: 'Link "meus horários"', test: 'Teste' };
       const status = { sent: '<span class="badge ok">Enviada</span>', error: '<span class="badge bad">Falhou</span>', skipped: '<span class="badge warn">Sem telefone</span>', sending: '<span class="badge">Enviando</span>' };
       box.innerHTML = `
-        <div class="card">
+        ${part && !connected ? '<div class="card pending-banner slim" style="margin-bottom:1rem"><a href="#/whatsapp" style="color:inherit">⚠️ O WhatsApp não está conectado. <b>Conectar ›</b></a></div>' : ''}
+        ${part ? '' : `<div class="card">
           ${connected
             ? `<b style="color:var(--ok)">✓ WhatsApp conectado</b>${st.number ? `<div class="muted">+${esc(st.number)}</div>` : ''}
                <div class="row" style="margin-top:.7rem"><button class="btn small" id="test">📨 Mandar teste</button><button class="btn small danger" id="disc">Desconectar</button></div>`
@@ -4298,9 +4363,13 @@ function vWhats(_, q = {}) {
                <button class="btn" id="qr" style="margin-top:.6rem">📷 Conectar com QR code (outro aparelho)</button>
                <div id="connect" style="margin-top:1rem"></div>`}
         </div>
+        <div class="menu" style="margin-top:1rem">
+          <a class="menu-item" href="#/whatsapp?p=mandar"><span class="mi-icon">✅</span><span class="mi-text"><b>O que mandar</b><small>Confirmação, lembrete, cobranças, Pix…</small></span><span class="mi-go">›</span></a>
+          <a class="menu-item" href="#/whatsapp?p=textos"><span class="mi-icon">✏️</span><span class="mi-text"><b>Textos das mensagens</b><small>Escrever do seu jeito</small></span><span class="mi-go">›</span></a>
+        </div>`}
 
         <div class="form">
-          <h2>O que mandar</h2>
+          ${part === 'mandar' ? `
           <div class="field"><span class="lbl">Confirmação quando eu aceito um pedido do link</span>${toggle2('confirmOnline', w.confirmOnline, '✓ Mandar', 'Não')}</div>
           <div class="field"><span class="lbl">Aviso para a cliente quando eu recuso um pedido</span>${toggle2('declineMessage', w.declineMessage, '✓ Mandar', 'Não')}</div>
           <div class="field"><span class="lbl">Mensagem de pré-reserva (pede o sinal)</span>${toggle2('prereserveMessage', w.prereserveMessage, '✓ Mandar', 'Não')}</div>
@@ -4331,9 +4400,9 @@ function vWhats(_, q = {}) {
           <div class="field"><span class="lbl">Também me avisar pelo WhatsApp quando chegar pedido</span>${toggle2('notifyOwner', w.notifyOwner, '✓ Avisar', 'Não')}</div>
           <div class="field"><label for="own">Número que recebe o aviso <span class="opt">(vazio = o próprio WhatsApp conectado)</span></label>
             <input type="tel" id="own" placeholder="(11) 99999-9999" value="${esc(w.ownerPhone || '')}"></div>
-
-          <details id="textos" ${openTexts ? 'open' : ''}><summary class="btn">✏️ Mudar o texto das mensagens</summary>
-            <p class="muted">Pode usar: {nome} (só o primeiro nome), {dia}, {hora}, {servico}, {valor}, {sinal}, {pix} (chave dos serviços), {pacote}, {salao}, {telefone}, {meus_horarios}. Linha com campo vazio (ex.: sem serviço) some sozinha.</p>
+          ` : ''}
+          ${part === 'textos' ? `<div id="textos">
+            <p class="muted" style="margin-top:0">Pode usar: {nome} (só o primeiro nome), {dia}, {hora}, {servico}, {valor}, {sinal}, {pix} (chave dos serviços), {pacote}, {salao}, {telefone}, {meus_horarios}. Linha com campo vazio (ex.: sem serviço) some sozinha.</p>
             <div class="field"><label for="t-confirm">Confirmação</label><textarea id="t-confirm" rows="6">${esc(w.templates.confirm)}</textarea></div>
             <div class="field"><label for="t-change">Horário mudou <span class="opt">(quando você muda o dia ou a hora de um horário já marcado)</span></label><textarea id="t-change" rows="6">${esc(w.templates.change)}</textarea></div>
             <div class="field"><label for="t-reminder">Lembrete</label><textarea id="t-reminder" rows="6">${esc(w.templates.reminder)}</textarea></div>
@@ -4343,22 +4412,22 @@ function vWhats(_, q = {}) {
             <div class="field"><label for="t-saleMonth">🛍️ Venda: resumo do mês <span class="opt">({lista}, {total}, {pix})</span></label><textarea id="t-saleMonth" rows="7">${esc(w.templates.saleMonth)}</textarea></div>
             <div class="field"><label for="t-decline">Pedido recusado</label><textarea id="t-decline" rows="4">${esc(w.templates.decline)}</textarea></div>
             <div class="field"><label for="t-owner">Aviso para você</label><textarea id="t-owner" rows="5">${esc(w.templates.owner)}</textarea></div>
-          </details>
-          <div id="err" style="margin-top:1rem"></div>
-          <button class="btn main" id="save" style="margin-top:1rem">✓ Salvar</button>
+          </div>` : ''}
+          ${part ? `<div id="err" style="margin-top:1rem"></div>
+          <button class="btn main" id="save" style="margin-top:1rem">✓ Salvar</button>` : ''}
         </div>
 
-        <h2>Últimas mensagens</h2>
+        ${part ? '' : `<h2>Últimas mensagens</h2>
         <div class="list">${msgs.length ? msgs.map(m => `<div class="card">
           <div class="line"><div class="grow"><b>${kinds[m.kind.split(':')[0]] || m.kind}${m.name ? ' — ' + esc(m.name) : ''}</b>
           <span>${new Date(m.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${m.phone ? ' · para ' + esc(m.phone.replace(/^55(\d\d)(\d+)(\d{4})$/, '($1) $2-$3')) : ''}${m.error ? ' · ' + esc(m.error) : ''}</span></div>
           ${status[m.status] || ''}</div>
-          ${m.body ? `<details class="msgbody"><summary>Ver o que foi enviado</summary><p>${esc(m.body).replace(/\n/g, '<br>')}</p></details>` : ''}</div>`).join('') : '<div class="muted">Nenhuma mensagem ainda.</div>'}</div>`;
+          ${m.body ? `<details class="msgbody"><summary>Ver o que foi enviado</summary><p>${esc(m.body).replace(/\n/g, '<br>')}</p></details>` : ''}</div>`).join('') : '<div class="muted">Nenhuma mensagem ainda.</div>'}</div>`}`;
 
       const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner, declineMessage: w.declineMessage, prereserveMessage: w.prereserveMessage, saleReminders: w.saleReminders !== false, saleConfirm: w.saleConfirm !== false };
-      for (const k of Object.keys(flags)) bindToggle2($('#' + k, box), v => (flags[k] = v));
+      for (const k of Object.keys(flags)) $('#' + k, box) && bindToggle2($('#' + k, box), v => (flags[k] = v));
 
-      const err = e => { $('#err', box).innerHTML = `<div class="error">${esc(e.offline ? 'Precisa de internet.' : e.message)}</div>`; };
+      const err = e => { const m = e.offline ? 'Precisa de internet.' : e.message; const b = $('#err', box); if (b) b.innerHTML = `<div class="error">${esc(m)}</div>`; else alert(m); };
       // lembrete: opção pronta ou "outro tempo" (número + minutos/horas/dias)
       const reminderValue = () => {
         const v = $('#rem', box).value;
@@ -4367,20 +4436,20 @@ function vWhats(_, q = {}) {
         if (!(n > 0) || n > 3 * 1440) throw new Error('Escolha um tempo de lembrete entre 1 minuto e 3 dias.');
         return n;
       };
-      $('#rem', box).onchange = e => { $('#rem-other', box).hidden = e.target.value !== 'outro'; if (e.target.value === 'outro') $('#rem-n', box).focus(); };
-      $('#save', box).onclick = async () => {
+      $('#rem', box) && ($('#rem', box).onchange = e => { $('#rem-other', box).hidden = e.target.value !== 'outro'; if (e.target.value === 'outro') $('#rem-n', box).focus(); });
+      $('#save', box) && ($('#save', box).onclick = async () => {
         try {
-          cacheSalon(await api('PUT', '/api/settings', { whatsapp: {
-            ...flags, reminderMinutes: reminderValue(), ownerPhone: $('#own', box).value.trim(),
-            depositPercent: +$('#dep', box).value,
-            templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value, decline: $('#t-decline', box).value, prereserve: $('#t-prereserve', box).value, change: $('#t-change', box).value,
-              saleDue: $('#t-saleDue', box).value, saleMonth: $('#t-saleMonth', box).value, saleNew: $('#t-saleNew', box).value },
-            pixKey: $('#pix', box).value.trim(), pixKeyService: $('#pix-s', box).value.trim(),
-          } }));
+          // cada página salva só o que ela mostra
+          const whatsapp = part === 'textos'
+            ? { templates: { confirm: $('#t-confirm', box).value, reminder: $('#t-reminder', box).value, owner: $('#t-owner', box).value, decline: $('#t-decline', box).value, prereserve: $('#t-prereserve', box).value, change: $('#t-change', box).value,
+              saleDue: $('#t-saleDue', box).value, saleMonth: $('#t-saleMonth', box).value, saleNew: $('#t-saleNew', box).value } }
+            : { ...flags, reminderMinutes: reminderValue(), ownerPhone: $('#own', box).value.trim(), depositPercent: +$('#dep', box).value,
+              pixKey: $('#pix', box).value.trim(), pixKeyService: $('#pix-s', box).value.trim() };
+          cacheSalon(await api('PUT', '/api/settings', { whatsapp }));
           toast('Salvo ✓');
           $('#err', box).innerHTML = '';
         } catch (e) { err(e); }
-      };
+      });
 
       // Espera o WhatsApp conectar e recarrega a tela
       const waitConnected = () => {
