@@ -3695,11 +3695,10 @@ function vPacotes() {
 /* =====================================================================
    RELATÓRIOS: resumo de um período (serviços, clientes, produtos…) que dá para ver e salvar em PDF
    ===================================================================== */
-const REPORT_PARTS = {
-  resumo: '📋 Resumo', servicos: '💇 Serviços por tipo', atendimentos: '📅 Todos os atendimentos',
-  clientes: '👩 Por cliente', produtos: '🛍️ Produtos', formas: '💳 Formas de pagamento', despesas: '➖ Despesas',
+const REPORT_VIEWS = {
+  tudo: 'Tudo (com dinheiro e despesas)', ambos: 'Serviços e produtos', servicos: 'Só serviços', produtos: 'Só produtos',
 };
-let reportParts = null; // o que ela escolheu ver (fica lembrado enquanto o app está aberto)
+const reportPrefs = { ver: 'tudo', lista: false }; // fica lembrado enquanto o app está aberto
 function periodPresets() {
   const t = today(), x = toDate(t), Y = x.getFullYear(), M = x.getMonth(), ws = weekStart(t);
   return {
@@ -3716,110 +3715,123 @@ function vRelatorio(_, q) {
   const preset = P[q.p] ? q.p : q.de && q.ate ? 'livre' : 'mes';
   let de = preset === 'livre' ? q.de : P[preset][1], ate = preset === 'livre' ? q.ate : P[preset][2];
   if (de > ate) [de, ate] = [ate, de];
-  const parts = q.s ? q.s.split(',').filter(k => REPORT_PARTS[k]) : reportParts || ['resumo', 'servicos', 'clientes', 'produtos'];
-  reportParts = parts;
-  const url = o => '#/relatorio?' + Object.entries({ p: preset === 'livre' ? '' : preset, de: preset === 'livre' ? de : '', ate: preset === 'livre' ? ate : '', s: parts.join(','), ...o })
-    .filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  const ver = REPORT_VIEWS[q.ver] ? q.ver : reportPrefs.ver;
+  const lista = q.lista !== undefined ? q.lista === '1' : reportPrefs.lista;
+  Object.assign(reportPrefs, { ver, lista });
+  const cls = (q.cl || '').split(',').filter(id => client(id)); // clientes escolhidas (vazio = todas)
+  const url = o => '#/relatorio?' + Object.entries({ p: preset === 'livre' ? '' : preset, de: preset === 'livre' ? de : '', ate: preset === 'livre' ? ate : '',
+    ver, lista: lista ? '1' : '0', cl: cls.join(','), ...o }).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
   const inP = d => d >= de && d <= ate;
+  const ofCl = id => !cls.length || cls.includes(id);
   const sum = (xs, f) => round2(xs.reduce((t, x) => t + (f(x) || 0), 0));
   const pct = (v, tot) => (tot ? `${Math.round(v / tot * 100)}%` : '');
+  const wantSvc = ver !== 'produtos', wantProd = ver !== 'servicos';
 
-  // dados do período
-  const done = db.appts.filter(a => inP(a.date) && (a.status === 'feito' || (a.status === 'marcado' && isPast(a)))).sort(byWhen);
-  const cancelled = db.appts.filter(a => inP(a.date) && a.status === 'cancelado').length;
-  const ahead = db.appts.filter(a => inP(a.date) && ['marcado', PRE, 'pendente'].includes(a.status) && !isPast(a)).length;
-  const sales = db.sales.filter(x => inP(x.date)).sort(byWhen);
+  // dados do período (e das clientes escolhidas)
+  const done = db.appts.filter(a => inP(a.date) && ofCl(a.clientId) && (a.status === 'feito' || (a.status === 'marcado' && isPast(a)))).sort(byWhen);
+  const cancelled = db.appts.filter(a => inP(a.date) && ofCl(a.clientId) && a.status === 'cancelado').length;
+  const ahead = db.appts.filter(a => inP(a.date) && ofCl(a.clientId) && ['marcado', PRE, 'pendente'].includes(a.status) && !isPast(a)).length;
+  const sales = db.sales.filter(x => inP(x.date) && ofCl(x.clientId || '')).sort(byWhen);
   const pays = [];
-  for (const a of db.appts) if (a.status !== 'cancelado') for (const p of paymentsOf(a)) if (p.d && inP(p.d)) pays.push(p);
-  for (const x of db.sales) for (const p of paymentsOf(x)) if (p.d && inP(p.d)) pays.push(p);
+  for (const a of db.appts) if (a.status !== 'cancelado' && ofCl(a.clientId)) for (const p of paymentsOf(a)) if (p.d && inP(p.d)) pays.push(p);
+  for (const x of db.sales) if (ofCl(x.clientId || '')) for (const p of paymentsOf(x)) if (p.d && inP(p.d)) pays.push(p);
   const received = sum(pays, p => p.v);
-  const exps = db.expenses.filter(e => inP(e.date)).sort((a, b) => a.date.localeCompare(b.date));
+  const exps = cls.length ? [] : db.expenses.filter(e => inP(e.date)).sort((a, b) => a.date.localeCompare(b.date));
   const spent = sum(exps, e => e.amount);
   const svcValue = sum(done, valueOf), prodValue = sum(sales, valueOf), prodQty = sales.reduce((t, x) => t + (x.qty || 1), 0);
   const people = new Set(done.map(a => a.clientId)).size;
-  const avg = done.filter(a => valueOf(a) > 0).length ? round2(svcValue / done.filter(a => valueOf(a) > 0).length) : 0;
-  // serviços por tipo (vários serviços no mesmo horário dividem o valor)
+  const paidDone = done.filter(a => valueOf(a) > 0);
+  const avg = paidDone.length ? round2(svcValue / paidDone.length) : 0;
   const svc = {};
   for (const a of done) for (const n of (svcNamesOf(a).length ? svcNamesOf(a) : ['(sem serviço)'])) {
     const r = svc[n] ||= { n: 0, v: 0 };
     r.n++; r.v += n === '(sem serviço)' ? valueOf(a) : svcPriceIn(a, n);
   }
   const svcRows = Object.entries(svc).map(([k, r]) => [k, r.n, round2(r.v)]).sort((a, b) => b[2] - a[2] || b[1] - a[1]);
-  // por cliente
   const cl = {};
-  for (const a of done) { const r = cl[a.clientId] ||= { visits: 0, svc: 0, prod: 0 }; r.visits++; r.svc += valueOf(a); }
-  for (const x of sales) { const r = cl[x.clientId || ''] ||= { visits: 0, svc: 0, prod: 0 }; r.prod += valueOf(x); }
+  if (wantSvc) for (const a of done) { const r = cl[a.clientId] ||= { visits: 0, svc: 0, prod: 0 }; r.visits++; r.svc += valueOf(a); }
+  if (wantProd) for (const x of sales) { const r = cl[x.clientId || ''] ||= { visits: 0, svc: 0, prod: 0 }; r.prod += valueOf(x); }
   const clRows = Object.entries(cl).map(([id, r]) => [clientName(id), r.visits, round2(r.svc), round2(r.prod), round2(r.svc + r.prod)]).sort((a, b) => b[4] - a[4]);
-  // produtos
   const pr = {};
   for (const x of sales) { const r = pr[x.product] ||= { q: 0, v: 0 }; r.q += x.qty || 1; r.v += valueOf(x); }
   const prRows = Object.entries(pr).map(([k, r]) => [k, r.q, round2(r.v)]).sort((a, b) => b[2] - a[2]);
   const methods = Object.entries(PAY).map(([k, n]) => [n, sum(pays.filter(p => p.m === k), p => p.v)]).filter(r => r[1] > 0);
   const byCat = Object.entries(exps.reduce((t, e) => { const c = e.cat || 'Outros'; t[c] = (t[c] || 0) + e.amount; return t; }, {})).sort((a, b) => b[1] - a[1]);
 
-  // text = quantas colunas do começo são texto (o resto é número, alinhado à direita)
+  // tabela: as primeiras colunas são texto, o resto é número (à direita); rola dentro do quadro se não couber
   const table = (head, rows, foot = null, text = 1) => {
-    const cls = i => (i >= text ? 'n' : '');
-    return rows.length ? `<table class="rtable"><thead><tr>${head.map((h, i) => `<th class="${cls(i)}">${h}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td class="${cls(i)}">${c}</td>`).join('')}</tr>`).join('')}</tbody>
-    ${foot ? `<tfoot><tr>${foot.map((c, i) => `<td class="${cls(i)}">${c}</td>`).join('')}</tr></tfoot>` : ''}</table>` : '<p class="muted">Nada neste período.</p>';
+    const c = i => (i >= text ? 'n' : '');
+    return rows.length ? `<div class="rwrap"><table class="rtable"><thead><tr>${head.map((h, i) => `<th class="${c(i)}">${h}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>${r.map((x, i) => `<td class="${c(i)}">${x}</td>`).join('')}</tr>`).join('')}</tbody>
+    ${foot ? `<tfoot><tr>${foot.map((x, i) => `<td class="${c(i)}">${x}</td>`).join('')}</tr></tfoot>` : ''}</table></div>` : '<p class="muted">Nada neste período.</p>';
   };
-  const sections = {
-    resumo: () => `<div class="rgrid">
-      ${[['Entrou (recebido)', brl(received), 'ok'], ['Despesas', brl(spent), 'bad'], ['Lucro', brl(round2(received - spent)), received - spent >= 0 ? 'ok' : 'bad'],
-        ['Atendimentos feitos', String(done.length)], ['Valor dos serviços', brl(svcValue)], ['Média por atendimento', avg ? brl(avg) : '—'],
-        ['Clientes atendidas', String(people)], ['Produtos vendidos', `${prodQty} · ${brl(prodValue)}`], ['Cancelados', String(cancelled)],
-        ...(ahead ? [['Ainda marcados no período', String(ahead)]] : [])]
-        .map(([k, v, c]) => `<div class="rcell"><span>${k}</span><b class="${c || ''}">${v}</b></div>`).join('')}</div>`,
-    servicos: () => table(['Serviço', 'Vezes', 'Valor', '%'], svcRows.map(([n, c, v]) => [esc(n), c, brl(v), pct(v, svcValue)]),
-      ['Total', done.length, brl(svcValue), '']),
-    atendimentos: () => table(['Data', 'Cliente', 'Serviço', 'Valor'], done.map(a => [`${fmtShort(a.date).slice(0, 5)} ${a.time}`, esc(clientName(a.clientId)), esc(a.service || '—'),
-      valueOf(a) > 0 ? `${brl(valueOf(a))}${isPaid(a) ? ' ✓' : `<br><small>falta ${brl(leftOf(a))}</small>`}` : '—']), [`${done.length} atendimentos`, '', '', brl(svcValue)], 3),
-    clientes: () => table(['Cliente', 'Visitas', 'Serviços', 'Produtos', 'Total'], clRows.map(([n, vi, sv, pd, t]) => [esc(n), vi, brl(sv), brl(pd), `<b>${brl(t)}</b>`]),
-      [`${clRows.length} clientes`, done.length, brl(svcValue), brl(prodValue), brl(round2(svcValue + prodValue))]),
-    produtos: () => table(['Produto', 'Qtd', 'Valor'], prRows.map(([n, qt, v]) => [esc(n), qt, brl(v)]), ['Total', prodQty, brl(prodValue)]),
-    formas: () => table(['Forma', 'Valor', '%'], methods.map(([n, v]) => [n, brl(v), pct(v, received)]), ['Total recebido', brl(received), '']),
-    despesas: () => `${table(['Categoria', 'Valor', '%'], byCat.map(([c, v]) => [esc(c), brl(v), pct(v, spent)]), ['Total', brl(spent), ''])}
-      ${exps.length ? `<details class="no-print-open"><summary>Ver cada despesa (${exps.length})</summary>${table(['Data', 'Descrição', 'Valor'], exps.map(e => [fmtShort(e.date).slice(0, 5), esc(e.desc || e.cat || 'Despesa'), brl(e.amount)]), null, 2)}</details>` : ''}`,
-  };
+  // nas tabelas o "R$" vai só no título da coluna (cabe na tela do celular)
+  const money = v => Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const cell = (k, v, cl2 = '') => `<div class="rcell"><span>${k}</span><b class="${cl2}">${v}</b></div>`;
+  const sections = [
+    ['📋 Resumo', true, () => `<div class="rgrid">
+      ${ver === 'tudo' ? cell('Entrou (recebido)', brl(received), 'ok') + (cls.length ? '' : cell('Despesas', brl(spent), 'bad') + cell('Lucro', brl(round2(received - spent)), received - spent >= 0 ? 'ok' : 'bad')) : ''}
+      ${wantSvc ? cell('Atendimentos feitos', String(done.length)) + cell('Valor dos serviços', brl(svcValue)) + cell('Média por atendimento', avg ? brl(avg) : '—') + cell('Clientes atendidas', String(people)) : ''}
+      ${wantProd ? cell('Produtos vendidos', String(prodQty)) + cell('Valor dos produtos', brl(prodValue)) : ''}
+      ${wantSvc && cancelled ? cell('Cancelados', String(cancelled)) : ''}${wantSvc && ahead ? cell('Ainda marcados no período', String(ahead)) : ''}</div>`],
+    ['💇 Serviços por tipo', wantSvc, () => table(['Serviço', 'Vezes', 'R$', '%'], svcRows.map(([n, c, v]) => [esc(n), c, money(v), pct(v, svcValue)]), ['Total', done.length, money(svcValue), ''])],
+    ['📅 Todos os atendimentos', wantSvc && lista, () => table(['Data', 'Cliente', 'Serviço', 'R$'], done.map(a => [`${fmtShort(a.date).slice(0, 5)}<br><small class="muted">${a.time}</small>`, esc(clientName(a.clientId)), esc(a.service || '—'),
+      valueOf(a) > 0 ? `${money(valueOf(a))}${isPaid(a) ? ' ✓' : `<br><small>falta ${money(leftOf(a))}</small>`}` : '—']), [`${done.length}`, '', '', money(svcValue)], 3)],
+    ['🛍️ Produtos', wantProd, () => table(['Produto', 'Qtd', 'R$'], prRows.map(([n, qt, v]) => [esc(n), qt, money(v)]), ['Total', prodQty, money(prodValue)])],
+    ['🧾 Todas as vendas', wantProd && lista, () => table(['Data', 'Cliente', 'Produto', 'R$'], sales.map(x => [fmtShort(x.date).slice(0, 5), esc(clientName(x.clientId)),
+      `${esc(x.product)}${x.desc ? `<br><small class="muted">${esc(x.desc)}</small>` : ''}${x.qty > 1 ? ` (${x.qty}x)` : ''}`, `${money(valueOf(x))}${isPaid(x) ? ' ✓' : `<br><small>falta ${money(leftOf(x))}</small>`}`]), [`${sales.length}`, '', '', money(prodValue)], 3)],
+    ['👩 Por cliente', cls.length !== 1, () => table(ver === 'servicos' ? ['Cliente', 'Visitas', 'R$'] : ver === 'produtos' ? ['Cliente', 'Produtos<br>R$'] : ['Cliente', 'Serviços<br>R$', 'Produtos<br>R$', 'Total<br>R$'],
+      clRows.map(([n, vi, sv, pd, t]) => (ver === 'servicos' ? [esc(n), vi, money(sv)] : ver === 'produtos' ? [esc(n), money(pd)]
+        : [`${esc(n)}${vi ? `<br><small class="muted">${vi} ${vi === 1 ? 'visita' : 'visitas'}</small>` : ''}`, money(sv), money(pd), `<b>${money(t)}</b>`])),
+      ver === 'servicos' ? [`${clRows.length} clientes`, done.length, money(svcValue)] : ver === 'produtos' ? [`${clRows.length} clientes`, money(prodValue)] : [`${clRows.length} clientes`, money(svcValue), money(prodValue), money(round2(svcValue + prodValue))])],
+    ['💳 Formas de pagamento', ver === 'tudo', () => table(['Forma', 'R$', '%'], methods.map(([n, v]) => [n, money(v), pct(v, received)]), ['Total recebido', money(received), ''])],
+    ['➖ Despesas', ver === 'tudo' && !cls.length, () => `${table(['Categoria', 'R$', '%'], byCat.map(([c, v]) => [esc(c), money(v), pct(v, spent)]), ['Total', money(spent), ''])}
+      ${lista && exps.length ? table(['Data', 'Descrição', 'R$'], exps.map(e => [fmtShort(e.date).slice(0, 5), esc(e.desc || e.cat || 'Despesa'), money(e.amount)]), null, 2) : ''}`],
+  ].filter(x => x[1]);
   const periodLabel = de === ate ? fmtShort(de) : `${fmtShort(de)} a ${fmtShort(ate)}`;
+  const listLabel = ver === 'servicos' ? 'Mostrar todos os atendimentos' : ver === 'produtos' ? 'Mostrar todas as vendas' : 'Mostrar a lista de atendimentos e vendas';
   return {
     title: 'Relatórios', tab: 'mais', back: true,
     html: `
-      <div class="no-print">
-        <span class="lbl">Período</span>
-        <div class="chips filters hscroll">${Object.entries(P).map(([k, [n]]) => `<a class="chip ${preset === k ? 'on' : ''}" href="${url({ p: k, de: '', ate: '' })}" data-go>${n}</a>`).join('')}
-          <a class="chip ${preset === 'livre' ? 'on' : ''}" href="${url({ p: '', de, ate })}" data-go>📆 Escolher</a></div>
-        <div class="row rep-dates" ${preset === 'livre' ? '' : 'hidden'}>
-          <label>De<input type="date" id="r-de" value="${de}"></label><label>Até<input type="date" id="r-ate" value="${ate}"></label>
-        </div>
-        <span class="lbl" style="margin-top:.8rem;display:block">O que mostrar <span class="opt">(toque para ligar ou desligar)</span></span>
-        <div class="chips mini" id="r-parts">${Object.entries(REPORT_PARTS).map(([k, n]) => `<button type="button" class="chip ${parts.includes(k) ? 'on' : ''}" data-part="${k}">${n}</button>`).join('')}</div>
-        <button type="button" class="btn main" id="r-pdf" style="margin:1rem 0">📄 Ver / baixar PDF</button>
+      <div class="form rep-filters no-print">
+        <div class="field"><label for="r-p">📅 Período</label>
+          <select id="r-p">${Object.entries(P).map(([k, [n]]) => `<option value="${k}" ${preset === k ? 'selected' : ''}>${n}</option>`).join('')}
+            <option value="livre" ${preset === 'livre' ? 'selected' : ''}>📆 Escolher período…</option></select>
+          <div class="row rep-dates" ${preset === 'livre' ? '' : 'hidden'}>
+            <label>De<input type="date" id="r-de" value="${de}"></label><label>Até<input type="date" id="r-ate" value="${ate}"></label></div></div>
+        <div class="field"><label for="r-ver">👀 O que ver</label>
+          <select id="r-ver">${Object.entries(REPORT_VIEWS).map(([k, n]) => `<option value="${k}" ${ver === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
+          <label class="checkline"><input type="checkbox" id="r-lista" ${lista ? 'checked' : ''}> ${listLabel}</label></div>
+        <div class="field"><span class="lbl">👩 Clientes <span class="opt">(se quiser — vazio = todas)</span></span>
+          ${cls.length ? `<div class="chips mini" style="margin-bottom:.4rem">${cls.map(id => `<button type="button" class="chip on" data-rmcl="${id}">${esc(clientName(id))} ✕</button>`).join('')}</div>` : ''}
+          <div class="ac"><input type="text" id="r-cl" placeholder="${cls.length ? '+ Outra cliente' : 'Todas as clientes · escreva um nome para escolher'}" autocapitalize="words"><div class="sug" hidden></div></div></div>
+        <button type="button" class="btn main" id="r-pdf">📄 Ver / baixar PDF</button>
       </div>
       <div class="report">
-        <div class="rep-head"><b>${esc(session.tenant.name)}</b><span>Relatório · ${periodLabel}</span><small>Feito em ${fmtShort(today())}</small></div>
-        ${parts.length ? Object.keys(REPORT_PARTS).filter(k => parts.includes(k)).map(k => `<section class="rsec"><h2>${REPORT_PARTS[k]}</h2>${sections[k]()}</section>`).join('')
-          : '<p class="muted">Escolha acima o que quer ver.</p>'}
+        <div class="rep-head"><b>${esc(session.tenant.name)}</b><span>Relatório · ${periodLabel}</span>
+          <small>${esc(REPORT_VIEWS[ver])}${cls.length ? ` · ${cls.map(id => esc(clientName(id))).join(', ')}` : ''} · feito em ${fmtShort(today())}</small></div>
+        ${sections.map(([t, , f]) => `<section class="rsec"><h2>${t}</h2>${f()}</section>`).join('')}
       </div>`,
     bind(el) {
-      el.addEventListener('click', e => {
-        const a = e.target.closest('a[data-go]');
-        if (a) { e.preventDefault(); replaceTo(a.getAttribute('href')); return; }
-        const b = e.target.closest('[data-part]');
-        if (b) {
-          const k = b.dataset.part, next = parts.includes(k) ? parts.filter(x => x !== k) : [...parts, k];
-          replaceTo(url({ s: next.join(',') || 'nada' }));
-        }
-      });
+      $('#r-p', el).onchange = e => {
+        if (e.target.value === 'livre') { $('.rep-dates', el).hidden = false; $('#r-de', el).focus(); return; }
+        replaceTo(url({ p: e.target.value, de: '', ate: '' }));
+      };
       const dates = () => { const a = $('#r-de', el).value, b = $('#r-ate', el).value; if (a && b) replaceTo(url({ p: '', de: a, ate: b })); };
       $('#r-de', el).addEventListener('change', dates);
       $('#r-ate', el).addEventListener('change', dates);
+      $('#r-ver', el).onchange = e => replaceTo(url({ ver: e.target.value }));
+      $('#r-lista', el).onchange = e => replaceTo(url({ lista: e.target.checked ? '1' : '0' }));
+      suggest($('#r-cl', el), () => clientItems().filter(i => !cls.includes(i.id)), it => replaceTo(url({ cl: [...cls, it.id].join(',') })));
+      // nome completo digitado (sem tocar na sugestão): também vale
+      const addTyped = () => { const c = findByName(db.clients, $('#r-cl', el).value); if (c && !cls.includes(c.id)) replaceTo(url({ cl: [...cls, c.id].join(',') })); };
+      $('#r-cl', el).addEventListener('change', addTyped);
+      $('#r-cl', el).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addTyped(); } });
+      el.addEventListener('click', e => { const b = e.target.closest('[data-rmcl]'); if (b) replaceTo(url({ cl: cls.filter(x => x !== b.dataset.rmcl).join(',') })); });
       // PDF: a tela de impressão do celular/computador, só com o relatório ("Salvar como PDF")
       $('#r-pdf', el).onclick = () => {
         const old = document.title;
         document.title = `Relatório ${session.tenant.name} ${periodLabel.replaceAll('/', '-')}`;
-        el.querySelectorAll('.report details').forEach(d => (d.open = true));
         setTimeout(() => { window.print(); setTimeout(() => { document.title = old; }, 1000); }, 50);
       };
     },

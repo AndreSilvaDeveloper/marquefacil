@@ -840,3 +840,18 @@ details.ready { padding: .7rem 1rem; }
 }
 .svcfilter { margin: 0 0 .6rem; }
 .svcfilter select { min-height: 2.8rem; font-weight: 600; }
+/* relatório: cabe na tela do celular */
+.report { overflow: hidden; }
+.rwrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -.2rem; }
+.rtable { font-size: .82rem; }
+.rtable th, .rtable td { padding: .35rem .25rem; word-break: break-word; }
+.rtable td:first-child { min-width: 4.5rem; }
+.checkline { display: flex !important; align-items: center; gap: .5rem; font-weight: 600 !important; margin-top: .6rem; }
+.checkline input { width: 1.3rem; height: 1.3rem; min-height: 0; }
+.rep-filters .field { margin-bottom: .9rem; }
+@media print { .report { overflow: visible; } .rwrap { overflow: visible; } }
+.rtable th { white-space: normal !important; line-height: 1.15; vertical-align: bottom; }
+.rtable td:first-child { min-width: 0; }
+.rtable th { word-break: keep-all; overflow-wrap: normal; }
+.rtable td:first-child { word-break: normal; overflow-wrap: anywhere; }
+.rtable td:first-child { word-break: normal; overflow-wrap: anywhere; }
