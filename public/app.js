@@ -2659,13 +2659,20 @@ function vSell(_, q) {
               <div class="cl-bottom">
                 <div class="money small" title="Preço de cada"><input type="text" inputmode="numeric" data-price="${i}" value="${moneyVal(x.price)}" placeholder="preço"></div>
                 <div class="qty"><button type="button" data-minus="${i}" aria-label="Menos">−</button><b>${x.qty}</b><button type="button" data-plus="${i}" aria-label="Mais">+</button></div>
-                <span class="line-total">${x.price ? brl(x.price * x.qty).replace(',00', '') : '—'}</span>
+                <span class="line-total" data-ltotal="${i}"></span>
               </div>
             </div>`;
           }).join('')}
-          <div class="cart-sub"><span>Soma dos produtos</span><span>${gross() ? brl(gross()) : '—'}</span></div>
-          ${discAmount() > 0 ? `<div class="cart-sub" style="color:var(--ok)"><span>🏷️ Desconto${disc.pct ? ` (${disc.v}%)` : ''}</span><span>− ${brl(discAmount())}</span></div>` : ''}</div>`
+          <div id="cart-subs"></div></div>`
           : '<p class="muted" style="text-align:center">Toque nos produtos acima para pôr na venda.</p>';
+        paintSums();
+      }
+      // tudo o que depende dos valores (sem redesenhar a lista: não perde o campo que ela está digitando)
+      function paintSums() {
+        cart.forEach((x, i) => { const lt = el.querySelector(`[data-ltotal="${i}"]`); if (lt) lt.textContent = x.price ? brl(x.price * x.qty).replace(',00', '') : '—'; });
+        const subs = $('#cart-subs', el);
+        if (subs) subs.innerHTML = `<div class="cart-sub"><span>Soma dos produtos</span><span>${gross() ? brl(gross()) : '—'}</span></div>
+          ${discAmount() > 0 ? `<div class="cart-sub" style="color:var(--ok)"><span>🏷️ Desconto${disc.pct ? ` (${disc.v}%)` : ''}</span><span>− ${brl(discAmount())}</span></div>` : ''}`;
         el.querySelectorAll('#pay [data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === method));
         // quadrados dos produtos: quantos já estão na venda
         el.querySelectorAll('#prods [data-p]').forEach(b => {
@@ -2713,9 +2720,10 @@ function vSell(_, q) {
       }
       // nome do item avulso: guarda sem redesenhar (não perde o foco)
       $('#cart', el).addEventListener('input', e => {
-        const i = e.target.dataset.name, j = e.target.dataset.desc;
+        const i = e.target.dataset.name, j = e.target.dataset.desc, k = e.target.dataset.price;
         if (i !== undefined) cart[+i].name = e.target.value;
         if (j !== undefined) cart[+j].desc = e.target.value;
+        if (k !== undefined) { cart[+k].price = parseMoney(e.target.value); paintSums(); }
       });
       $('#cart', el).addEventListener('click', e => {
         const t = e.target;
@@ -2725,12 +2733,6 @@ function vSell(_, q) {
         else if (t.dataset.minus) { const x = cart[+t.dataset.minus]; x.qty > 1 ? x.qty-- : cart.splice(+t.dataset.minus, 1); }
         else if (t.dataset.rm) cart.splice(+t.dataset.rm, 1);
         else return;
-        paint();
-      });
-      $('#cart', el).addEventListener('change', e => {
-        const i = e.target.dataset.price;
-        if (i === undefined) return;
-        cart[+i].price = parseMoney(e.target.value);
         paint();
       });
       $('#pay', el).onclick = e => { const b = e.target.closest('[data-m]'); if (b) { method = b.dataset.m; paint(); if (method === 'dinheiro') $('#f-got', el).focus(); } };
