@@ -422,7 +422,7 @@ function parseHash() {
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
   agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: (id, q) => (q.id ? (q.editar ? vSaleForm(id, q) : vSaleView(id, q)) : vSell(id, q)), financeiro: vFin, mais: vMore,
-  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, ajuda: vAjuda, aparelho: vAparelho, dados: vDados, configurar: vConfigurar, pacotes: vPacotes, conta: vConta, pacote: vPackageForm,
+  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, ajuda: vAjuda, aparelho: vAparelho, dados: vDados, configurar: vConfigurar, pacotes: vPacotes, relatorio: vRelatorio, conta: vConta, pacote: vPackageForm,
 };
 
 let lastHash = '';
@@ -1927,7 +1927,10 @@ function vClients(_, q) {
   const f = CLIENT_FILTERS[q.f] ? q.f : '';
   const order = q.o || 'nome';
   const all = db.clients.map(c => ({ c, st: clientStats(c) }));
-  const list = all.filter(x => CLIENT_FILTERS[f][1](x.st, x.c));
+  // fez um serviço (ex.: todas que já fizeram Progressiva) — junta com os outros filtros
+  const sv = q.sv && db.services.some(x => x.name === q.sv) ? q.sv : '';
+  const didSvc = sv ? new Set(db.appts.filter(a => a.status !== 'cancelado' && (a.status === 'feito' || isPast(a)) && svcShare(a, sv) > 0).map(a => a.clientId)) : null;
+  const list = all.filter(x => CLIENT_FILTERS[f][1](x.st, x.c) && (!didSvc || didSvc.has(x.c.id)));
   const sorters = {
     aniver: (a, b) => bdayIn(a.c.birthday) - bdayIn(b.c.birthday),
     nome: (a, b) => byName(a.c, b.c),
@@ -1935,7 +1938,7 @@ function vClients(_, q) {
     visitas: (a, b) => b.st.visits - a.st.visits || byName(a.c, b.c),
   };
   list.sort(f === 'aniver' ? sorters.aniver : sorters[order] || sorters.nome);
-  const url = o => '#/clientes?' + Object.entries({ f, o: order, ...o }).filter(([, v]) => v && v !== 'nome').map(([k, v]) => `${k}=${v}`).join('&');
+  const url = o => '#/clientes?' + Object.entries({ f, o: order, sv, ...o }).filter(([, v]) => v && v !== 'nome').map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
   const owing = all.filter(x => x.st.owes > 0);
   const month = today().slice(0, 7);
   const cameMonth = new Set(db.appts.filter(a => a.date.startsWith(month) && (a.status === 'feito' || (a.status === 'marcado' && isPast(a)))).map(a => a.clientId)).size;
@@ -1967,8 +1970,12 @@ function vClients(_, q) {
         return !k || cnt || f === k ? `<a class="chip ${f === k ? 'on' : ''}" href="${url({ f: k })}" data-f>${n} <small>${cnt}</small></a>` : '';
       }).join('')}</div>
       ${hints[f] ? `<p class="muted" style="margin:0 0 .6rem;font-size:.9rem">${hints[f]}</p>` : ''}
+      ${db.services.length ? `<div class="svcfilter"><select id="svcf" aria-label="Fez o serviço">
+        <option value="">💇 Fez qual serviço? (todos)</option>
+        ${[...db.services].sort(byName).map(x => `<option value="${esc(x.name)}" ${x.name === sv ? 'selected' : ''}>💇 Fez ${esc(x.name)}</option>`).join('')}</select></div>` : ''}
+      ${sv ? `<p class="muted" style="margin:0 0 .5rem;font-size:.9rem"><b>${list.length}</b> ${list.length === 1 ? 'cliente já fez' : 'clientes já fizeram'} ${esc(sv)}. Toque em 📣 para mandar uma mensagem para elas.</p>` : ''}
       <div class="sortrow">
-        ${f && withPhone.length ? `<button type="button" class="btn small" id="bulk" style="white-space:nowrap">📣 Mensagem (${withPhone.length})</button>` : ''}
+        ${(f || sv) && withPhone.length ? `<button type="button" class="btn small" id="bulk" style="white-space:nowrap">📣 Mensagem (${withPhone.length})</button>` : ''}
         <select id="ord" aria-label="Ordem da lista" style="margin-left:auto;max-width:11rem">${[['nome', 'A–Z'], ['ultima', 'Última visita'], ['visitas', 'Quem mais vem']].map(([k, n]) => `<option value="${k}" ${order === k ? 'selected' : ''}>↕ ${n}</option>`).join('')}</select></div>` : ''}
       <div class="list clist" id="list">${rows || (all.length ? '<div class="empty">Nenhuma cliente neste filtro.</div>' : '<div class="empty">Nenhuma cliente ainda.<br>Elas aparecem aqui sozinhas quando você agenda.</div>')}</div>
       <div class="empty" id="none" hidden>Nenhuma cliente com esse nome.</div>`,
@@ -1992,6 +1999,7 @@ function vClients(_, q) {
       });
       $('#ord', el)?.addEventListener('change', e => replaceTo(url({ o: e.target.value })));
       $('#bulk', el) && ($('#bulk', el).onclick = () => bulkSheet(withPhone, f));
+      $('#svcf', el)?.addEventListener('change', e => replaceTo(url({ sv: e.target.value })));
     },
   };
 }
@@ -3298,7 +3306,8 @@ function vFin(_, q) {
       ${!tips.length && !received.length ? '<div class="empty">Nenhum dinheiro lançado neste mês ainda.</div>' : ''}
       ${received.length || expenses.length ? `<h2>📤 Levar os números</h2>
         <a class="btn" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(shareText(diff, prev))}">💬 Enviar resumo pelo WhatsApp</a>
-        <button type="button" class="btn" id="fin-csv" style="margin-top:.6rem">📊 Baixar planilha do mês</button>` : ''}
+        <button type="button" class="btn" id="fin-csv" style="margin-top:.6rem">📊 Baixar planilha do mês</button>
+        <a class="btn" href="#/relatorio?de=${m}-01&ate=${m}-${pad(new Date(y, mo, 0).getDate())}" style="margin-top:.6rem">📄 Relatório completo do mês (PDF)</a>` : ''}
       ${goal ? '' : `<button type="button" class="btn small" data-goal style="margin:1rem auto 0">🎯 Definir uma meta para o mês</button>`}`;
   };
 
@@ -3528,6 +3537,7 @@ function vMore() {
       <h2>Dia a dia</h2>
       <div class="menu">
         ${item('#/buscar', '🔍', 'Buscar', 'Cliente, horário, venda, dia…')}
+        ${item('#/relatorio', '📊', 'Relatórios', 'Resumo do período: serviços, clientes, produtos · PDF')}
         ${item('#/pedidos', '⏳', 'Pedidos para confirmar', pend ? 'Pedidos que chegaram pelo link' : 'Nenhum esperando', pend, true)}
         ${item('#/lembretes', '💬', 'Lembrar clientes de amanhã', tom.length ? `${tom.length} ${tom.length === 1 ? 'horário' : 'horários'} amanhã` : 'Nada marcado amanhã', tom.filter(x => !x.remindedAt).length)}
         ${item('#/buscar?k=prereservas', '💳', 'Pré-reservas', 'Esperando o sinal', preAppts().length, true)}
@@ -3679,6 +3689,140 @@ function vPacotes() {
       }).join('') : '<div class="empty">Nenhum cronograma em andamento.<br><small>Para criar, abra a ficha da cliente → + Novo pacote, ou agende um serviço que é pacote.</small></div>'}</div>
       <h2>Serviços que são pacote</h2>
       <p class="muted" style="margin-top:0">${presets.length ? presets.map(sv => `<a href="#/item/services?id=${sv.id}">📦 ${esc(sv.name)} · ${sv.package.total} sessões</a>`).join('<br>') : 'Nenhum. Em <a href="#/itens/services">Serviços</a>, abra um serviço e marque "É um pacote".'}</p>`,
+  };
+}
+
+/* =====================================================================
+   RELATÓRIOS: resumo de um período (serviços, clientes, produtos…) que dá para ver e salvar em PDF
+   ===================================================================== */
+const REPORT_PARTS = {
+  resumo: '📋 Resumo', servicos: '💇 Serviços por tipo', atendimentos: '📅 Todos os atendimentos',
+  clientes: '👩 Por cliente', produtos: '🛍️ Produtos', formas: '💳 Formas de pagamento', despesas: '➖ Despesas',
+};
+let reportParts = null; // o que ela escolheu ver (fica lembrado enquanto o app está aberto)
+function periodPresets() {
+  const t = today(), x = toDate(t), Y = x.getFullYear(), M = x.getMonth(), ws = weekStart(t);
+  return {
+    hoje: ['Hoje', t, t],
+    semana: ['Esta semana', ws, addDays(ws, 6)],
+    mes: ['Este mês', dstr(new Date(Y, M, 1)), dstr(new Date(Y, M + 1, 0))],
+    passado: ['Mês passado', dstr(new Date(Y, M - 1, 1)), dstr(new Date(Y, M, 0))],
+    tres: ['Últimos 3 meses', dstr(new Date(Y, M - 2, 1)), dstr(new Date(Y, M + 1, 0))],
+    ano: ['Este ano', `${Y}-01-01`, `${Y}-12-31`],
+  };
+}
+function vRelatorio(_, q) {
+  const P = periodPresets();
+  const preset = P[q.p] ? q.p : q.de && q.ate ? 'livre' : 'mes';
+  let de = preset === 'livre' ? q.de : P[preset][1], ate = preset === 'livre' ? q.ate : P[preset][2];
+  if (de > ate) [de, ate] = [ate, de];
+  const parts = q.s ? q.s.split(',').filter(k => REPORT_PARTS[k]) : reportParts || ['resumo', 'servicos', 'clientes', 'produtos'];
+  reportParts = parts;
+  const url = o => '#/relatorio?' + Object.entries({ p: preset === 'livre' ? '' : preset, de: preset === 'livre' ? de : '', ate: preset === 'livre' ? ate : '', s: parts.join(','), ...o })
+    .filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  const inP = d => d >= de && d <= ate;
+  const sum = (xs, f) => round2(xs.reduce((t, x) => t + (f(x) || 0), 0));
+  const pct = (v, tot) => (tot ? `${Math.round(v / tot * 100)}%` : '');
+
+  // dados do período
+  const done = db.appts.filter(a => inP(a.date) && (a.status === 'feito' || (a.status === 'marcado' && isPast(a)))).sort(byWhen);
+  const cancelled = db.appts.filter(a => inP(a.date) && a.status === 'cancelado').length;
+  const ahead = db.appts.filter(a => inP(a.date) && ['marcado', PRE, 'pendente'].includes(a.status) && !isPast(a)).length;
+  const sales = db.sales.filter(x => inP(x.date)).sort(byWhen);
+  const pays = [];
+  for (const a of db.appts) if (a.status !== 'cancelado') for (const p of paymentsOf(a)) if (p.d && inP(p.d)) pays.push(p);
+  for (const x of db.sales) for (const p of paymentsOf(x)) if (p.d && inP(p.d)) pays.push(p);
+  const received = sum(pays, p => p.v);
+  const exps = db.expenses.filter(e => inP(e.date)).sort((a, b) => a.date.localeCompare(b.date));
+  const spent = sum(exps, e => e.amount);
+  const svcValue = sum(done, valueOf), prodValue = sum(sales, valueOf), prodQty = sales.reduce((t, x) => t + (x.qty || 1), 0);
+  const people = new Set(done.map(a => a.clientId)).size;
+  const avg = done.filter(a => valueOf(a) > 0).length ? round2(svcValue / done.filter(a => valueOf(a) > 0).length) : 0;
+  // serviços por tipo (vários serviços no mesmo horário dividem o valor)
+  const svc = {};
+  for (const a of done) for (const n of (svcNamesOf(a).length ? svcNamesOf(a) : ['(sem serviço)'])) {
+    const r = svc[n] ||= { n: 0, v: 0 };
+    r.n++; r.v += n === '(sem serviço)' ? valueOf(a) : svcPriceIn(a, n);
+  }
+  const svcRows = Object.entries(svc).map(([k, r]) => [k, r.n, round2(r.v)]).sort((a, b) => b[2] - a[2] || b[1] - a[1]);
+  // por cliente
+  const cl = {};
+  for (const a of done) { const r = cl[a.clientId] ||= { visits: 0, svc: 0, prod: 0 }; r.visits++; r.svc += valueOf(a); }
+  for (const x of sales) { const r = cl[x.clientId || ''] ||= { visits: 0, svc: 0, prod: 0 }; r.prod += valueOf(x); }
+  const clRows = Object.entries(cl).map(([id, r]) => [clientName(id), r.visits, round2(r.svc), round2(r.prod), round2(r.svc + r.prod)]).sort((a, b) => b[4] - a[4]);
+  // produtos
+  const pr = {};
+  for (const x of sales) { const r = pr[x.product] ||= { q: 0, v: 0 }; r.q += x.qty || 1; r.v += valueOf(x); }
+  const prRows = Object.entries(pr).map(([k, r]) => [k, r.q, round2(r.v)]).sort((a, b) => b[2] - a[2]);
+  const methods = Object.entries(PAY).map(([k, n]) => [n, sum(pays.filter(p => p.m === k), p => p.v)]).filter(r => r[1] > 0);
+  const byCat = Object.entries(exps.reduce((t, e) => { const c = e.cat || 'Outros'; t[c] = (t[c] || 0) + e.amount; return t; }, {})).sort((a, b) => b[1] - a[1]);
+
+  // text = quantas colunas do começo são texto (o resto é número, alinhado à direita)
+  const table = (head, rows, foot = null, text = 1) => {
+    const cls = i => (i >= text ? 'n' : '');
+    return rows.length ? `<table class="rtable"><thead><tr>${head.map((h, i) => `<th class="${cls(i)}">${h}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td class="${cls(i)}">${c}</td>`).join('')}</tr>`).join('')}</tbody>
+    ${foot ? `<tfoot><tr>${foot.map((c, i) => `<td class="${cls(i)}">${c}</td>`).join('')}</tr></tfoot>` : ''}</table>` : '<p class="muted">Nada neste período.</p>';
+  };
+  const sections = {
+    resumo: () => `<div class="rgrid">
+      ${[['Entrou (recebido)', brl(received), 'ok'], ['Despesas', brl(spent), 'bad'], ['Lucro', brl(round2(received - spent)), received - spent >= 0 ? 'ok' : 'bad'],
+        ['Atendimentos feitos', String(done.length)], ['Valor dos serviços', brl(svcValue)], ['Média por atendimento', avg ? brl(avg) : '—'],
+        ['Clientes atendidas', String(people)], ['Produtos vendidos', `${prodQty} · ${brl(prodValue)}`], ['Cancelados', String(cancelled)],
+        ...(ahead ? [['Ainda marcados no período', String(ahead)]] : [])]
+        .map(([k, v, c]) => `<div class="rcell"><span>${k}</span><b class="${c || ''}">${v}</b></div>`).join('')}</div>`,
+    servicos: () => table(['Serviço', 'Vezes', 'Valor', '%'], svcRows.map(([n, c, v]) => [esc(n), c, brl(v), pct(v, svcValue)]),
+      ['Total', done.length, brl(svcValue), '']),
+    atendimentos: () => table(['Data', 'Cliente', 'Serviço', 'Valor'], done.map(a => [`${fmtShort(a.date).slice(0, 5)} ${a.time}`, esc(clientName(a.clientId)), esc(a.service || '—'),
+      valueOf(a) > 0 ? `${brl(valueOf(a))}${isPaid(a) ? ' ✓' : `<br><small>falta ${brl(leftOf(a))}</small>`}` : '—']), [`${done.length} atendimentos`, '', '', brl(svcValue)], 3),
+    clientes: () => table(['Cliente', 'Visitas', 'Serviços', 'Produtos', 'Total'], clRows.map(([n, vi, sv, pd, t]) => [esc(n), vi, brl(sv), brl(pd), `<b>${brl(t)}</b>`]),
+      [`${clRows.length} clientes`, done.length, brl(svcValue), brl(prodValue), brl(round2(svcValue + prodValue))]),
+    produtos: () => table(['Produto', 'Qtd', 'Valor'], prRows.map(([n, qt, v]) => [esc(n), qt, brl(v)]), ['Total', prodQty, brl(prodValue)]),
+    formas: () => table(['Forma', 'Valor', '%'], methods.map(([n, v]) => [n, brl(v), pct(v, received)]), ['Total recebido', brl(received), '']),
+    despesas: () => `${table(['Categoria', 'Valor', '%'], byCat.map(([c, v]) => [esc(c), brl(v), pct(v, spent)]), ['Total', brl(spent), ''])}
+      ${exps.length ? `<details class="no-print-open"><summary>Ver cada despesa (${exps.length})</summary>${table(['Data', 'Descrição', 'Valor'], exps.map(e => [fmtShort(e.date).slice(0, 5), esc(e.desc || e.cat || 'Despesa'), brl(e.amount)]), null, 2)}</details>` : ''}`,
+  };
+  const periodLabel = de === ate ? fmtShort(de) : `${fmtShort(de)} a ${fmtShort(ate)}`;
+  return {
+    title: 'Relatórios', tab: 'mais', back: true,
+    html: `
+      <div class="no-print">
+        <span class="lbl">Período</span>
+        <div class="chips filters hscroll">${Object.entries(P).map(([k, [n]]) => `<a class="chip ${preset === k ? 'on' : ''}" href="${url({ p: k, de: '', ate: '' })}" data-go>${n}</a>`).join('')}
+          <a class="chip ${preset === 'livre' ? 'on' : ''}" href="${url({ p: '', de, ate })}" data-go>📆 Escolher</a></div>
+        <div class="row rep-dates" ${preset === 'livre' ? '' : 'hidden'}>
+          <label>De<input type="date" id="r-de" value="${de}"></label><label>Até<input type="date" id="r-ate" value="${ate}"></label>
+        </div>
+        <span class="lbl" style="margin-top:.8rem;display:block">O que mostrar <span class="opt">(toque para ligar ou desligar)</span></span>
+        <div class="chips mini" id="r-parts">${Object.entries(REPORT_PARTS).map(([k, n]) => `<button type="button" class="chip ${parts.includes(k) ? 'on' : ''}" data-part="${k}">${n}</button>`).join('')}</div>
+        <button type="button" class="btn main" id="r-pdf" style="margin:1rem 0">📄 Ver / baixar PDF</button>
+      </div>
+      <div class="report">
+        <div class="rep-head"><b>${esc(session.tenant.name)}</b><span>Relatório · ${periodLabel}</span><small>Feito em ${fmtShort(today())}</small></div>
+        ${parts.length ? Object.keys(REPORT_PARTS).filter(k => parts.includes(k)).map(k => `<section class="rsec"><h2>${REPORT_PARTS[k]}</h2>${sections[k]()}</section>`).join('')
+          : '<p class="muted">Escolha acima o que quer ver.</p>'}
+      </div>`,
+    bind(el) {
+      el.addEventListener('click', e => {
+        const a = e.target.closest('a[data-go]');
+        if (a) { e.preventDefault(); replaceTo(a.getAttribute('href')); return; }
+        const b = e.target.closest('[data-part]');
+        if (b) {
+          const k = b.dataset.part, next = parts.includes(k) ? parts.filter(x => x !== k) : [...parts, k];
+          replaceTo(url({ s: next.join(',') || 'nada' }));
+        }
+      });
+      const dates = () => { const a = $('#r-de', el).value, b = $('#r-ate', el).value; if (a && b) replaceTo(url({ p: '', de: a, ate: b })); };
+      $('#r-de', el).addEventListener('change', dates);
+      $('#r-ate', el).addEventListener('change', dates);
+      // PDF: a tela de impressão do celular/computador, só com o relatório ("Salvar como PDF")
+      $('#r-pdf', el).onclick = () => {
+        const old = document.title;
+        document.title = `Relatório ${session.tenant.name} ${periodLabel.replaceAll('/', '-')}`;
+        el.querySelectorAll('.report details').forEach(d => (d.open = true));
+        setTimeout(() => { window.print(); setTimeout(() => { document.title = old; }, 1000); }, 50);
+      };
+    },
   };
 }
 

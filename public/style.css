@@ -807,3 +807,36 @@ details.ready { padding: .7rem 1rem; }
 .mi-badge.alert { background: var(--warn); }
 .pk-bar { flex: 0 0 3.5rem; height: .5rem; background: var(--line); border-radius: 999px; overflow: hidden; }
 .pk-bar i { display: block; height: 100%; background: var(--ok); }
+
+/* ---------- Relatórios ---------- */
+.rep-dates { gap: .5rem; margin-top: .4rem; }
+.rep-dates label { flex: 1; font-weight: 700; font-size: .9rem; display: flex; flex-direction: column; gap: .2rem; }
+.report { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; }
+.rep-head { display: flex; flex-direction: column; border-bottom: 2px solid var(--brand); padding-bottom: .5rem; margin-bottom: .4rem; }
+.rep-head b { font-size: 1.2rem; }
+.rep-head small { color: var(--muted); }
+.rsec h2 { font-size: 1rem; margin: 1.2rem 0 .5rem; }
+.rgrid { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; }
+.rcell { border: 1px solid var(--line); border-radius: 10px; padding: .45rem .6rem; }
+.rcell span { display: block; font-size: .78rem; color: var(--muted); font-weight: 600; }
+.rcell b { font-size: 1rem; }
+.rcell b.ok { color: var(--ok); } .rcell b.bad { color: var(--bad); }
+.rtable { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.rtable th, .rtable td { padding: .35rem .3rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.rtable th { font-size: .78rem; color: var(--muted); }
+.rtable .n { text-align: right; white-space: nowrap; }
+.rtable tfoot td { font-weight: 800; border-top: 2px solid var(--line); border-bottom: 0; }
+.rtable small { color: var(--warn); }
+
+@media print {
+  #top, #tabs, .fabs, .no-print, #toast, .sheet-bg { display: none !important; }
+  body { background: #fff !important; padding: 0 !important; font-size: 11pt; }
+  main { max-width: none !important; padding: 0 !important; }
+  .report { border: 0; padding: 0; }
+  .rsec { break-inside: avoid-page; }
+  .rtable tr { break-inside: avoid; }
+  details > summary { display: none; }
+  @page { margin: 14mm; }
+}
+.svcfilter { margin: 0 0 .6rem; }
+.svcfilter select { min-height: 2.8rem; font-weight: 600; }
