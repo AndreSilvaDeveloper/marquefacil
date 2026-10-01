@@ -880,3 +880,11 @@ details.ready { padding: .7rem 1rem; }
 .ex-row .ex-list { text-align: right; line-height: 1.35; }
 .dr-info b .flag { font-size: .85rem; margin-left: .3rem; }
 .flag-legend { text-align: center; font-size: .8rem; color: var(--muted); margin: .5rem 0 0; }
+/* Agenda: escolher o que ver (campo) + dia */
+.agtop { display: grid; grid-template-columns: auto 1fr; gap: .5rem; align-items: stretch; margin-bottom: 1rem; }
+.agtop select { min-height: 0; height: 100%; width: auto; font-weight: 700; color: var(--brand); border: 2px solid var(--line); border-radius: var(--radius); padding: 0 .6rem; background-color: #fff; }
+.agtop .daypick { margin-bottom: 0; min-width: 0; }
+.agtop .daypick span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agtop select { padding: 0 .4rem; }
+.agtop .daypick { padding: .7rem .8rem; gap: .4rem; }
+.agtop .daypick em { font-size: 1.1rem; }

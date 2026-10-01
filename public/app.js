@@ -777,7 +777,8 @@ function vAgenda(_, q) {
     if (cur) tags[cur.id] = '✂️ Agora';
     if (next) tags[next.id] = `⏭️ Próxima · ${inTxt(mins(next.time) - now)}`;
     const tl = dayTimeline(d, active, tags);
-    title = d === t ? `Hoje, ${fmtDate(d, { day: 'numeric', month: 'long' })}` : cap(fmtDate(d, { weekday: 'long', day: 'numeric', month: 'long', year: d.slice(0, 4) !== t.slice(0, 4) ? 'numeric' : undefined }).replace('-feira', ''));
+    // curto para caber ao lado do campo "o que ver" (que já diz "Hoje")
+    title = d === t ? fmtDate(d, { day: 'numeric', month: 'long' }) : `${cap(fmtDate(d, { weekday: 'long' }).replace('-feira', ''))}, ${d.slice(8)}/${d.slice(5, 7)}${d.slice(0, 4) !== t.slice(0, 4) ? '/' + d.slice(2, 4) : ''}`;
     body = `
       ${d === t ? alsoToday() : ''}
       ${active.length ? `<p class="csum" style="text-align:center"><b>${active.length}</b> ${active.length === 1 ? 'horário' : 'horários'}${done ? ` · <b>${done}</b> ${done === 1 ? 'feito' : 'feitos'}` : ''}${expectedDay ? ` · <b>${brl(expectedDay).replace(',00', '')}</b>${paidDay ? ` · recebido <b style="color:var(--ok)">${brl(paidDay).replace(',00', '')}</b>` : ''}` : ''}</p>` : ''}
@@ -859,14 +860,17 @@ function vAgenda(_, q) {
   return {
     title: 'Agenda', tab: 'agenda',
     html: `
-      <div class="viewtoggle">
-        <a href="${url({ d: t, v: '' })}" data-nav class="${view === 'dia' && d === t ? 'on' : ''}">Hoje</a>
-        <a href="${url({ v: 'semana' })}" data-nav class="${view === 'semana' ? 'on' : ''}">Semana</a>
-        <a href="${url({ v: 'mes' })}" data-nav class="${view === 'mes' ? 'on' : ''}">Mês</a>
+      <div class="agtop">
+        <select id="vsel" aria-label="O que ver">
+          ${view === 'dia' && d !== t ? '<option value="dia" selected>📅 Dia</option>' : ''}
+          <option value="hoje" ${view === 'dia' && d === t ? 'selected' : ''}>📅 Hoje</option>
+          <option value="semana" ${view === 'semana' ? 'selected' : ''}>🗓️ Semana</option>
+          <option value="mes" ${view === 'mes' ? 'selected' : ''}>🗓️ Mês</option>
+        </select>
+        <label class="daypick ${view === 'dia' && d !== t ? 'other' : ''}">
+          <span><b>${esc(title)}</b></span><em aria-hidden="true">📆</em>
+          <input type="date" id="pick" value="${d}" aria-label="Escolher dia"></label>
       </div>
-      <label class="daypick ${view === 'dia' && d !== t ? 'other' : ''}">
-        <span><b>${esc(title)}</b></span><em>📆 Trocar dia</em>
-        <input type="date" id="pick" value="${d}" aria-label="Escolher dia"></label>
       ${pend.length ? `<a class="card pending-banner slim" href="#/pedidos">⏳ <b>${pend.length} ${pend.length === 1 ? 'pedido' : 'pedidos'}</b> para confirmar<i>›</i></a>` : ''}
       <div id="push-card"></div>
       ${body}
@@ -877,6 +881,7 @@ function vAgenda(_, q) {
     bind(el) {
       const goDay = n => replaceTo(url({ d: view === 'mes' ? monthShift(n) : addDays(d, n * step) }));
       $('#pick', el).onchange = e => e.target.value && replaceTo(url({ d: e.target.value }));
+      $('#vsel', el).onchange = e => { const v = e.target.value; replaceTo(v === 'hoje' ? url({ d: t, v: '' }) : url({ v: v === 'dia' ? '' : v })); };
       el.addEventListener('click', e => {
         const nav = e.target.closest('a[data-nav]');
         if (nav) { e.preventDefault(); replaceTo(nav.getAttribute('href')); }
