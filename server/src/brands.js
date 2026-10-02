@@ -25,15 +25,19 @@ const BRANDS = {
   },
 };
 
+// "www.x.com" → "x.com"; o ambiente de testes (dev.x.com) usa a mesma marca de x.com
+const hostOf = h => String(h || '').toLowerCase().replace(/:\d+$/, '').replace(/^www\./, '');
+const brandKey = host => host.replace(/^dev\./, '');
+
 export function brandFor(hostname) {
-  const host = String(hostname || '').toLowerCase().replace(/:\d+$/, '').replace(/^www\./, '');
-  return BRANDS[host] ? { ...DEFAULT, ...BRANDS[host], host } : { ...DEFAULT, host };
+  const host = hostOf(hostname), b = BRANDS[brandKey(host)];
+  return b ? { ...DEFAULT, ...b, host } : { ...DEFAULT, host };
 }
 
-// Domínio próprio de um salão (só os cadastrados acima): "studiokadosh.com" ou null
+// Domínio próprio de um salão (só os cadastrados acima): "studiokadosh.com" (ou "dev.studiokadosh.com") ou null
 export function brandDomain(hostname) {
-  const host = String(hostname || '').toLowerCase().replace(/:\d+$/, '').replace(/^www\./, '');
-  return BRANDS[host] ? host : null;
+  const host = hostOf(hostname);
+  return BRANDS[brandKey(host)] ? host : null;
 }
 
 // O que o navegador precisa saber (vai em window.BRAND)

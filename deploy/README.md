@@ -1,8 +1,23 @@
-# Deploy no servidor de dev (máquina `nd2`, junto com o WorkID dev)
+# Deploy na máquina `nd2` (junto com o WorkID dev)
 
-O app roda em `/opt/marquefacil`, só no endereço interno (porta 3100). O Caddy que já existe
-na máquina faz o HTTPS e repassa para ele. O deploy é pelo GitHub Actions (**Actions → Deploy dev →
-Run workflow**), num runner próprio do Marque Fácil.
+Dois ambientes, cada um com a sua pasta, containers, banco e WhatsApp (Evolution) próprios:
+
+| Ambiente | Branch | Domínios | Pasta | Containers | Porta local | Como sai |
+|---|---|---|---|---|---|---|
+| **Produção** | `main` | maquefacil.com.br, studiokadosh.com | `/opt/marquefacil` | `marquefacil-*` | 3100 / 3101 | Actions → **Deploy produção** → Run workflow (branch `main`) |
+| **Testes (dev)** | `dev` | dev.maquefacil.com.br, dev.studiokadosh.com | `/opt/marquefacil-dev` | `marquefacil-dev-*` | 3110 / 3111 | sozinho a cada push no `dev` (ou Actions → **Deploy dev**) |
+
+Fluxo: desenvolve no `dev` → confere em dev.studiokadosh.com → junta no `main`
+(`git checkout main && git merge --ff-only dev && git push`) → roda **Deploy produção**.
+Os dois workflows usam o mesmo passo a passo (`.github/workflows/deploy.yml`) e o mesmo runner.
+O banco do dev começa vazio (crie uma conta nova lá) e o WhatsApp do dev é outro: conectar um
+número no dev não mexe no da produção.
+
+### Preparar o ambiente dev (uma vez)
+1. DNS: registro **A `dev` → `77.37.40.221`** em maquefacil.com.br (Hostinger) e em studiokadosh.com.
+2. Na máquina, como root: `ssh root@100.85.80.113 bash -s < deploy/setup-dev-env.sh`
+   (cria `/opt/marquefacil-dev` e põe os dois domínios `dev.` no Caddy, com backup e validação).
+3. Push no `dev` (ou Actions → Deploy dev).
 
 > ⚠️ Máquina compartilhada: não escrever em `/var/www/workid`, não mexer no runner `nd2-workid-dev`,
 > não usar `docker compose down --remove-orphans` fora do projeto `marquefacil`.
@@ -79,7 +94,7 @@ ssh root@100.85.80.113 bash -s -- studiokadosh.com < deploy/caddy-add-domain.sh
 ```
 
 ## 7. Primeiro deploy
-GitHub → Actions → **Deploy dev** → Run workflow (branch `dev`). O workflow:
+GitHub → Actions → **Deploy produção** → Run workflow (branch `main`). O workflow:
 testa → constrói a imagem → gera `/opt/marquefacil/.env` → `docker compose up -d` → confere `/api/health`.
 
 ## WhatsApp (Evolution API própria)

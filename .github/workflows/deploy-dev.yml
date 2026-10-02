@@ -1,107 +1,37 @@
 name: Deploy dev
 
-# Disparo manual: Actions → "Deploy dev" → Run workflow.
+# AMBIENTE DE TESTES (dev.maquefacil.com.br, dev.studiokadosh.com), separado da produção.
+# Sai sozinho a cada push no branch dev (ou manual: Actions → "Deploy dev" → Run workflow, branch dev).
 on:
+  push:
+    branches: [dev]
   workflow_dispatch:
 
 concurrency:
   group: deploy-dev
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  deploy:
-    # Runner próprio do Marque Fácil na máquina de dev (não usa o runner do WorkID)
-    runs-on: [self-hosted, marquefacil-dev]
-    timeout-minutes: 20
-    env:
-      APP_DIR: /opt/marquefacil
-      APP_PORT: ${{ vars.APP_PORT || '3100' }}
+  check:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Testes do servidor
+      - name: Só do branch dev
+        if: github.ref != 'refs/heads/dev'
         run: |
-          # monta o repositório inteiro: os testes também conferem as páginas de public/
-          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/w -w /w/server node:22-slim \
-            sh -c "npm ci && npm test"
-
-      - name: Construir imagem
-        run: |
-          docker build -t marquefacil-app:dev -t marquefacil-app:${GITHUB_SHA::7} .
-
-      - name: Preparar pasta e .env
-        env:
-          DOMAIN: ${{ vars.DOMAIN }}
-          ALLOW_SIGNUP: ${{ vars.ALLOW_SIGNUP || 'true' }}
-        run: |
-          test -w "$APP_DIR" || { echo "::error::$APP_DIR não existe ou não é do usuário do runner (veja deploy/README.md)"; exit 1; }
-          cp deploy/docker-compose.dev.yml "$APP_DIR/docker-compose.yml"
-          umask 077
-
-          # Chave da Evolution e senha do banco dela: criadas no 1º deploy e mantidas depois
-          # (trocar a senha depois quebraria o banco já criado)
-          rnd() { head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
-          if [ ! -s "$APP_DIR/.env.evolution" ]; then
-            { echo "AUTHENTICATION_API_KEY=$(rnd)"; echo "EVOLUTION_DB_PASSWORD=$(rnd)"; } > "$APP_DIR/.env.evolution"
-            echo "Chave da Evolution criada"
-          fi
-          chmod 600 "$APP_DIR/.env.evolution"
-          EVOLUTION_APIKEY=$(grep '^AUTHENTICATION_API_KEY=' "$APP_DIR/.env.evolution" | cut -d= -f2)
-
-          {
-            echo "DOMAIN=$DOMAIN"
-            echo "ALLOW_SIGNUP=$ALLOW_SIGNUP"
-            echo "EVOLUTION_URL=http://marquefacil-evolution:8080"
-            echo "EVOLUTION_APIKEY=$EVOLUTION_APIKEY"
-            echo "APP_PORT=$APP_PORT"
-          } > "$APP_DIR/.env"
-          chmod 600 "$APP_DIR/.env"
-
-      - name: Subir
-        working-directory: /opt/marquefacil
-        run: |
-          # sem --remove-orphans de propósito: não mexer em nada que não seja do projeto marquefacil
-          # os dois arquivos preenchem as variáveis do compose (portas, senha do banco da Evolution)
-          docker compose -p marquefacil --env-file .env --env-file .env.evolution pull evolution evolution-db
-          docker compose -p marquefacil --env-file .env --env-file .env.evolution up -d
-          docker compose -p marquefacil ps
-          # o Caddy da máquina precisa enxergar a rede do app (não recria o Caddy; só conecta)
-          if docker ps --format '{{.Names}}' | grep -qx caddy; then
-            docker network connect marquefacil caddy 2>/dev/null && echo "Caddy conectado à rede marquefacil" || echo "Caddy já estava na rede marquefacil"
-          fi
-
-      - name: Teste de fumaça
-        run: |
-          for i in $(seq 1 30); do
-            if curl -fsS "http://127.0.0.1:$APP_PORT/api/health"; then echo; echo "OK"; exit 0; fi
-            sleep 2
-          done
-          echo "::error::O app não respondeu em /api/health"
-          docker logs --tail 80 marquefacil-app
+          echo "::error::O ambiente dev só sai do branch dev (veio de ${{ github.ref }})"
           exit 1
-
-      - name: Teste da Evolution (app → WhatsApp)
-        run: |
-          # a Evolution demora um pouco no 1º start (cria as tabelas do banco)
-          for i in $(seq 1 45); do
-            if docker exec marquefacil-app node -e "fetch(process.env.EVOLUTION_URL + '/instance/fetchInstances', { headers: { apikey: process.env.EVOLUTION_APIKEY } }).then(r => { console.log('app → evolution:', r.status); process.exit(r.ok ? 0 : 1) }).catch(() => process.exit(1))"; then
-              curl -fsS "http://127.0.0.1:${EVOLUTION_PORT:-3101}/" | head -c 200; echo
-              exit 0
-            fi
-            sleep 4
-          done
-          echo "::error::O app não conseguiu falar com a Evolution"
-          docker logs --tail 80 marquefacil-evolution
-          exit 1
-
-      - name: Teste pelo domínio (se já estiver no ar)
-        if: ${{ vars.DOMAIN != '' }}
-        continue-on-error: true
-        run: curl -fsS --max-time 15 "https://${{ vars.DOMAIN }}/api/health" && echo
-
-      - name: Limpar imagens antigas (mantém as 3 últimas)
-        if: always()
-        run: |
-          docker images marquefacil-app --format '{{.Tag}} {{.CreatedAt}}' \
-            | grep -v '^dev ' | sort -k2 -r | tail -n +4 | awk '{print $1}' \
-            | xargs -r -I{} docker rmi marquefacil-app:{} || true
+      - run: echo "OK, branch dev"
+  deploy:
+    needs: check
+    uses: ./.github/workflows/deploy.yml
+    with:
+      env: dev
+      app_dir: /opt/marquefacil-dev
+      compose_file: deploy/docker-compose.dev.yml
+      project: marquefacil-dev
+      app_container: marquefacil-dev-app
+      evo_container: marquefacil-dev-evolution
+      app_port: '3110'
+      evo_port: '3111'
+      domain: ${{ vars.DEV_DOMAIN || 'dev.maquefacil.com.br' }}
+      allow_signup: 'true'

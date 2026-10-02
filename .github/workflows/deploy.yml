@@ -1,0 +1,119 @@
+name: Deploy (usado por "Deploy produção" e "Deploy dev")
+
+# Não roda sozinho: é chamado por deploy-prod.yml (branch main) e deploy-dev.yml (branch dev).
+on:
+  workflow_call:
+    inputs:
+      env:          { type: string, required: true }   # prod | dev
+      app_dir:      { type: string, required: true }   # /opt/marquefacil | /opt/marquefacil-dev
+      compose_file: { type: string, required: true }   # deploy/docker-compose.prod.yml | …dev.yml
+      project:      { type: string, required: true }   # nome do projeto no docker compose
+      app_container: { type: string, required: true }
+      evo_container: { type: string, required: true }
+      app_port:     { type: string, required: true }
+      evo_port:     { type: string, required: true }
+      domain:       { type: string, required: false, default: '' }
+      allow_signup: { type: string, required: false, default: 'true' }
+
+jobs:
+  deploy:
+    # Runner próprio do Marque Fácil na máquina nd2 (não usa o runner do WorkID)
+    runs-on: [self-hosted, marquefacil-dev]
+    timeout-minutes: 20
+    env:
+      APP_DIR: ${{ inputs.app_dir }}
+      APP_PORT: ${{ inputs.app_port }}
+      EVOLUTION_PORT: ${{ inputs.evo_port }}
+      P: ${{ inputs.project }}
+      IMG: marquefacil-app
+      TAG: ${{ inputs.env }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Testes do servidor
+        run: |
+          # monta o repositório inteiro: os testes também conferem as páginas de public/
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/w -w /w/server node:22-slim \
+            sh -c "npm ci && npm test"
+
+      - name: Construir imagem
+        run: docker build -t $IMG:$TAG -t $IMG:$TAG-${GITHUB_SHA::7} .
+
+      - name: Preparar pasta e .env
+        env:
+          DOMAIN: ${{ inputs.domain }}
+          ALLOW_SIGNUP: ${{ inputs.allow_signup }}
+          EVO_HOST: ${{ inputs.evo_container }}
+        run: |
+          test -w "$APP_DIR" || { echo "::error::$APP_DIR não existe ou não é do usuário do runner (veja deploy/README.md)"; exit 1; }
+          cp "${{ inputs.compose_file }}" "$APP_DIR/docker-compose.yml"
+          umask 077
+
+          # Chave da Evolution e senha do banco dela: criadas no 1º deploy e mantidas depois
+          # (trocar a senha depois quebraria o banco já criado)
+          rnd() { head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+          if [ ! -s "$APP_DIR/.env.evolution" ]; then
+            { echo "AUTHENTICATION_API_KEY=$(rnd)"; echo "EVOLUTION_DB_PASSWORD=$(rnd)"; } > "$APP_DIR/.env.evolution"
+            echo "Chave da Evolution criada"
+          fi
+          chmod 600 "$APP_DIR/.env.evolution"
+          EVOLUTION_APIKEY=$(grep '^AUTHENTICATION_API_KEY=' "$APP_DIR/.env.evolution" | cut -d= -f2)
+
+          {
+            echo "DOMAIN=$DOMAIN"
+            echo "ALLOW_SIGNUP=$ALLOW_SIGNUP"
+            echo "EVOLUTION_URL=http://$EVO_HOST:8080"
+            echo "EVOLUTION_APIKEY=$EVOLUTION_APIKEY"
+            echo "APP_PORT=$APP_PORT"
+            echo "EVOLUTION_PORT=$EVOLUTION_PORT"
+            echo "APP_ENV=$TAG"
+          } > "$APP_DIR/.env"
+          chmod 600 "$APP_DIR/.env"
+
+      - name: Subir
+        working-directory: ${{ inputs.app_dir }}
+        run: |
+          # sem --remove-orphans de propósito: não mexer em nada que não seja deste projeto
+          # os dois arquivos preenchem as variáveis do compose (portas, senha do banco da Evolution)
+          docker compose -p $P --env-file .env --env-file .env.evolution pull --ignore-pull-failures --quiet || true  # o app é imagem local: só baixa Evolution e Postgres
+          docker compose -p $P --env-file .env --env-file .env.evolution up -d
+          docker compose -p $P ps
+          # o Caddy da máquina precisa enxergar a rede do app (não recria o Caddy; só conecta)
+          if docker ps --format '{{.Names}}' | grep -qx caddy; then
+            docker network connect $P caddy 2>/dev/null && echo "Caddy conectado à rede $P" || echo "Caddy já estava na rede $P"
+          fi
+
+      - name: Teste de fumaça
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:$APP_PORT/api/health"; then echo; echo "OK"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::O app não respondeu em /api/health"
+          docker logs --tail 80 ${{ inputs.app_container }}
+          exit 1
+
+      - name: Teste da Evolution (app → WhatsApp)
+        run: |
+          # a Evolution demora um pouco no 1º start (cria as tabelas do banco)
+          for i in $(seq 1 45); do
+            if docker exec ${{ inputs.app_container }} node -e "fetch(process.env.EVOLUTION_URL + '/instance/fetchInstances', { headers: { apikey: process.env.EVOLUTION_APIKEY } }).then(r => { console.log('app → evolution:', r.status); process.exit(r.ok ? 0 : 1) }).catch(() => process.exit(1))"; then
+              exit 0
+            fi
+            sleep 4
+          done
+          echo "::error::O app não conseguiu falar com a Evolution"
+          docker logs --tail 80 ${{ inputs.evo_container }}
+          exit 1
+
+      - name: Teste pelo domínio (se já estiver no ar)
+        if: ${{ inputs.domain != '' }}
+        continue-on-error: true
+        run: curl -fsS --max-time 15 "https://${{ inputs.domain }}/api/health" && echo
+
+      - name: Limpar imagens antigas (mantém as 3 últimas deste ambiente)
+        if: always()
+        run: |
+          docker images $IMG --format '{{.Tag}} {{.CreatedAt}}' \
+            | grep "^$TAG-" | sort -k2 -r | tail -n +4 | awk '{print $1}' \
+            | xargs -r -I{} docker rmi $IMG:{} || true

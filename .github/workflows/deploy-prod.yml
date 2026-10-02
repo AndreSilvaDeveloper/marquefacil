@@ -1,0 +1,35 @@
+name: Deploy produção
+
+# PRODUÇÃO (maquefacil.com.br, studiokadosh.com). Só do branch main, só manual:
+# Actions → "Deploy produção" → Run workflow (branch main).
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Só do branch main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Produção só sai do branch main (veio de ${{ github.ref }})"
+          exit 1
+      - run: echo "OK, branch main"
+  deploy:
+    needs: check
+    uses: ./.github/workflows/deploy.yml
+    with:
+      env: prod
+      app_dir: /opt/marquefacil
+      compose_file: deploy/docker-compose.prod.yml
+      project: marquefacil
+      app_container: marquefacil-app
+      evo_container: marquefacil-evolution
+      app_port: '3100'
+      evo_port: '3101'
+      domain: ${{ vars.DOMAIN }}
+      allow_signup: ${{ vars.ALLOW_SIGNUP || 'true' }}
