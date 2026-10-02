@@ -602,9 +602,12 @@ function decide(a, ok, value = {}) {
     if (value.price > 0) { a.price = value.price; a.priceLater = false; }
     else if (value.later) a.priceLater = true;
   }
-  a.status = ok ? 'marcado' : 'cancelado';
+  // aceitar com sinal: vira pré-reserva e a cliente recebe o pedido do sinal (com o link de pagar, se o banco estiver ligado)
+  a.status = !ok ? 'cancelado' : value.pre ? PRE : 'marcado';
   save();
-  toast(ok ? `Confirmado ✓ ${clientName(a.clientId)} vai receber a confirmação` : 'Pedido recusado');
+  toast(!ok ? 'Pedido recusado'
+    : value.pre ? `💳 Pré-reserva ✓ ${clientName(a.clientId)} vai receber ${salonHours()?.payOnline ? 'o link para pagar o sinal' : 'o pedido do sinal'}`
+    : `Confirmado ✓ ${clientName(a.clientId)} vai receber a confirmação`);
   return true;
 }
 
@@ -623,6 +626,8 @@ function confirmSheet(a, onDone) {
     <small class="hint">A cliente recebe a confirmação no WhatsApp com o valor (ou "avaliado na hora"). Pode deixar em branco e colocar depois.</small>
     <div id="cs-err" style="margin-top:.6rem"></div>
     <button class="btn ok" id="cs-ok" style="margin-top:.6rem">✓ Confirmar agendamento</button>
+    <button class="btn" id="cs-pre" style="margin-top:.6rem">💳 Aceitar com sinal (${salonHours()?.deposit ?? 50}%)</button>
+    <small class="hint" id="cs-pre-h">Vira pré-reserva: ${salonHours()?.payOnline ? 'a cliente recebe o link para pagar o sinal pelo Pix e, quando paga, o horário confirma sozinho.' : 'a cliente recebe o pedido do sinal com a sua chave Pix. Quando ela pagar, você confirma.'}</small>
     <button class="btn" id="cs-no" style="margin-top:.6rem">Cancelar</button>
   </div>`;
   document.body.appendChild(bg);
@@ -637,6 +642,13 @@ function confirmSheet(a, onDone) {
     if (inp.value.trim() && v == null) { $('#cs-err', bg).innerHTML = '<div class="error">O valor não está certo. Exemplo: 80,00</div>'; return; }
     close();
     onDone({ price: v, later: !v && later });
+  };
+  // com sinal: precisa do valor (o sinal é a % dele)
+  $('#cs-pre', bg).onclick = () => {
+    const v = parseMoney(inp.value);
+    if (!(v > 0)) { $('#cs-err', bg).innerHTML = '<div class="error">Para pedir o sinal, escreva o valor do atendimento.</div>'; inp.focus(); return; }
+    close();
+    onDone({ price: v, pre: true });
   };
 }
 
@@ -3945,6 +3957,7 @@ function vAvisos() {
    pela página "Meus horários". Pagou → entra sozinho no horário/compra (pré-reserva vira confirmado). */
 function vPagamentos() {
   return onlineView('Receber pelo banco', () => api('GET', '/api/settings'), (box, S) => {
+    cacheSalon(S);
     const A = S.asaas || {}, P = S.payments;
     const err = e => { $('#err', box).innerHTML = `<div class="error">${esc(e.message)}</div>`; };
     box.innerHTML = A.connected ? `
@@ -3987,7 +4000,7 @@ function vPagamentos() {
       if (t) { toggles[k] = P[k]; bindToggle2(t, v => { toggles[k] = v; }); }
     }
     $('#save', box) && ($('#save', box).onclick = async () => {
-      try { await api('PUT', '/api/settings', { payments: toggles }); toast('Salvo ✓'); $('#err', box).innerHTML = ''; } catch (e) { err(e); }
+      try { cacheSalon(await api('PUT', '/api/settings', { payments: toggles })); toast('Salvo ✓'); $('#err', box).innerHTML = ''; } catch (e) { err(e); }
     });
     $('#conn', box) && ($('#conn', box).onclick = async e => {
       const key = $('#ak', box).value.trim();
@@ -4974,7 +4987,7 @@ function showLogin(mode = 'entrar') {
 // Horário de atendimento (dias, almoço) guardado no celular: a agenda usa para mostrar os horários livres
 const salonKey = () => `mf.salon.${session.tenant.id}`;
 const salonHours = () => readLS(salonKey());
-function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50, goal: S.finance?.goal || 0, wa: !!S.whatsapp?.instance && S.whatsapp?.saleReminders !== false, waSale: !!S.whatsapp?.instance && S.whatsapp?.saleConfirm !== false }); } catch { /* ok */ } }
+function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50, goal: S.finance?.goal || 0, wa: !!S.whatsapp?.instance && S.whatsapp?.saleReminders !== false, waSale: !!S.whatsapp?.instance && S.whatsapp?.saleConfirm !== false, payOnline: !!S.asaas?.connected && S.payments?.deposit !== false }); } catch { /* ok */ } }
 function refreshSalon() { api('GET', '/api/settings').then(S => { cacheSalon(S); if (!$('#app form') && parseHash().parts[0] === 'agenda') render(); }).catch(() => {}); }
 
 function refreshPush() {

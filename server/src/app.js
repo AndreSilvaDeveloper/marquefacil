@@ -245,6 +245,9 @@ export function buildApp({
     if (to === 'cancelado') {
       if (a?.replaces) messenger.fire(tenantId, apptId, 'rescheduleNo');
       else if (s.whatsapp.declineMessage) messenger.fire(tenantId, apptId, 'decline');
+    } else if (to === 'prereserva') {
+      // aceito com sinal: a cliente recebe o pedido do sinal (com o link para pagar, se o banco estiver ligado)
+      if (s.whatsapp.prereserveMessage) messenger.fire(tenantId, apptId, 'prereserve');
     } else if (s.whatsapp.confirmOnline) messenger.fire(tenantId, apptId, 'confirm');
   }
 

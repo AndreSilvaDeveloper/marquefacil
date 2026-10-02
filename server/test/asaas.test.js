@@ -207,3 +207,29 @@ test('Asaas: ligar, sinal da pré-reserva pago pelo link confirma o horário; co
   assert.equal((await hook(paid, wh.body.authToken)).status, 401, 'webhook antigo não vale mais');
   await app.close();
 });
+
+test('pedido do link aceito com sinal: vira pré-reserva e a cliente recebe o link para pagar', async () => {
+  const bank = fakeAsaas(), evo = fakeEvolution();
+  const app = buildApp({ publicUrl: 'https://maquefacil.com.br', evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl }, asaasFetch: bank.fetchImpl });
+  const call = client(app), pub = client(app);
+  await call('POST', '/api/signup', { salonName: 'Studio Ana', name: 'Ana', email: 'ana@x.com', password: 'segredo1' });
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  await call('PUT', '/api/settings', { booking: { enabled: true, minAdvanceHours: 0 } });
+  await call('PUT', '/api/asaas', { apiKey: KEY });
+  let date = addDays(nowIn('America/Sao_Paulo').date, 2);
+  while (weekday(date) === 0 || weekday(date) === 6) date = addDays(date, 1);
+  const b = await pub('POST', '/api/public/studio-ana/book', { date, time: '10:00', name: 'Carla Souza', phone: '11944443333' });
+  assert.equal(b.body.pending, true);
+  const a = (await call('GET', '/api/changes?since=0')).body.changes.find(c => c.coll === 'appts').data;
+  const n = evo.sent.length;
+  await call('POST', '/api/sync', { changes: [{ coll: 'appts', id: a.id, data: { ...a, price: 120, status: 'prereserva' } }] });
+  await wait();
+  const msgs = evo.sent.slice(n).filter(m => m.number === '5511944443333');
+  assert.equal(msgs.length, 1);
+  assert.match(msgs[0].text, /pré-reservado/);
+  assert.match(msgs[0].text, /Pague o sinal de R\$\s?60,00/);
+  const me = (await pub('GET', `/api/public/studio-ana/me?t=${b.body.meus}`)).body;
+  assert.deepEqual(me.pay.items[0].options.map(o => [o.what, o.value]), [['sinal', 60]]);
+  await app.close();
+});
