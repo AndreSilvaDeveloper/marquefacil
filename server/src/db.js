@@ -81,6 +81,31 @@ export function openDb(file) {
       data TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
+    -- Pagamento online (Asaas). A chave de API do salão fica em kv ('asaas:<tenant>'), nunca vai para o app.
+    -- Cada cobrança gerada para a cliente: kind 'appt' (ref = id do horário) ou 'order' (ref = chave da compra)
+    CREATE TABLE IF NOT EXISTS charges (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      client_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      ref TEXT NOT NULL,
+      what TEXT NOT NULL,
+      value REAL NOT NULL,
+      status TEXT NOT NULL,
+      data TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      checked_at INTEGER NOT NULL DEFAULT 0,
+      paid_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS charges_open ON charges (status, created_at);
+    -- cliente do salão → cadastro dela no Asaas (o CPF fica só lá)
+    CREATE TABLE IF NOT EXISTS pay_customers (
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      client_id TEXT NOT NULL,
+      env TEXT NOT NULL,
+      customer_id TEXT NOT NULL,
+      PRIMARY KEY (tenant_id, client_id, env)
+    );
     DROP TABLE IF EXISTS handoffs;
   `);
   return db;

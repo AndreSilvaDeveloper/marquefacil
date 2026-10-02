@@ -4,6 +4,7 @@ import { fail, isObj, uid, TIME_RE, DATE_RE, waNumber } from './util.js';
 import { nowIn, zonedEpoch, dayLabel } from './time.js';
 import { applyChanges } from './db.js';
 import { computeSlots } from './booking.js';
+import { groupOrders, productsText, valueOf, leftOf, movePayments } from './sales.js';
 
 /* "Meus horários": a cliente vê, remarca e cancela os horários dela, sem senha.
    Ela entra por um link pessoal (token) que vai nas mensagens do WhatsApp, que o
@@ -21,7 +22,7 @@ export function newPortalToken(db, tenantId, clientId) {
 }
 export const portalUrl = (publicUrl, slug, token) => (publicUrl ? `${publicUrl.replace(/\/+$/, '')}/${slug}#meus=${token}` : '');
 
-export function registerPortal(app, { db, messenger, push, publicUrl, limitBook, limitAccess }) {
+export function registerPortal(app, { db, messenger, push, pay, publicUrl, limitBook, limitAccess, limitPay }) {
   const q = {
     tenant: db.prepare('SELECT id, name, slug, settings FROM tenants WHERE slug = ?'),
     token: db.prepare('SELECT client_id FROM portal_tokens WHERE token_hash = ? AND tenant_id = ? AND created_at > ?'),
@@ -32,6 +33,8 @@ export function registerPortal(app, { db, messenger, push, publicUrl, limitBook,
     dayAppts: db.prepare(`SELECT data FROM records WHERE tenant_id = ? AND coll = 'appts' AND deleted = 0
                           AND json_extract(data, '$.date') = ?`),
     cleanup: db.prepare('DELETE FROM portal_tokens WHERE created_at < ?'),
+    clientSales: db.prepare(`SELECT data FROM records WHERE tenant_id = ? AND coll = 'sales' AND deleted = 0
+                             AND json_extract(data, '$.clientId') = ?`),
     clientPackages: db.prepare(`SELECT data FROM records WHERE tenant_id = ? AND coll = 'packages' AND deleted = 0
                                 AND json_extract(data, '$.clientId') = ?`),
   };
@@ -91,10 +94,35 @@ export function registerPortal(app, { db, messenger, push, publicUrl, limitBook,
       const before = p.doneBefore || 0;
       return { name: p.name, total: p.total, scheduled: before + used.length, done: before + done };
     }).filter(p => p.done < p.total);
+    // Histórico: serviços feitos e compras (com o que ficou em aberto)
+    const nowMs = Date.now();
+    const services = all.filter(a => a.status === 'feito' || (a.status === 'marcado' && a.date && a.time && zonedEpoch(a.date, a.time, s.timezone) < nowMs))
+      .sort(byWhen).reverse().slice(0, 40)
+      .map(a => ({ date: a.date, service: a.service || 'Atendimento', price: valueOf(a) || null, left: valueOf(a) > 0 ? leftOf(a) : 0 }));
+    const purchases = groupOrders(q.clientSales.all(t.id, client.id).map(r => JSON.parse(r.data)))
+      .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 40)
+      .map(o => ({ date: o.date, items: productsText(o), total: o.total, left: o.left }));
     return {
       salon: t.name, name: client.name, approval: s.booking.requireApproval, enabled: s.booking.enabled,
       upcoming: upcoming.map(view), past: pastDone.map(view), packages,
+      history: { services, purchases },
+      // pagar pelo banco (só o que a profissional ligou)
+      pay: { items: pay.openItems(t.id, s, client.id), card: s.payments.card },
     };
+  });
+
+  // Gera o Pix (ou o link do cartão) de um item em aberto. O valor é calculado no servidor.
+  app.post('/api/public/:slug/me/pay', async req => {
+    if (!limitPay(req.ip)) fail(429, 'Muitas tentativas. Tente de novo mais tarde.');
+    const b = isObj(req.body) ? req.body : {};
+    const { t, client } = load(req.params.slug, b.t);
+    const kind = b.kind === 'order' ? 'order' : 'appt';
+    return pay.createCharge(t, client, { kind, ref: String(b.ref || ''), what: String(b.what || ''), cpf: b.cpf ? String(b.cpf) : '' });
+  });
+  // A página pergunta de tempos em tempos se o pagamento já caiu
+  app.get('/api/public/:slug/me/pay/:id', async req => {
+    const { t, client } = load(req.params.slug, req.query.t);
+    return pay.status(t.id, client.id, req.params.id);
   });
 
   app.post('/api/public/:slug/me/cancel', async req => {
@@ -147,8 +175,13 @@ export function registerPortal(app, { db, messenger, push, publicUrl, limitBook,
         replaces: old.id, source: 'online', createdAt: Date.now(),
       };
       delete appt.seriesId; delete appt.seriesIndex; delete appt.seriesEvery; delete appt.remindedAt;
-      changes.push({ coll: 'appts', id: appt.id, data: appt });
-      if (!pending) changes.push({ coll: 'appts', id: old.id, data: { ...old, status: 'cancelado', cancelledBy: 'remarcado', replacedBy: appt.id } });
+      if (pending) changes.push({ coll: 'appts', id: appt.id, data: appt });
+      else {
+        // já vale: o pagamento (ex.: sinal) vai junto para o horário novo
+        const [was, now2] = movePayments(old, appt);
+        changes.push({ coll: 'appts', id: appt.id, data: now2 });
+        changes.push({ coll: 'appts', id: old.id, data: { ...was, status: 'cancelado', cancelledBy: 'remarcado', replacedBy: appt.id } });
+      }
       applyChanges(db, t.id, changes);
       return appt;
     })();

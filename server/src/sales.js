@@ -4,10 +4,28 @@
      plan = { entrada: valor pago na hora (0 se nada), dates: ['AAAA-MM-DD', …] }  → uma data por parcela.
    O que ela vai pagando cobre as parcelas na ordem (a 1ª primeiro). O app faz a mesma conta (public/app.js). */
 
-const r2 = n => Math.round(n * 100) / 100;
-const valueOf = x => ('total' in x ? x.total : x.price) || 0;
-const paymentsOf = x => (x.payments?.length ? x.payments : x.paid && valueOf(x) > 0 ? [{ v: valueOf(x) }] : []);
-const paidOf = x => r2(paymentsOf(x).reduce((t, p) => t + (p.v || 0), 0));
+export const r2 = n => Math.round(n * 100) / 100;
+export const valueOf = x => ('total' in x ? x.total : x.price) || 0;
+export const paymentsOf = x => (x.payments?.length ? x.payments : x.paid && valueOf(x) > 0 ? [{ v: valueOf(x), m: x.payMethod || '', d: x.date }] : []);
+export const paidOf = x => r2(paymentsOf(x).reduce((t, p) => t + (p.v || 0), 0));
+export const leftOf = x => Math.max(0, r2(valueOf(x) - paidOf(x)));
+// Recebeu um valor: guarda o pagamento e marca pago quando cobre tudo (igual ao app)
+export function withPayment(x, v, m, d, extra = {}) {
+  const payments = [...paymentsOf(x), { v: r2(v), m, d, ...extra }];
+  const y = { ...x, payments };
+  y.paid = valueOf(y) > 0 ? leftOf(y) === 0 : true;
+  return y;
+}
+// Valor da compra: vai cobrindo os produtos em ordem (igual a payOrder do app)
+export function payOrderLines(lines, v, m, d, extra = {}) {
+  let rest = r2(v);
+  return lines.map(x => {
+    const part = Math.min(rest, leftOf(x));
+    if (part <= 0) return null;
+    rest = r2(rest - part);
+    return withPayment(x, part, m, d, extra);
+  }).filter(Boolean);
+}
 
 export const orderKey = s => s.orderId || s.id;
 
@@ -48,4 +66,13 @@ export function installments(o) {
 export function productsText(o) {
   const names = o.lines.map(s => `${s.product}${s.desc ? ` (${s.desc})` : ''}${s.qty > 1 ? ` (${s.qty}x)` : ''}`);
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} e ${names.at(-1)}` : names[0] || 'compra';
+}
+
+// Remarcação: o que já foi pago (ex.: sinal pelo banco) passa do horário antigo para o novo
+export function movePayments(from, to) {
+  const pays = paymentsOf(from);
+  if (!pays.length) return [from, to];
+  const next = { ...to, payments: [...paymentsOf(to), ...pays] };
+  next.paid = valueOf(next) > 0 ? leftOf(next) === 0 : true;
+  return [{ ...from, payments: [], paid: false, paymentsMovedTo: to.id }, next];
 }

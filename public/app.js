@@ -422,7 +422,7 @@ function parseHash() {
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
   agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: (id, q) => (q.id ? (q.editar ? vSaleForm(id, q) : vSaleView(id, q)) : vSell(id, q)), financeiro: vFin, mais: vMore,
-  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, ajuda: vAjuda, aparelho: vAparelho, dados: vDados, configurar: vConfigurar, pacotes: vPacotes, relatorio: vRelatorio, conta: vConta, pacote: vPackageForm,
+  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, ajuda: vAjuda, aparelho: vAparelho, dados: vDados, configurar: vConfigurar, pacotes: vPacotes, relatorio: vRelatorio, pagamentos: vPagamentos, conta: vConta, pacote: vPackageForm,
 };
 
 let lastHash = '';
@@ -1505,7 +1505,7 @@ function vAppt(id) {
           <div class="quickprice"><div class="money"><input type="text" id="price" inputmode="numeric" placeholder="${a.priceLater ? 'Avaliar' : '0,00'}" value="${moneyVal(a.price)}"></div>
           <button class="btn small main" id="save-price">Salvar</button></div></div>
         ${!(a.price > 0) ? `<div class="ex-row"><span class="muted" style="font-size:.9rem">Ainda não sabe o valor?</span><button type="button" class="chip ${a.priceLater ? 'on' : ''}" id="later">🔎 Avaliar na hora</button></div>` : ''}
-        ${valueOf(a) > 0 ? `<div class="ex-row"><span>Pagamento${paymentsOf(a).length ? `<small class="muted paid-how">${paymentsOf(a).map(p => `${brl(p.v)}${PAY[p.m] ? ' ' + PAY[p.m] : ''} · ${fmtShort(p.d).slice(0, 5)}`).join('<br>')}</small>` : ''}</span>
+        ${valueOf(a) > 0 ? `<div class="ex-row"><span>Pagamento${paymentsOf(a).length ? `<small class="muted paid-how">${paymentsOf(a).map(p => `${brl(p.v)}${PAY[p.m] ? ' ' + PAY[p.m] : ''}${p.via === 'asaas' ? ' 🏦 pelo banco' : ''} · ${fmtShort(p.d).slice(0, 5)}`).join('<br>')}</small>` : ''}</span>
           ${leftOf(a) <= 0 ? '<b style="color:var(--ok)">✓ Pago</b>' : a.status === PRE ? `<b style="color:var(--warn)">falta ${brl(leftOf(a))}</b>` : `<button class="btn small ok" id="receive">💰 Receber ${brl(leftOf(a)).replace(',00', '')}</button>`}</div>` : ''}
         <div class="ex-row"><span>🛍️ Produtos</span><a class="btn small" href="#/venda?c=${a.clientId}&a=${a.id}">+ Vender</a></div>
         ${salesOfAppt(a).map(x => saleRow(x, { who: false })).join('')}
@@ -2859,7 +2859,7 @@ function vSaleView(_, q) {
       </div>
 
       <div class="card extrato moneybox">
-        <div class="ex-row"><span>Pago${pays.length ? `<small class="muted paid-how">${pays.map(p => `${brl(p.v)}${PAY[p.m] ? ' ' + PAY[p.m] : ''} · ${fmtShort(p.d).slice(0, 5)}`).join('<br>')}</small>` : ''}</span><b style="color:var(--ok)">${brl(o.paid)}</b></div>
+        <div class="ex-row"><span>Pago${pays.length ? `<small class="muted paid-how">${pays.map(p => `${brl(p.v)}${PAY[p.m] ? ' ' + PAY[p.m] : ''}${p.via === 'asaas' ? ' 🏦 pelo banco' : ''} · ${fmtShort(p.d).slice(0, 5)}`).join('<br>')}</small>` : ''}</span><b style="color:var(--ok)">${brl(o.paid)}</b></div>
         ${o.left > 0 ? `<div class="ex-row"><span>Falta</span><b style="color:var(--warn)">${brl(o.left)}</b></div>` : ''}
         ${parts.length ? `<div class="lt-list" style="margin:.2rem .8rem .8rem">${o.plan.entrada > 0 ? `<div class="ok"><span>Entrada</span><b>✓ ${brl(o.plan.entrada)}</b></div>` : ''}${parts.map(p => `<div class="${p.left <= 0 ? 'ok' : p.date < today() ? 'late' : ''}">
           <span>${p.of > 1 ? `${p.n}ª parcela` : 'Pagamento'} · ${fmtShort(p.date).slice(0, 5)}</span>
@@ -3611,6 +3611,11 @@ function vMore() {
         ${item('#/link?p=horarios', '🕐', 'Dias e horários de atendimento', salon?.days ? esc(hoursSummary(salon.days)) : 'Dias, almoço, folgas e feriados')}
       </div>
 
+      <h2>Pagamento online</h2>
+      <div class="menu">
+        ${item('#/pagamentos', '🏦', 'Receber pelo banco (Asaas)', '<span id="pay-status">Sinal, serviços e compras pela página da cliente</span>')}
+      </div>
+
       <h2>WhatsApp automático</h2>
       <div class="menu">
         ${item('#/whatsapp', '📱', 'Conexão', '<span id="wa-status">…</span>')}
@@ -3636,6 +3641,9 @@ function vMore() {
         ${db.clients.length} clientes · ${db.appts.length} horários · ${db.sales.length} vendas · ${db.expenses.length} despesas<br>
         ${esc(BRAND.name)}</p>`,
     bind(el) {
+      api('GET', '/api/asaas').then(a => {
+        if (a.connected) $('#pay-status', el).innerHTML = `<span style="color:var(--ok)">● Conectado</span>${a.env === 'sandbox' ? ' · modo de testes' : ''}`;
+      }).catch(() => {});
       api('GET', '/api/whatsapp/status').then(st => {
         const w = $('#wa-status', el);
         if (!w) return;
@@ -3931,6 +3939,68 @@ function vAvisos() {
       <div id="push-card"></div>`,
     bind(el) { paintPushCard($('#push-card', el), true); },
   };
+}
+
+/* Pagamento online pelo Asaas: a profissional conecta a conta dela e escolhe o que a cliente pode pagar
+   pela página "Meus horários". Pagou → entra sozinho no horário/compra (pré-reserva vira confirmado). */
+function vPagamentos() {
+  return onlineView('Receber pelo banco', () => api('GET', '/api/settings'), (box, S) => {
+    const A = S.asaas || {}, P = S.payments;
+    const err = e => { $('#err', box).innerHTML = `<div class="error">${esc(e.message)}</div>`; };
+    box.innerHTML = A.connected ? `
+      <div class="card">
+        <b style="color:var(--ok)">✓ Conectado ao Asaas</b>
+        <div class="muted">${A.name ? esc(A.name) + ' · ' : ''}chave terminada em …${esc(A.keyEnd)}${A.env === 'sandbox' ? ' · <b style="color:var(--warn)">modo de testes (sandbox)</b>' : ''}</div>
+        ${A.webhook ? '' : `<p class="warnline" style="margin:.6rem 0 0">⚠️ O aviso automático do banco não foi criado${A.webhookError ? ` (${esc(A.webhookError)})` : ''}. Os pagamentos ainda entram: o sistema confere no banco a cada 2 minutos.</p>`}
+      </div>
+      <div class="form" style="margin-top:1rem">
+        <p class="muted" style="margin-top:0">Na página <b>Meus horários</b> (o link que vai nas mensagens), a cliente vê o que tem em aberto e paga por <b>Pix</b>. Quando cai na sua conta Asaas, o sistema marca como pago sozinho.</p>
+        <div class="field"><span class="lbl">💳 Sinal da pré-reserva (${S.whatsapp.depositPercent}% do valor) — pagou, o horário fica <b>confirmado</b> sozinho</span>${toggle2('p-deposit', P.deposit, '✓ Ligado', 'Desligado')}</div>
+        <div class="field"><span class="lbl">💇 Valor dos serviços — pagar adiantado ou o que ficou em aberto</span>${toggle2('p-services', P.services, '✓ Ligado', 'Desligado')}</div>
+        <div class="field"><span class="lbl">🛍️ Compras de produtos — parcelas e o que ficou em aberto</span>${toggle2('p-products', P.products, '✓ Ligado', 'Desligado')}</div>
+        <div class="field"><span class="lbl">Aceitar cartão de crédito também <span class="opt">(a taxa do cartão é maior que a do Pix)</span></span>${toggle2('p-card', P.card, 'Pix e cartão', 'Só Pix', true)}</div>
+        <div id="err"></div>
+        <button class="btn main" id="save">✓ Salvar</button>
+        <p class="muted" style="font-size:.9rem">O sinal é a porcentagem de <a href="#/whatsapp?p=mandar">O que mandar</a>. Na mensagem de pré-reserva vai o link para pagar (e a chave Pix manual sai, porque ela não confirma sozinha).</p>
+      </div>
+      <button class="btn danger" id="off" style="margin-top:1.5rem">Desconectar o Asaas</button>` : `
+      <p class="muted" style="margin-top:0">Conecte a sua conta do <b>Asaas</b> para as clientes pagarem o sinal, os serviços e as compras pelo Pix, direto na página delas. Quando o pagamento cai, o sistema marca sozinho — e a pré-reserva vira horário confirmado.</p>
+      <div class="card">
+        <b>Como pegar a chave</b>
+        <ol style="margin:.5rem 0 0;padding-left:1.2rem;line-height:1.6">
+          <li>Entre no Asaas (site ou app)</li>
+          <li>Menu do seu nome → <b>Integrações</b> → <b>Chave de API</b></li>
+          <li>Toque em <b>Gerar chave</b> e copie</li>
+          <li>Cole aqui embaixo</li>
+        </ol>
+        <p class="muted" style="font-size:.9rem;margin-bottom:0">Tenha uma <b>chave Pix cadastrada no Asaas</b>: é ela que recebe. A chave de API fica guardada só no servidor, não aparece mais em lugar nenhum.</p>
+      </div>
+      <div class="form" style="margin-top:1rem">
+        <div class="field"><label for="ak">Chave de API do Asaas</label>
+          <input type="password" id="ak" placeholder="$aact_…" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+        <div id="err"></div>
+        <button class="btn main" id="conn">🔗 Conectar</button>
+      </div>`;
+    const toggles = {};
+    for (const k of ['deposit', 'services', 'products', 'card']) {
+      const t = $(`#p-${k}`, box);
+      if (t) { toggles[k] = P[k]; bindToggle2(t, v => { toggles[k] = v; }); }
+    }
+    $('#save', box) && ($('#save', box).onclick = async () => {
+      try { await api('PUT', '/api/settings', { payments: toggles }); toast('Salvo ✓'); $('#err', box).innerHTML = ''; } catch (e) { err(e); }
+    });
+    $('#conn', box) && ($('#conn', box).onclick = async e => {
+      const key = $('#ak', box).value.trim();
+      if (!key) return err(new Error('Cole a chave de API do Asaas.'));
+      e.target.disabled = true; e.target.textContent = 'Conferindo…';
+      try { await api('PUT', '/api/asaas', { apiKey: key }); toast('Asaas conectado ✓'); render(); }
+      catch (x) { err(x); e.target.disabled = false; e.target.textContent = '🔗 Conectar'; }
+    });
+    $('#off', box) && ($('#off', box).onclick = async () => {
+      if (!confirm('Desconectar o Asaas? As clientes não vão mais conseguir pagar pela página delas.')) return;
+      try { await api('DELETE', '/api/asaas'); toast('Asaas desconectado'); render(); } catch (e) { err(e); }
+    });
+  });
 }
 
 // "Seu salão está pronto?": o que falta configurar, cada item leva direto para onde se resolve
@@ -4623,7 +4693,7 @@ function vWhats(_, q = {}) {
             <input type="tel" id="own" placeholder="(11) 99999-9999" value="${esc(w.ownerPhone || '')}"></div>
           ` : ''}
           ${part === 'textos' ? `<div id="textos">
-            <p class="muted" style="margin-top:0">Pode usar: {nome} (só o primeiro nome), {dia}, {hora}, {servico}, {valor}, {sinal}, {pix} (chave dos serviços), {pacote}, {salao}, {telefone}, {meus_horarios}. Linha com campo vazio (ex.: sem serviço) some sozinha.</p>
+            <p class="muted" style="margin-top:0">Pode usar: {nome} (só o primeiro nome), {dia}, {hora}, {servico}, {valor}, {sinal}, {pix} (chave dos serviços), {pagar} (link para pagar o sinal pelo banco), {pacote}, {salao}, {telefone}, {meus_horarios}. Linha com campo vazio (ex.: sem serviço) some sozinha.</p>
             <div class="field"><label for="t-confirm">Confirmação</label><textarea id="t-confirm" rows="6">${esc(w.templates.confirm)}</textarea></div>
             <div class="field"><label for="t-change">Horário mudou <span class="opt">(quando você muda o dia ou a hora de um horário já marcado)</span></label><textarea id="t-change" rows="6">${esc(w.templates.change)}</textarea></div>
             <div class="field"><label for="t-reminder">Lembrete</label><textarea id="t-reminder" rows="6">${esc(w.templates.reminder)}</textarea></div>

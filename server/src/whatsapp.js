@@ -102,12 +102,17 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
     return `${pkg.name} — ${n}ª sessão de ${pkg.total}`;
   }
 
+  const payOn = db.prepare("SELECT 1 FROM kv WHERE key = ?");
   function varsFor(tenant, appt, client, kind) {
+    const s = readSettings(tenant.settings);
     // links com o domínio do salão (ex.: studiokadosh.com), ou o endereço padrão do sistema
-    const base = readSettings(tenant.settings).site || publicUrl;
+    const base = s.site || publicUrl;
     // link pessoal "ver ou remarcar" (só nas mensagens para a cliente)
     const meus = client && kind !== 'owner' && base ? portalUrl(base, tenant.slug, newPortalToken(db, tenant.id, client.id)) : '';
+    // sinal pago pelo banco (Asaas): a cliente paga pela página dela e o horário confirma sozinho
+    const pagar = appt.status === 'prereserva' && appt.price > 0 && s.payments.deposit && meus && payOn.get(`asaas:${tenant.id}`) ? meus : '';
     return {
+      pagar,
       meus_horarios: meus,
       nome: (client?.name || '').split(' ')[0],
       nome_completo: client?.name || '',
@@ -117,7 +122,8 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
       hora: appt.time,
       servico: appt.service || '',
       valor: appt.price > 0 ? brl(appt.price) : appt.priceLater ? 'avaliado na hora do atendimento' : '',
-      pix: readSettings(tenant.settings).whatsapp.pixKeyService || '', // chave Pix dos serviços
+      // chave Pix dos serviços (na pré-reserva com pagamento pelo banco, a chave some: o link já tem o Pix que confirma sozinho)
+      pix: pagar && kind === 'prereserve' ? '' : s.whatsapp.pixKeyService || '',
       sinal: appt.price > 0 ? brl(Math.round(appt.price * (readSettings(tenant.settings).whatsapp.depositPercent / 100) * 100) / 100) : '',
       pacote: packageLabel(tenant.id, appt),
       link: base ? `${base.replace(/\/+$/, '')}/${tenant.slug}` : '',
@@ -142,6 +148,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
     let tplFinal = vars.pacote && ['confirm', 'reminder', 'prereserve'].includes(kind) && !tpl.includes('{pacote}') ? `${tpl}\n📦 {pacote}` : tpl;
     // pré-reserva: a cliente precisa da chave para pagar o sinal, mesmo se o texto foi editado sem {pix}
     if (kind === 'prereserve' && vars.pix && !tplFinal.includes('{pix}')) tplFinal += '\n🔑 Pix para o sinal: {pix}';
+    if (kind === 'prereserve' && vars.pagar && !tplFinal.includes('{pagar}')) tplFinal += '\n\n💳 Pague o sinal de {sinal} por aqui (Pix na hora) e o horário confirma sozinho:\n{pagar}';
     const body = renderTemplate(tplFinal, vars);
     const row = { tenantId, apptId, kind: key, phone, name: client?.name || '', body, now: Date.now() };
 

@@ -315,13 +315,13 @@ const MEUS_KEY = `mf.meus.${slug}`;
 const meusToken = () => { try { return localStorage.getItem(MEUS_KEY) || ''; } catch { return ''; } };
 const saveMeus = t => { try { localStorage.setItem(MEUS_KEY, t); } catch { /* ok */ } };
 const forgetMeus = () => { try { localStorage.removeItem(MEUS_KEY); } catch { /* ok */ } };
-const pv = { data: null, appt: null, days: [], month: null, date: null, slots: [], time: null, msg: '' };
+const pv = { data: null, appt: null, days: [], month: null, date: null, slots: [], time: null, msg: '', hist: 'servicos', histAll: false, pay: null };
 
 function portalGo(view, push = true) {
   st.portal = view;
   if (push) history.pushState({ portal: view }, '');
   window.scrollTo(0, 0);
-  ({ meus: showMeus, acesso: showAccess, rdia: showRDay, rhora: showRTime, rconf: showRConfirm })[view]?.();
+  ({ meus: showMeus, acesso: showAccess, rdia: showRDay, rhora: showRTime, rconf: showRConfirm, pagar: showPay })[view]?.();
 }
 const backBtn = (label = '‹ Voltar') => `<button type="button" class="btn" id="pback" style="margin-top:1rem">${label}</button>`;
 const bindBack = () => $('#pback')?.addEventListener('click', () => history.back());
@@ -353,6 +353,12 @@ async function showMeus() {
   $('#app').innerHTML = `
     <h2 style="margin-top:0">Olá, ${esc(d.name.split(' ')[0])}! 👋</h2>
     ${pv.msg ? `<div class="summary">${pv.msg}</div>` : ''}
+    ${d.pay?.items?.length ? `<h2>💳 Para pagar</h2>${d.pay.items.map((it, i) => `<div class="step meu payitem">
+      <p><b>${esc(it.title)}</b></p>
+      <p class="muted" style="font-size:.92rem">${esc(it.sub)}</p>
+      ${it.prereserve ? '<p style="font-size:.92rem">Pagando o sinal, o seu horário fica <b>confirmado na hora</b>. ✅</p>' : ''}
+      <div class="opts">${it.options.map((o, j) => `<button type="button" class="btn ${j === 0 ? 'main' : ''}" data-pay="${i}:${j}"><span>${esc(o.label)}</span><b>${money2(o.value)}</b></button>`).join('')}</div>
+    </div>`).join('')}` : ''}
     <h2>Seus próximos horários</h2>
     ${d.upcoming.length ? d.upcoming.map(card).join('') : '<p class="muted">Você não tem horário marcado.</p>'}
     ${d.packages?.length ? `<h2>📦 Seus pacotes</h2>${d.packages.map(p => `<div class="step meu">
@@ -360,7 +366,7 @@ async function showMeus() {
       <div class="pbar"><i style="width:${Math.round(p.done / p.total * 100)}%"></i></div>
       <p class="muted" style="font-size:.92rem">${p.done} de ${p.total} ${p.done === 1 ? 'feita' : 'feitas'}${p.scheduled > p.done ? ` · ${p.scheduled - p.done} marcada${p.scheduled - p.done > 1 ? 's' : ''}` : ''}${p.total > p.scheduled ? ` · ${p.total - p.scheduled} para marcar` : ''}</p></div>`).join('')}` : ''}
     ${d.enabled ? '<button type="button" class="btn main" id="new">📅 Pedir um horário novo</button>' : ''}
-    ${d.past.length ? `<h2>Últimas vezes</h2><div class="list">${d.past.map(a => `<div class="card line"><div class="grow"><b>${esc(fmtDay(a.date))}</b><span>${esc(a.service || '')}</span></div></div>`).join('')}</div>` : ''}
+    ${historyHtml(d)}
     <button type="button" class="btn" id="notme" style="margin-top:1.5rem">Não é você? Sair</button>`;
   pv.msg = '';
   $('#new')?.addEventListener('click', () => {
@@ -370,6 +376,16 @@ async function showMeus() {
   });
   $('#notme').onclick = () => { forgetMeus(); location.reload(); };
   $('#app').onclick = async e => {
+    const pb = e.target.closest('[data-pay]');
+    if (pb) {
+      const [i, j] = pb.dataset.pay.split(':').map(Number);
+      const it = d.pay.items[i];
+      pv.pay = { item: it, opt: it.options[j], charge: null, needCpf: false, err: '' };
+      return portalGo('pagar');
+    }
+    const ht = e.target.closest('[data-hist]');
+    if (ht) { pv.hist = ht.dataset.hist; pv.histAll = false; $('#hist').outerHTML = historyHtml(d); return; }
+    if (e.target.closest('#hist-more')) { pv.histAll = true; $('#hist').outerHTML = historyHtml(d); return; }
     const mv = e.target.closest('[data-move]'), cl = e.target.closest('[data-cancel]');
     if (mv) { pv.appt = d.upcoming.find(a => a.id === mv.dataset.move); pv.date = null; pv.month = null; loadRDays(); }
     if (cl) {
@@ -380,6 +396,104 @@ async function showMeus() {
       catch (err) { alert(err.message); cl.disabled = false; }
     }
   };
+}
+
+const money2 = v => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const short = d => `${d.slice(8, 10)}/${d.slice(5, 7)}${d.slice(0, 4) !== String(new Date().getFullYear()) ? '/' + d.slice(2, 4) : ''}`;
+
+// Histórico: serviços feitos e compras, com o que ficou em aberto
+function historyHtml(d) {
+  const h = d.history || { services: [], purchases: [] };
+  if (!h.services.length && !h.purchases.length) return '<div id="hist"></div>';
+  const tab = h.services.length && h.purchases.length ? pv.hist : h.services.length ? 'servicos' : 'compras';
+  const value = (v, left) => (v ? `${money2(v)}${left > 0 ? `<small style="color:var(--warn)">falta ${money2(left)}</small>` : '<small style="color:var(--ok)">✓ pago</small>'}` : '');
+  const rows = tab === 'servicos'
+    ? h.services.map(x => `<div><span class="d">${short(x.date)}</span><span class="w">💇 ${esc(x.service)}</span><span class="v">${value(x.price, x.left)}</span></div>`)
+    : h.purchases.map(x => `<div><span class="d">${short(x.date)}</span><span class="w">🛍️ ${esc(x.items)}</span><span class="v">${value(x.total, x.left)}</span></div>`);
+  const shown = pv.histAll ? rows : rows.slice(0, 5);
+  return `<div id="hist"><h2>📜 Seu histórico</h2>
+    ${h.services.length && h.purchases.length ? `<div class="htabs">
+      <button type="button" data-hist="servicos" class="${tab === 'servicos' ? 'on' : ''}">💇 Serviços (${h.services.length})</button>
+      <button type="button" data-hist="compras" class="${tab === 'compras' ? 'on' : ''}">🛍️ Compras (${h.purchases.length})</button></div>` : ''}
+    <div class="hist">${shown.join('')}${rows.length > shown.length ? `<button type="button" class="more" id="hist-more">Ver tudo (${rows.length})</button>` : ''}</div></div>`;
+}
+
+/* Pagar pelo banco: CPF (só a 1ª vez) → Pix (QR code e copia e cola) → espera cair e confirma */
+let payPoll = null;
+async function showPay() {
+  clearTimeout(payPoll);
+  $('#app').onclick = null;
+  const P = pv.pay;
+  if (!P) return portalGo('meus', false);
+  const { item, opt } = P;
+  const head = `<section class="step"><p class="muted" style="margin:0">${esc(item.title)}</p>
+    <p class="muted" style="margin:.1rem 0 0;font-size:.9rem">${esc(item.sub)}</p>`;
+  if (P.needCpf) {
+    $('#app').innerHTML = `${head}
+      <h2 style="margin:.8rem 0 .4rem">${esc(opt.label)}: ${money2(opt.value)}</h2>
+      <p>Para gerar o Pix, o banco pede o seu <b>CPF</b> (só desta vez).</p>
+      <form class="form" id="cpf-f" novalidate>
+        ${P.err ? `<div class="error">${esc(P.err)}</div>` : ''}
+        <div class="field"><label for="cpf">Seu CPF</label>
+          <input type="text" id="cpf" inputmode="numeric" autocomplete="off" placeholder="000.000.000-00" maxlength="18"></div>
+        <button class="btn main" type="submit">Continuar</button>
+      </form></section>${backBtn()}`;
+    bindBack();
+    const inp = $('#cpf');
+    inp.addEventListener('input', () => {
+      const d = inp.value.replace(/\D/g, '').slice(0, 11);
+      inp.value = d.replace(/^(\d{3})(\d)/, '$1.$2').replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3').replace(/\.(\d{3})(\d)/, '.$1-$2');
+    });
+    inp.focus();
+    $('#cpf-f').onsubmit = e => { e.preventDefault(); P.needCpf = false; P.err = ''; createPay(inp.value); };
+    return;
+  }
+  if (!P.charge) { $('#app').innerHTML = `${head}<div class="empty">Gerando o Pix…</div></section>`; return createPay(''); }
+  const c = P.charge;
+  if (c.status === 'paid') {
+    $('#app').innerHTML = `<section class="step ok-box"><div class="big">✅</div>
+      <h2>Pagamento recebido!</h2>
+      <p>${money2(c.value)} · ${esc(item.title)}</p>
+      ${item.prereserve ? '<p><b>Seu horário está confirmado.</b> Te esperamos! 💖</p>' : '<p>Obrigada! 💖</p>'}
+      <button type="button" class="btn main" id="pdone">📋 Ver meus horários</button></section>`;
+    $('#pdone').onclick = () => { pv.pay = null; history.replaceState({ portal: 'meus' }, ''); portalGo('meus', false); };
+    return;
+  }
+  $('#app').innerHTML = `${head}
+    <div class="paybox">
+      <div class="val">${money2(c.value)}</div>
+      ${c.pix ? `<img src="data:image/png;base64,${c.pix.image}" alt="QR code do Pix">
+      <p style="margin:.6rem 0 0">Abra o app do seu banco → <b>Pix</b> → <b>ler QR code</b> ou <b>Pix Copia e Cola</b>.</p>
+      <textarea readonly id="pixcode">${esc(c.pix.payload)}</textarea>
+      <button type="button" class="btn main" id="copy">📋 Copiar código Pix</button>` : ''}
+      ${c.invoiceUrl && (pv.data?.pay?.card || !c.pix) ? `<a class="btn" href="${esc(c.invoiceUrl)}" target="_blank" rel="noopener" style="margin-top:.6rem">💳 Pagar com cartão</a>` : ''}
+      <div class="paywait" id="pwait">⏳ Esperando o pagamento… esta tela atualiza sozinha.</div>
+    </div></section>${backBtn()}`;
+  bindBack();
+  $('#copy')?.addEventListener('click', async () => {
+    const t = $('#pixcode');
+    try { await navigator.clipboard.writeText(t.value); } catch { t.select(); document.execCommand('copy'); }
+    $('#copy').textContent = '✓ Copiado! Cole no app do banco';
+  });
+  const tick = async () => {
+    if (st.portal !== 'pagar' || pv.pay !== P) return;
+    try {
+      const r = await api(`/me/pay/${encodeURIComponent(c.id)}?t=${encodeURIComponent(meusToken())}`);
+      if (r.status === 'paid') { P.charge = r; return showPay(); }
+    } catch { /* tenta de novo */ }
+    payPoll = setTimeout(tick, 5000);
+  };
+  payPoll = setTimeout(tick, 5000);
+}
+async function createPay(cpf) {
+  const P = pv.pay;
+  try {
+    P.charge = await api('/me/pay', { t: meusToken(), kind: P.item.kind, ref: P.item.ref, what: P.opt.what, ...(cpf ? { cpf } : {}) });
+  } catch (e) {
+    if (e.status === 428 || (e.status === 400 && cpf)) { P.needCpf = true; P.err = e.status === 400 ? e.message : ''; return showPay(); }
+    $('#app').innerHTML = `<div class="error">${esc(e.message)}</div>${backBtn()}`; bindBack(); return;
+  }
+  showPay();
 }
 
 function showAccess() {

@@ -14,6 +14,8 @@ import { registerBooking } from './booking.js';
 import { createPush, registerPush } from './push.js';
 import { registerPortal } from './portal.js';
 import { createAlerts } from './alerts.js';
+import { asaasClient, createPayments, registerPayments } from './asaas.js';
+import { movePayments } from './sales.js';
 
 const YEAR = 365 * 24 * 60 * 60;
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
@@ -60,6 +62,7 @@ export function buildApp({
   saleDelay = 4000,      // espera antes do comprovante de venda (os produtos da compra chegam juntos)
   sendGap = [0, 0],      // intervalo aleatório entre mensagens do mesmo WhatsApp (ms)
   typing = [0, 0],       // "digitando…" antes de cada mensagem (ms)
+  asaasFetch = fetch,    // para testes (Asaas de mentira)
   logger = false,
 } = {}) {
   const db = openDb(dbFile);
@@ -70,6 +73,7 @@ export function buildApp({
   const limitAuth = rateLimiter({ max: 10, windowMs: 15 * 60 * 1000 });
   const limitBook = rateLimiter({ max: 10, windowMs: 60 * 60 * 1000 });
   const limitAccess = rateLimiter({ max: 5, windowMs: 60 * 60 * 1000 });
+  const limitPay = rateLimiter({ max: 30, windowMs: 60 * 60 * 1000 });
 
   const evo = evolutionClient(evolution);
   const messenger = createMessenger({ db, evo, publicUrl, log: app.log, sendGap, typing });
@@ -77,6 +81,8 @@ export function buildApp({
   const push = createPush({ db, sender: pushSender, log: app.log });
   app.decorate('push', push);
   app.decorate('alerts', createAlerts({ db, push, evo, log: app.log }));
+  const pay = createPayments({ db, call: asaasClient({ fetchImpl: asaasFetch }), messenger, push, log: app.log });
+  app.decorate('payments', pay);
 
   const getSettings = tenantId => readSettings(db.prepare('SELECT settings FROM tenants WHERE id = ?').get(tenantId)?.settings);
   const saveSettings = (tenantId, s) => db.prepare('UPDATE tenants SET settings = ? WHERE id = ?').run(JSON.stringify(s), tenantId);
@@ -228,7 +234,12 @@ export function buildApp({
       const oldRow = apptNow.get(tenantId, a.replaces);
       const old = oldRow ? JSON.parse(oldRow.data) : null;
       if (old && old.status !== 'cancelado') {
-        applyChanges(db, tenantId, [{ coll: 'appts', id: old.id, data: { ...old, status: 'cancelado', cancelledBy: 'remarcado', replacedBy: a.id } }]);
+        // o que já foi pago no horário antigo (ex.: sinal pelo banco) passa para o novo
+        const [was, now2] = movePayments(old, a);
+        applyChanges(db, tenantId, [
+          { coll: 'appts', id: old.id, data: { ...was, status: 'cancelado', cancelledBy: 'remarcado', replacedBy: a.id } },
+          ...(now2 !== a ? [{ coll: 'appts', id: a.id, data: now2 }] : []),
+        ]);
       }
     }
     if (to === 'cancelado') {
@@ -320,18 +331,19 @@ export function buildApp({
 
   app.get('/api/settings', { preHandler: auth }, async req => {
     const s = getSettings(req.s.tenant_id);
-    return { ...s, slug: req.s.slug, today: nowIn(s.timezone).date, whatsappAvailable: evo.enabled };
+    return { ...s, slug: req.s.slug, today: nowIn(s.timezone).date, whatsappAvailable: evo.enabled, asaas: pay.info(req.s.tenant_id) };
   });
   app.put('/api/settings', { preHandler: auth }, async req => {
     const s = updateSettings(getSettings(req.s.tenant_id), req.body);
     saveSettings(req.s.tenant_id, s);
-    return { ...s, slug: req.s.slug, today: nowIn(s.timezone).date, whatsappAvailable: evo.enabled };
+    return { ...s, slug: req.s.slug, today: nowIn(s.timezone).date, whatsappAvailable: evo.enabled, asaas: pay.info(req.s.tenant_id) };
   });
 
   registerWhatsapp(app, { db, evo, messenger, auth, getSettings, saveSettings });
   registerBooking(app, { db, messenger, push, limitBook });
   registerPush(app, { db, auth, push });
-  registerPortal(app, { db, messenger, push, publicUrl, limitBook, limitAccess });
+  registerPortal(app, { db, messenger, push, pay, publicUrl, limitBook, limitAccess, limitPay });
+  registerPayments(app, { pay, auth });
 
   // Recupera uma cópia de segurança. replace=true apaga o que tem antes.
   app.post('/api/import', { preHandler: auth }, async req => {
@@ -384,6 +396,6 @@ export function buildApp({
     });
   }
 
-  app.addHook('onClose', async () => db.close());
+  app.addHook('onClose', async () => { pay.stop(); db.close(); });
   return app;
 }

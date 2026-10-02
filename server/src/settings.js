@@ -46,6 +46,13 @@ export const DEFAULTS = {
       decline: 'Olá, {nome}. Infelizmente não conseguimos atender {dia} às {hora} no *{salao}*. 😕\nEscolha outro horário aqui: {link}',
     },
   },
+  // pagamento online pelo banco (Asaas): o que a cliente pode pagar pela página "Meus horários"
+  payments: {
+    deposit: true,          // sinal da pré-reserva (pagou → o horário confirma sozinho)
+    services: false,        // valor dos serviços (adiantado ou o que ficou em aberto)
+    products: false,        // compras de produtos em aberto (parcelas)
+    card: false,            // aceitar cartão além do Pix (a taxa do cartão é maior)
+  },
   finance: {
     goal: 0,                // meta de entradas do mês (R$; 0 = sem meta)
   },
@@ -144,6 +151,9 @@ export function updateSettings(current, input) {
     if (al.upcoming !== undefined) s.alerts.upcoming = int(al.upcoming, 0, 180, 'aviso antes do horário');
     for (const k of ['pending', 'prereserve', 'morning', 'evening', 'whatsappDown']) if (al[k] !== undefined) s.alerts[k] = bool(al[k]);
   }
+
+  const pm = input.payments;
+  if (isObj(pm)) for (const k of ['deposit', 'services', 'products', 'card']) if (pm[k] !== undefined) s.payments[k] = bool(pm[k]);
 
   const f = input.finance;
   if (isObj(f) && f.goal !== undefined) {
