@@ -2,7 +2,7 @@ import { readSettings, DEFAULTS } from './settings.js';
 import { fail, isObj, waNumber } from './util.js';
 import { nowIn, zonedEpoch, addDays, dayLabel, weekday } from './time.js';
 import { newPortalToken, portalUrl } from './portal.js';
-import { groupOrders, installments, productsText } from './sales.js';
+import { groupOrders, installments, productsText, leftOf, paidOf } from './sales.js';
 
 /* ------------------------- cliente da Evolution API (v2) ------------------------- */
 // O WhatsApp do salão não pode parecer "aberto" nem marcar mensagens como lidas: se a conta
@@ -274,6 +274,38 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
   }
   const valueOfSale = x => ('total' in x ? x.total : x.price) || 0;
 
+  // Recibo: a profissional registrou um pagamento (ou ele caiu pelo banco). coll 'appts' (id do horário) ou 'sales' (chave da compra).
+  // Uma mensagem por "quanto já foi pago" daquele horário/compra: o mesmo pagamento não sai duas vezes.
+  async function sendPaid(tenantId, { coll, id, amount, method }) {
+    const t = q.tenant.get(tenantId);
+    if (!t || !evo.enabled) return 'off';
+    const s = readSettings(t.settings);
+    if (!s.whatsapp.instance || !s.whatsapp.paidMessage || !(amount > 0)) return 'off';
+    const METHOD = { pix: 'Pix', dinheiro: 'Dinheiro', cartao: 'Cartão' };
+    let client, referente, restante, ref, kind;
+    if (coll === 'appts') {
+      const a = getRecord(tenantId, 'appts', id);
+      if (!a?.clientId) return 'skip';
+      client = getRecord(tenantId, 'clients', a.clientId);
+      const left = leftOf(a);
+      referente = `💇 ${a.service || 'Atendimento'} — ${dayLabel(a.date)}`;
+      restante = left > 0 ? `⏳ Falta: ${brl(left)}` : '✅ Está tudo pago.';
+      ref = id; kind = `paid:${paidOf(a)}`;
+    } else {
+      const o = groupOrders(salesOf.all(tenantId).map(r => JSON.parse(r.data)).filter(x => (x.orderId || x.id) === id))[0];
+      if (!o?.clientId) return 'skip';
+      client = getRecord(tenantId, 'clients', o.clientId);
+      const next = installments(o).find(p => p.left > 0);
+      referente = `🛍️ ${productsText(o)}`;
+      restante = o.left <= 0 ? '✅ Compra quitada. Obrigada!'
+        : `⏳ Falta: ${brl(o.left)}${next ? ` (próxima: ${brl(next.left)} em ${next.date.slice(8, 10)}/${next.date.slice(5, 7)})` : ''}`;
+      ref = `sale:${id}`; kind = `paid:${o.paid}`;
+    }
+    const tpl = s.whatsapp.templates.paid || DEFAULTS.whatsapp.templates.paid;
+    const body = renderTemplate(tpl, { nome: (client?.name || '').split(' ')[0], salao: t.name, valor: brl(amount), forma: METHOD[method] || '', referente, restante });
+    return sendSale(t, s, { apptId: ref, kind, client, body });
+  }
+
   async function runSaleReminders(now = Date.now()) {
     let sent = 0;
     for (const t of tenantsOn.all()) {
@@ -364,7 +396,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
     return setInterval(tick, everyMs);
   }
 
-  return { sendForAppt, sendText, fire, runReminders, runSaleReminders, sendSaleNew, startScheduler, packageLabel, keepQuiet };
+  return { sendForAppt, sendText, fire, runReminders, runSaleReminders, sendSaleNew, sendPaid, startScheduler, packageLabel, keepQuiet };
 }
 
 /* ------------------------- rotas (profissional logada) ------------------------- */

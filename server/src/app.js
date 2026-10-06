@@ -8,14 +8,14 @@ import { openDb, applyChanges, changesSince, COLLECTIONS } from './db.js';
 import { hashPassword, checkPassword, newToken, hashToken, newId, rateLimiter } from './auth.js';
 import { fail, norm, isObj } from './util.js';
 import { readSettings, updateSettings } from './settings.js';
-import { nowIn, zonedEpoch } from './time.js';
+import { nowIn, zonedEpoch, addDays } from './time.js';
 import { evolutionClient, createMessenger, registerWhatsapp } from './whatsapp.js';
 import { registerBooking } from './booking.js';
 import { createPush, registerPush } from './push.js';
 import { registerPortal } from './portal.js';
 import { createAlerts } from './alerts.js';
 import { asaasClient, createPayments, registerPayments } from './asaas.js';
-import { movePayments } from './sales.js';
+import { movePayments, paymentsOf, r2 } from './sales.js';
 
 const YEAR = 365 * 24 * 60 * 60;
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
@@ -255,6 +255,8 @@ export function buildApp({
     const tenantId = req.s.tenant_id;
     const changes = cleanChanges(req.body?.changes);
     const old = new Map(changes.filter(c => c.coll === 'appts').map(c => [c.id, apptOf(tenantId, c.id)]));
+    const saleNow = db.prepare("SELECT data FROM records WHERE tenant_id = ? AND coll = 'sales' AND id = ? AND deleted = 0");
+    const oldSales = new Map(changes.filter(c => c.coll === 'sales' && !c.deleted).map(c => { const r = saleNow.get(tenantId, c.id); return [c.id, r ? JSON.parse(r.data) : null]; }));
     const saleExists = db.prepare("SELECT 1 FROM records WHERE tenant_id = ? AND coll = 'sales' AND id = ?");
     const newSales = changes.filter(c => c.coll === 'sales' && !c.deleted && !saleExists.get(tenantId, c.id));
     const seq = changes.length ? applyChanges(db, tenantId, changes)
@@ -285,6 +287,32 @@ export function buildApp({
       if (c.data.seriesIndex > 0) continue;
       if (s.whatsapp.confirmManual && to === 'marcado' && c.data.date && c.data.time &&
           zonedEpoch(c.data.date, c.data.time, s.timezone) > Date.now()) messenger.fire(tenantId, c.id, 'confirm');
+    }
+    // Pagamento registrado agora num horário ou compra que já existia: recibo para a cliente (se a opção estiver ligada).
+    // Só pagamento com data recente (marcar pagamentos antigos não manda mensagem); venda nova já tem o comprovante.
+    s ||= getSettings(tenantId);
+    if (s.whatsapp.paidMessage) {
+      const since = addDays(nowIn(s.timezone).date, -2);
+      const added = (prev, cur) => {
+        if (!prev) return null;
+        const a = paymentsOf(prev), b = paymentsOf(cur);
+        const fresh = b.length > a.length ? b.slice(a.length).filter(p => p.v > 0 && (!p.d || p.d >= since) && p.via !== 'asaas') : [];
+        return fresh.length ? { amount: r2(fresh.reduce((t, p) => t + p.v, 0)), method: fresh.at(-1).m } : null;
+      };
+      for (const c of changes) {
+        if (c.coll !== 'appts' || c.deleted) continue;
+        const got = added(old.get(c.id), c.data);
+        if (got) messenger.sendPaid(tenantId, { coll: 'appts', id: c.id, ...got }).catch(e => app.log.error(e));
+      }
+      const byOrder = new Map();
+      for (const c of changes) {
+        if (c.coll !== 'sales' || c.deleted) continue;
+        const got = added(oldSales.get(c.id), c.data);
+        if (!got) continue;
+        const k = c.data.orderId || c.id, o = byOrder.get(k);
+        byOrder.set(k, o ? { amount: r2(o.amount + got.amount), method: got.method } : got);
+      }
+      for (const [k, got] of byOrder) messenger.sendPaid(tenantId, { coll: 'sales', id: k, ...got }).catch(e => app.log.error(e));
     }
     // Venda nova (de hoje, com cliente): a cliente recebe o comprovante — ou as parcelas, se for a prazo.
     // Espera uns segundos para os outros produtos da mesma compra chegarem.

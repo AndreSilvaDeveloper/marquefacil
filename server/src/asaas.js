@@ -243,10 +243,14 @@ export function createPayments({ db, call, messenger, push, log = console }) {
       }).catch(() => {});
       // pré-reserva que virou confirmada: a cliente recebe a confirmação (igual quando a profissional confirma no app)
       if (wasPre && s.whatsapp.confirmManual) messenger.fire(row.tenant_id, a.id, 'confirm');
+      else messenger.sendPaid(row.tenant_id, { coll: 'appts', id: a.id, amount: v, method: m }).catch(() => {});
     } else {
       const lines = q.clientSales.all(row.tenant_id, row.client_id).map(r => JSON.parse(r.data)).filter(x => (x.orderId || x.id) === row.ref);
       const changed = payOrderLines(lines, v, m, d, extra);
-      if (changed.length) applyChanges(db, row.tenant_id, changed.map(x => ({ coll: 'sales', id: x.id, data: x })));
+      if (changed.length) {
+        applyChanges(db, row.tenant_id, changed.map(x => ({ coll: 'sales', id: x.id, data: x })));
+        messenger.sendPaid(row.tenant_id, { coll: 'sales', id: row.ref, amount: v, method: m }).catch(() => {});
+      }
       push.notifyTenant(row.tenant_id, {
         title: '💰 Pagamento de compra recebido',
         body: `${who} pagou ${brl(v)} (${m === 'cartao' ? 'cartão' : 'Pix'}) · ${lines.length ? productsText({ lines }) : 'compra'}`,

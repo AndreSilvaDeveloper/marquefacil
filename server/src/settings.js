@@ -29,6 +29,7 @@ export const DEFAULTS = {
     reminderMinutes: 1440,  // lembrete X minutos antes (0 = não manda; até 3 dias)
     saleConfirm: true,      // comprovante para a cliente logo depois de lançar a venda (com as parcelas, se for a prazo)
     saleReminders: true,    // compras pagas depois: resumo no 1º dia útil do mês e lembrete no vencimento
+    paidMessage: false,     // recibo para a cliente quando a profissional registra um pagamento (ou ele cai pelo banco)
     pixKey: '',             // chave Pix dos produtos: vai nas mensagens de venda (vazio = a linha some)
     pixKeyService: '',      // chave Pix dos serviços: vai na pré-reserva (sinal) e onde o texto tiver {pix}
     notifyOwner: true,      // avisar a profissional de agendamento pelo link
@@ -39,6 +40,7 @@ export const DEFAULTS = {
       prereserve: 'Olá, {nome}! ✅\nSeu horário no *{salao}* está pré-reservado:\n📅 {dia} às {hora}\n💇 {servico}\n📦 {pacote}\n💰 Valor: {valor}\n* A confirmação do horário será feita mediante ao pagamento do valor de 50% do valor do serviço.\n\nSe precisar remarcar, é só responder esta mensagem.',
       saleNew: 'Olá, {nome}! 🛍️\nSua compra no *{salao}* foi registrada:\n{produtos}\n💰 Total: {total}\n\n{pagamento}\n🔑 Pix: {pix}\n\nObrigada pela preferência! 💖',
       saleDue: 'Olá, {nome}! 😊\nPassando para lembrar que hoje vence {parcela} da sua compra no *{salao}*:\n🛍️ {produtos}\n💰 Valor: {valor}\n🔑 Pix: {pix}\n\nSe já pagou, pode desconsiderar. Obrigada! 💖',
+      paid: 'Olá, {nome}! ✅\nRecebemos o seu pagamento no *{salao}*:\n💰 {valor}\n💳 {forma}\n{referente}\n{restante}\n\nObrigada! 💖',
       saleMonth: 'Olá, {nome}! 😊\nSegue o resumo das suas compras em aberto no *{salao}*:\n{lista}\n\n💰 Total em aberto: {total}\n🔑 Pix: {pix}\n\nQualquer dúvida, é só responder. Obrigada! 💖',
       change: 'Olá, {nome}! 🔁\nSeu horário no *{salao}* mudou. O certo agora é:\n📅 {dia} às {hora}\n💇 {servico}\n📦 {pacote}\n\nQualquer dúvida, é só responder esta mensagem.\n📋 Ver ou remarcar: {meus_horarios}',
       rescheduleNo: 'Olá, {nome}. Não conseguimos mudar o seu horário para {dia} às {hora}. 😕\nO seu horário de antes continua marcado.\n📋 Ver seus horários: {meus_horarios}',
@@ -137,14 +139,14 @@ export function updateSettings(current, input) {
   const w = input.whatsapp;
   if (isObj(w)) {
     if (w.depositPercent !== undefined) s.whatsapp.depositPercent = int(w.depositPercent, 0, 100, 'sinal');
-    for (const k of ['confirmOnline', 'confirmManual', 'notifyOwner', 'declineMessage', 'prereserveMessage', 'saleReminders', 'saleConfirm']) if (w[k] !== undefined) s.whatsapp[k] = bool(w[k]);
+    for (const k of ['confirmOnline', 'confirmManual', 'notifyOwner', 'declineMessage', 'prereserveMessage', 'saleReminders', 'saleConfirm', 'paidMessage']) if (w[k] !== undefined) s.whatsapp[k] = bool(w[k]);
     if (w.pixKey !== undefined) s.whatsapp.pixKey = text(w.pixKey, 140).trim();
     if (w.pixKeyService !== undefined) s.whatsapp.pixKeyService = text(w.pixKeyService, 140).trim();
     if (w.reminderMinutes !== undefined) s.whatsapp.reminderMinutes = int(w.reminderMinutes, 0, 3 * 24 * 60, 'lembrete');
     else if (w.reminderHours !== undefined) s.whatsapp.reminderMinutes = int(w.reminderHours, 0, 72, 'lembrete') * 60;
     if (w.ownerPhone !== undefined) s.whatsapp.ownerPhone = text(w.ownerPhone, 30);
     if (isObj(w.templates)) {
-      for (const k of ['confirm', 'reminder', 'owner', 'decline', 'rescheduleNo', 'prereserve', 'change', 'saleDue', 'saleMonth', 'saleNew']) {
+      for (const k of ['confirm', 'reminder', 'owner', 'decline', 'rescheduleNo', 'prereserve', 'change', 'saleDue', 'saleMonth', 'saleNew', 'paid']) {
         if (w.templates[k] !== undefined) s.whatsapp.templates[k] = text(w.templates[k], 1000).trim() || DEFAULTS.whatsapp.templates[k];
       }
     }
