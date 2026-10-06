@@ -28,6 +28,19 @@ export function computeSlots({ booking, appts, date, duration, now }) {
   return out;
 }
 
+/* Compromissos pessoais da profissional (agenda pessoal ligada) que ocupam o horário no link.
+   Viram "horários ocupados" para computeSlots; o título nunca sai daqui (a cliente só vê que não está livre). */
+export function personalBusy(db, tenantId, s, from, to) {
+  if (!s.personal?.enabled) return [];
+  return db.prepare(`SELECT data FROM records WHERE tenant_id = ? AND coll = 'personal' AND deleted = 0
+                     AND json_extract(data, '$.date') BETWEEN ? AND ?`).all(tenantId, from, to)
+    .map(r => JSON.parse(r.data))
+    .filter(p => p.block !== false && p.date)
+    .map(p => (p.allDay || !TIME_RE.test(p.time || '')
+      ? { date: p.date, time: '00:00', duration: 24 * 60, status: 'marcado' }
+      : { date: p.date, time: p.time, duration: p.duration || DEFAULT_SLOT, status: 'marcado' }));
+}
+
 export function registerBooking(app, { db, messenger, push, limitBook }) {
   const q = {
     tenant: db.prepare('SELECT id, name, slug, settings FROM tenants WHERE slug = ?'),
@@ -77,7 +90,8 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
     needOpen(s);
     const { duration } = durationFor(t.id, s, req.query.services ?? req.query.service, req.query.dur);
     const end = addDays(now.date, s.booking.maxDays);
-    const appts = q.apptsBetween.all(t.id, now.date, end).map(r => JSON.parse(r.data)).filter(notMine(req.query.except));
+    const appts = [...q.apptsBetween.all(t.id, now.date, end).map(r => JSON.parse(r.data)).filter(notMine(req.query.except)),
+      ...personalBusy(db, t.id, s, now.date, end)];
     const days = [];
     for (let d = now.date; d <= end; d = addDays(d, 1)) {
       days.push({ date: d, label: dayLabel(d), free: computeSlots({ booking: s.booking, appts, date: d, duration, now }).length });
@@ -91,7 +105,8 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
     const date = String(req.query.date || '');
     if (!DATE_RE.test(date)) fail(400, 'Data inválida.');
     const { duration } = durationFor(t.id, s, req.query.services ?? req.query.service, req.query.dur);
-    const appts = q.apptsBetween.all(t.id, date, date).map(r => JSON.parse(r.data)).filter(notMine(req.query.except));
+    const appts = [...q.apptsBetween.all(t.id, date, date).map(r => JSON.parse(r.data)).filter(notMine(req.query.except)),
+      ...personalBusy(db, t.id, s, date, date)];
     return { date, slots: computeSlots({ booking: s.booking, appts, date, duration, now }) };
   });
 
@@ -115,7 +130,7 @@ export function registerBooking(app, { db, messenger, push, limitBook }) {
 
     // Confere de novo e grava junto, para duas pessoas não pegarem o mesmo horário
     const result = db.transaction(() => {
-      const appts = q.apptsBetween.all(t.id, date, date).map(r => JSON.parse(r.data));
+      const appts = [...q.apptsBetween.all(t.id, date, date).map(r => JSON.parse(r.data)), ...personalBusy(db, t.id, s, date, date)];
       if (!computeSlots({ booking: s.booking, appts, date, duration, now }).includes(time)) {
         fail(409, 'Esse horário acabou de ser ocupado. Escolha outro, por favor.');
       }

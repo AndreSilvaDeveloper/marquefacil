@@ -3,7 +3,7 @@ import { readSettings } from './settings.js';
 import { fail, isObj, uid, TIME_RE, DATE_RE, waNumber } from './util.js';
 import { nowIn, zonedEpoch, dayLabel } from './time.js';
 import { applyChanges } from './db.js';
-import { computeSlots } from './booking.js';
+import { computeSlots, personalBusy } from './booking.js';
 import { groupOrders, productsText, valueOf, leftOf, movePayments } from './sales.js';
 
 /* "Meus horários": a cliente vê, remarca e cancela os horários dela, sem senha.
@@ -161,7 +161,8 @@ export function registerPortal(app, { db, messenger, push, pay, publicUrl, limit
 
     const fresh = db.transaction(() => {
       // o horário antigo (e um pedido anterior de remarcação) não contam como ocupados
-      const appts = q.dayAppts.all(t.id, date).map(r => JSON.parse(r.data)).filter(x => x.id !== old.id && x.replaces !== old.id);
+      const appts = [...q.dayAppts.all(t.id, date).map(r => JSON.parse(r.data)).filter(x => x.id !== old.id && x.replaces !== old.id),
+        ...personalBusy(db, t.id, s, date, date)];
       if (!computeSlots({ booking: s.booking, appts, date, duration, now }).includes(time)) {
         fail(409, 'Esse horário não está mais livre. Escolha outro, por favor.');
       }

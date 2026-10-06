@@ -53,6 +53,10 @@ export const DEFAULTS = {
     products: false,        // compras de produtos em aberto (parcelas)
     card: false,            // aceitar cartão além do Pix (a taxa do cartão é maior)
   },
+  // agenda pessoal (compromissos da profissional): desligada até ela ligar
+  personal: {
+    enabled: false,
+  },
   finance: {
     goal: 0,                // meta de entradas do mês (R$; 0 = sem meta)
   },
@@ -151,6 +155,8 @@ export function updateSettings(current, input) {
     if (al.upcoming !== undefined) s.alerts.upcoming = int(al.upcoming, 0, 180, 'aviso antes do horário');
     for (const k of ['pending', 'prereserve', 'morning', 'evening', 'whatsappDown']) if (al[k] !== undefined) s.alerts[k] = bool(al[k]);
   }
+
+  if (isObj(input.personal) && input.personal.enabled !== undefined) s.personal.enabled = bool(input.personal.enabled);
 
   const pm = input.payments;
   if (isObj(pm)) for (const k of ['deposit', 'services', 'products', 'card']) if (pm[k] !== undefined) s.payments[k] = bool(pm[k]);

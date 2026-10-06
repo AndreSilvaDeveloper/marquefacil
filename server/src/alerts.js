@@ -21,12 +21,15 @@ export function createAlerts({ db, push, evo, log = console }) {
     client: db.prepare("SELECT data FROM records WHERE tenant_id = ? AND coll = 'clients' AND id = ? AND deleted = 0"),
     birthdays: db.prepare(`SELECT id, data FROM records WHERE tenant_id = ? AND coll = 'clients' AND deleted = 0
                            AND json_extract(data, '$.birthday') = ?`),
+    personal: db.prepare(`SELECT id, data FROM records WHERE tenant_id = ? AND coll = 'personal' AND deleted = 0
+                          AND json_extract(data, '$.date') BETWEEN ? AND ?`),
     claim: db.prepare('INSERT OR IGNORE INTO push_log (tenant_id, key, created_at) VALUES (?, ?, ?)'),
     cleanup: db.prepare('DELETE FROM push_log WHERE created_at < ?'),
   };
   const nameOf = (t, id) => { const r = id && q.client.get(t, id); return r ? JSON.parse(r.data).name || '' : ''; };
   const first = n => String(n || '').split(' ')[0];
   const short = date => dayLabel(date).replace(/-feira/, '');
+  const endOf = p => { const m = (+p.time.slice(0, 2)) * 60 + (+p.time.slice(3, 5)) + p.duration; return `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
   const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
 
   // Manda uma vez por key; devolve true se mandou
@@ -47,6 +50,22 @@ export function createAlerts({ db, push, evo, log = console }) {
         .filter(a => a.date && a.time);
       const startOf = a => zonedEpoch(a.date, a.time, tz);
       const who = a => nameOf(t.id, a.clientId) || 'Cliente';
+
+      // compromisso pessoal chegando (agenda pessoal ligada)
+      if (A.upcoming && s.personal.enabled) {
+        for (const r of q.personal.all(t.id, here.date, addDays(here.date, 1))) {
+          const p = { id: r.id, ...JSON.parse(r.data) };
+          if (p.allDay || !p.time) continue;
+          const left = zonedEpoch(p.date, p.time, tz) - now;
+          if (left > 0 && left <= A.upcoming * MIN) {
+            await send(t.id, `pup:${p.id}:${p.date} ${p.time}`, {
+              title: `📌 Em ${Math.max(1, Math.round(left / MIN))} min: ${p.title || 'Compromisso'}`,
+              body: `${p.time}${p.duration ? ' até ' + endOf(p) : ''} · agenda pessoal`,
+              url: `/#/pessoal/${p.id}`, tag: `pup-${p.id}`,
+            });
+          }
+        }
+      }
 
       for (const a of list) {
         const left = startOf(a) - now;

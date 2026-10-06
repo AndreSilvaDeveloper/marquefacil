@@ -19,7 +19,7 @@ const BRAND = window.BRAND || { name: 'Marque Fácil', logo: null, colors: null 
   document.body.classList.add('branded');
 })();
 
-const COLLS = ['clients', 'services', 'products', 'appts', 'sales', 'expenses', 'packages'];
+const COLLS = ['clients', 'services', 'products', 'appts', 'sales', 'expenses', 'packages', 'personal']; // personal = agenda pessoal (opcional)
 const DEFAULT_SLOT = 30; // minutos considerados quando o horário não tem duração
 
 /* ---------------------------- utilidades ---------------------------- */
@@ -116,9 +116,11 @@ const cacheKey = () => `mf.data.${session.tenant.id}`;
 
 function loadCache() {
   const c = readLS(cacheKey()) || {};
+  // versão nova com a agenda pessoal: busca tudo de novo uma vez (o aparelho antigo pulava esses registros)
+  const fresh = c.db && !Array.isArray(c.db.personal);
   db = migrate(c.db);
   snap = c.snap || {};
-  seq = c.seq || 0;
+  seq = fresh ? 0 : c.seq || 0;
   db.settings = { ...readLS('mf.settings'), ...db.settings };
 }
 function persist() {
@@ -261,6 +263,27 @@ function conflictsFor(date, time, duration, exceptId) {
   const s = mins(time), e = s + (duration || DEFAULT_SLOT);
   return db.appts.filter(x => x.id !== exceptId && x.status !== 'cancelado' && x.date === date &&
     mins(x.time) < e && s < apptEnd(x)).sort(byWhen);
+}
+
+/* Agenda pessoal (opcional, ligada em Mais → Agenda pessoal): compromissos da profissional em db.personal.
+   Não são atendimentos: não entram em dinheiro, relatórios, clientes nem mensagens. Só aparecem na agenda
+   e, se ela quiser, fecham o horário no link. { title, date, time, duration, allDay, block, notes, seriesId } */
+const personalOn = () => !!salonHours()?.personal;
+const pEnd = p => mins(p.time) + (p.duration || DEFAULT_SLOT);
+const pWhen = p => (p.allDay || !p.time ? 'Dia todo' : `${p.time}${p.duration ? '–' + hhmm(pEnd(p)) : ''}`);
+const personalOf = date => (personalOn() ? db.personal.filter(p => p.date === date)
+  .sort((a, b) => (b.allDay ? 1 : 0) - (a.allDay ? 1 : 0) || (a.time || '').localeCompare(b.time || '')) : []);
+function personalClash(date, time, duration) {
+  if (!personalOn() || !date || !time) return [];
+  const st = mins(time), e = st + (duration || DEFAULT_SLOT);
+  return personalOf(date).filter(p => p.allDay || !p.time || (mins(p.time) < e && st < pEnd(p)));
+}
+const allDayOff = date => personalOf(date).some(p => p.allDay || !p.time); // dia todo ocupado por um compromisso
+function personalRow(p) {
+  const past = p.date < today() || (p.date === today() && p.time && !p.allDay && pEnd(p) <= nowMins());
+  return `<a class="dayrow personal ${past ? 'past' : ''}" href="#/pessoal/${p.id}">
+    <span class="dr-time"><b>${p.allDay || !p.time ? '📌' : p.time}</b>${!p.allDay && p.time && p.duration ? `<small>${hhmm(pEnd(p))}</small>` : ''}</span>
+    <span class="dr-info"><b>📌 ${esc(p.title || 'Compromisso')}</b><span>${p.allDay || !p.time ? 'Dia todo · ' : ''}Agenda pessoal${p.block === false ? '' : ' · fechado no link'}</span></span></a>`;
 }
 
 // Um valor "está devendo" quando tem preço, não foi pago e o serviço já passou/foi feito.
@@ -422,7 +445,7 @@ function parseHash() {
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
   agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: (id, q) => (q.id ? (q.editar ? vSaleForm(id, q) : vSaleView(id, q)) : vSell(id, q)), financeiro: vFin, mais: vMore,
-  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, ajuda: vAjuda, aparelho: vAparelho, dados: vDados, configurar: vConfigurar, pacotes: vPacotes, relatorio: vRelatorio, pagamentos: vPagamentos, conta: vConta, pacote: vPackageForm,
+  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, ajuda: vAjuda, aparelho: vAparelho, dados: vDados, configurar: vConfigurar, pacotes: vPacotes, relatorio: vRelatorio, pagamentos: vPagamentos, pessoal: vPessoal, agendapessoal: vAgendaPessoal, conta: vConta, pacote: vPackageForm,
 };
 
 let lastHash = '';
@@ -700,6 +723,7 @@ function dayTimeline(d, active, tags = {}) {
   const closedDay = hours && hours.days && open === null;
   const isToday = d === today(), now = nowMins();
   const items = active.map(a => ({ t: mins(a.time), html: dayRow(a, tags[a.id], { flags: true }) }));
+  for (const p of personalOf(d)) items.push({ t: p.allDay || !p.time ? -1 : mins(p.time) - 0.1, html: personalRow(p) });
   if (open && hours.lunch && !(isToday && mins(hours.lunch[1]) <= now)) items.push({ t: mins(hours.lunch[0]), html: `<div class="lunch">🍽️ Almoço ${hours.lunch[0]}–${hours.lunch[1]}</div>` });
   if (isToday && active.length && active.some(a => mins(a.time) > now) && active.some(a => mins(a.time) <= now)) items.push({ t: now + 0.5, html: `<div class="nowline"><span>agora ${hhmm(now)}</span></div>` });
   items.sort((a, b) => a.t - b.t);
@@ -798,6 +822,7 @@ function vAgenda(_, q) {
       <div class="list timeline">
         ${tl.html || `<div class="empty">Nenhum horário marcado neste dia.${d >= t ? `<br><a class="btn main" href="#/agendar?d=${d}" style="margin-top:1rem">📅 Agendar neste dia</a>` : ''}</div>`}
       </div>
+      ${personalOn() ? `<a class="addp" href="#/pessoal/novo?d=${d}">+ 📌 Compromisso pessoal neste dia</a>` : ''}
       ${(() => { const used = [...new Set(active.flatMap(clientFlags))]; return used.length ? `<p class="flag-legend">${used.map(k => FLAG_TXT[k]).join(' · ')}</p>` : ''; })()}
       ${cancelled.length ? `<details class="cancelled"><summary>Cancelados (${cancelled.length})</summary><div class="list">${cancelled.map(a => apptCard(a)).join('')}</div></details>` : ''}
       ${d === t ? (() => {
@@ -826,10 +851,10 @@ function vAgenda(_, q) {
           const closed = hours?.days && hours.days[toDate(day).getDay()] === null;
           const pendN = list.filter(a => a.status === 'pendente').length;
           return `<a class="mcal-d ${day === t ? 'today' : ''} ${day < t ? 'past' : ''} ${closed ? 'closed' : ''} ${list.length ? 'busy' : ''}" href="${url({ d: day, v: '' })}" data-nav aria-label="${fmtShort(day)}: ${list.length} ${list.length === 1 ? 'horário' : 'horários'}">
-            <b>${toDate(day).getDate()}</b>${list.length ? `<i class="${pendN ? 'pend' : ''}">${list.length}</i>` : ''}</a>`;
+            <b>${toDate(day).getDate()}</b>${list.length ? `<i class="${pendN ? 'pend' : ''}">${list.length}</i>` : ''}${personalOf(day).length ? '<s class="pdot" title="Compromisso pessoal">📌</s>' : ''}</a>`;
         }).join('')}
       </div>
-      <p class="muted" style="font-size:.85rem;text-align:center;margin:.5rem 0 0">O número mostra quantos horários tem no dia${mPend ? ' (laranja: tem pedido para confirmar)' : ''}. Toque no dia para ver.</p>
+      <p class="muted" style="font-size:.85rem;text-align:center;margin:.5rem 0 0">O número mostra quantos horários tem no dia${mPend ? ' (laranja: tem pedido para confirmar)' : ''}${personalOn() ? '; 📌 compromisso pessoal' : ''}. Toque no dia para ver.</p>
       <div class="row" style="margin-top:1rem">
         <a class="btn small" href="${url({ d: monthShift(-1) })}" data-nav>‹ ${cap(new Date(y0, m0 - 1, 1).toLocaleDateString('pt-BR', { month: 'long' }))}</a>
         <a class="btn small" href="${url({ d: monthShift(1) })}" data-nav>${cap(new Date(y0, m0 + 1, 1).toLocaleDateString('pt-BR', { month: 'long' }))} ›</a>
@@ -858,9 +883,11 @@ function vAgenda(_, q) {
       return `<div class="wday ${day === t ? 'today' : ''} ${past ? 'past' : ''} ${!list.length ? 'noappt' : ''}">
         <a class="wday-head" href="${url({ d: day, v: '' })}" data-nav>
           <b>${day === t ? 'Hoje' : cap(fmtDate(day, { weekday: 'long' }).replace('-feira', ''))}</b> <span>${fmtShort(day).slice(0, 5)}</span>
-          <em>${list.length ? `${list.length} ${list.length === 1 ? 'horário' : 'horários'}${val ? ` · ${brl(val).replace(',00', '')}` : ''}` : closed ? 'Fechado' : 'Livre'} ›</em></a>
-        ${list.map(a => `<a class="wrow ${a.status}" href="#/agendamento/${a.id}"><b>${a.time}</b><span class="wname">${esc(clientName(a.clientId))}${a.service ? ` <small>· ${esc(a.service)}</small>` : ''}</span>${mark(a)}</a>`).join('')}
-        ${!list.length && !closed && !past ? `<a class="wrow wadd" href="#/agendar?d=${day}">+ Agendar neste dia</a>` : ''}
+          <em>${list.length ? `${list.length} ${list.length === 1 ? 'horário' : 'horários'}${val ? ` · ${brl(val).replace(',00', '')}` : ''}` : closed ? 'Fechado' : allDayOff(day) ? '📌 Ocupado' : 'Livre'} ›</em></a>
+        ${[...list.map(a => ({ t: a.time, html: `<a class="wrow ${a.status}" href="#/agendamento/${a.id}"><b>${a.time}</b><span class="wname">${esc(clientName(a.clientId))}${a.service ? ` <small>· ${esc(a.service)}</small>` : ''}</span>${mark(a)}</a>` })),
+          ...personalOf(day).map(p => ({ t: p.allDay || !p.time ? '' : p.time, html: `<a class="wrow personal" href="#/pessoal/${p.id}"><b>${p.allDay || !p.time ? 'Dia' : p.time}</b><span class="wname">📌 ${esc(p.title || 'Compromisso')}</span></a>` }))]
+          .sort((x, y) => x.t.localeCompare(y.t)).map(x => x.html).join('')}
+        ${!list.length && !closed && !past && !allDayOff(day) ? `<a class="wrow wadd" href="#/agendar?d=${day}">+ Agendar neste dia</a>` : ''}
       </div>`;
     }).join('')}</div>
       <div class="row" style="margin-top:1rem">
@@ -942,9 +969,12 @@ function maskTime(input) {
 }
 function busyList(date, exceptId) {
   const list = db.appts.filter(a => a.date === date && a.status !== 'cancelado' && a.id !== exceptId).sort(byWhen);
-  if (!list.length) return '<small class="hint">Nenhum horário ocupado neste dia.</small>';
-  return `<small class="hint">Já ocupados neste dia: ${list.map(a =>
-    `<b>${a.time}${a.duration ? '–' + hhmm(apptEnd(a)) : ''}</b> ${esc(clientName(a.clientId))}`).join(' · ')}</small>`;
+  const mine = personalOf(date);
+  if (!list.length && !mine.length) return '<small class="hint">Nenhum horário ocupado neste dia.</small>';
+  return `<small class="hint">Já ocupados neste dia: ${[...list.map(a => [a.time,
+    `<b>${a.time}${a.duration ? '–' + hhmm(apptEnd(a)) : ''}</b> ${esc(clientName(a.clientId))}`]),
+    ...mine.map(p => [p.allDay || !p.time ? '' : p.time, `<b>${pWhen(p)}</b> 📌 ${esc(p.title || 'Compromisso')}`])]
+    .sort((x, y) => x[0].localeCompare(y[0])).map(x => x[1]).join(' · ')}</small>`;
 }
 
 // Serviços mais usados
@@ -1017,6 +1047,7 @@ function vApptForm(_, q) {
   return {
     title: edit ? 'Editar horário' : 'Novo horário', tab: 'agenda', back: true,
     html: `
+      ${!edit && personalOn() ? `<a class="addp top" href="#/pessoal/novo?d=${a.date}">📌 É um compromisso seu? <b>Agenda pessoal ›</b></a>` : ''}
       <form class="form" id="f" autocomplete="off" novalidate>
         <div id="err"></div>
 
@@ -1133,9 +1164,12 @@ function vApptForm(_, q) {
       };
       const checkConflict = () => {
         const list = conflictsFor(iDate.value, parseTime(iTime.value), dur, a.id);
-        $('#conflict', el).innerHTML = list.length ? `<div class="conflict-box">⚠️ Atenção: nesse horário já tem
-          ${list.map(x => `<b>${esc(clientName(x.clientId))}</b> (${x.time}${x.duration ? '–' + hhmm(apptEnd(x)) : ''})`).join(', ')}.
+        const mine = personalClash(iDate.value, parseTime(iTime.value), dur);
+        $('#conflict', el).innerHTML = list.length || mine.length ? `<div class="conflict-box">⚠️ Atenção: nesse horário já tem
+          ${[...list.map(x => `<b>${esc(clientName(x.clientId))}</b> (${x.time}${x.duration ? '–' + hhmm(apptEnd(x)) : ''})`),
+            ...mine.map(p => `📌 <b>${esc(p.title || 'compromisso pessoal')}</b> (${pWhen(p)})`)].join(', ')}.
           <br>Você pode agendar mesmo assim, se quiser.</div>` : '';
+        if (mine.length && !list.length) list.push(...mine); // o botão também avisa
         saveBtn.textContent = list.length ? '⚠️ Agendar mesmo assim' : (edit ? 'Salvar alterações' : '✓ Agendar');
         saveBtn.classList.toggle('warn', !!list.length);
         saveBtn.classList.toggle('main', !list.length);
@@ -3637,6 +3671,7 @@ function vMore() {
 
       <h2>Configurações</h2>
       <div class="menu">
+        ${item('#/agendapessoal', '📌', 'Agenda pessoal', personalOn() ? '<span style="color:var(--ok)">● Ligada</span> · seus compromissos na agenda' : 'Seus compromissos na agenda (opcional)')}
         ${item('#/avisos', '🔔', 'Avisos no celular', pushSupported() && Notification.permission === 'granted' ? '<span style="color:var(--ok)">● Ligados</span>' : 'Pedidos, horário chegando, resumo do dia…')}
         ${item('#/aparelho', '🔠', 'Letra e aplicativo', `Letra ${db.settings.big ? 'grande' : 'normal'}${isInstalled() ? '' : ' · instalar na tela inicial'}`)}
         ${item('#/dados', '💾', 'Seus dados', 'Cópia de segurança e planilha de clientes')}
@@ -3950,6 +3985,131 @@ function vAvisos() {
     html: `<p class="muted" style="margin-top:0">Os avisos chegam neste aparelho mesmo com o app fechado. Cada aparelho precisa ser ligado uma vez.</p>
       <div id="push-card"></div>`,
     bind(el) { paintPushCard($('#push-card', el), true); },
+  };
+}
+
+/* ---------------- Agenda pessoal ---------------- */
+// Ligar/desligar (vale para todos os aparelhos do salão)
+function vAgendaPessoal() {
+  return onlineView('Agenda pessoal', () => api('GET', '/api/settings'), (box, S) => {
+    cacheSalon(S);
+    let on = !!S.personal?.enabled;
+    box.innerHTML = `
+      <p class="muted" style="margin-top:0">Coloque na agenda os <b>seus compromissos</b> — médico, escola dos filhos, academia, uma folga, uma viagem. Eles aparecem junto dos atendimentos, num cinza diferente, e não entram no dinheiro, nos relatórios nem nas mensagens.</p>
+      <div class="card">
+        <ul style="margin:0;padding-left:1.2rem;line-height:1.6">
+          <li>📌 Com hora ou o <b>dia todo</b>, e pode repetir (toda semana, a cada 15 dias, todo mês)</li>
+          <li>🔒 Se quiser, o horário fica <b>fechado no link</b>: a cliente só vê que não está livre, nunca o que é</li>
+          <li>🔔 Aviso no celular antes, no mesmo tempo dos avisos dos atendimentos</li>
+        </ul>
+      </div>
+      <div class="form" style="margin-top:1rem">
+        <div class="field"><span class="lbl">Agenda pessoal</span>${toggle2('pp-on', on, '✓ Ligada', 'Desligada')}</div>
+        <div id="err"></div>
+        <button class="btn main" id="save">✓ Salvar</button>
+        <p class="muted" style="font-size:.9rem">Desligando, os compromissos somem da agenda e param de fechar o link, mas não são apagados: ligando de novo, voltam.</p>
+      </div>`;
+    bindToggle2($('#pp-on', box), v => { on = v; });
+    $('#save', box).onclick = async () => {
+      try {
+        cacheSalon(await api('PUT', '/api/settings', { personal: { enabled: on } }));
+        toast(on ? '📌 Agenda pessoal ligada' : 'Agenda pessoal desligada');
+        if (on) location.hash = `#/pessoal/novo?d=${today()}`; else render();
+      } catch (e) { $('#err', box).innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+    };
+  });
+}
+
+// Novo compromisso / editar / apagar
+function vPessoal(id, q = {}) {
+  const isNew = !id || id === 'novo';
+  const p = isNew ? null : db.personal.find(x => x.id === id);
+  if (!isNew && !p) return { title: 'Compromisso', tab: 'agenda', back: true, html: '<div class="empty">Esse compromisso não existe mais.</div>' };
+  const x = p || { title: '', date: q.d || today(), time: '', duration: 60, allDay: false, block: true, notes: '' };
+  const series = p?.seriesId ? db.personal.filter(y => y.seriesId === p.seriesId).sort((a, b) => a.date.localeCompare(b.date)) : [];
+  const ahead = series.filter(y => y.date >= x.date);
+  const QUICK = ['🩺 Médico', '🦷 Dentista', '🏫 Escola', '🏋️ Academia', '🍽️ Almoço', '🏖️ Folga', '📚 Curso', '✈️ Viagem'];
+  const end = x.time && x.duration ? hhmm(mins(x.time) + x.duration) : '';
+  return {
+    title: isNew ? 'Compromisso pessoal' : 'Editar compromisso', tab: 'agenda', back: true,
+    html: `
+      ${!personalOn() ? '<div class="card pending-banner slim" style="margin-bottom:1rem"><a href="#/agendapessoal" style="color:inherit">⚠️ A agenda pessoal está desligada. <b>Ligar ›</b></a></div>' : ''}
+      <form class="form" id="f" autocomplete="off" novalidate>
+        <div id="err"></div>
+        <div class="field"><label for="p-t">O que é</label>
+          <input type="text" id="p-t" value="${esc(x.title)}" placeholder="Ex.: Médico, reunião da escola" autocapitalize="sentences" maxlength="80">
+          ${isNew ? `<div class="chips" style="margin-top:.5rem">${QUICK.map(t => `<button type="button" class="chip" data-q="${esc(t)}">${t}</button>`).join('')}</div>` : ''}</div>
+        <div class="field"><label for="p-d">Dia</label><input type="date" id="p-d" value="${x.date}"></div>
+        <div class="field"><span class="lbl">Horário</span>${toggle2('p-all', !x.allDay, '🕐 Com hora', '📅 Dia todo', true)}</div>
+        <div class="row" id="p-times" ${x.allDay ? 'hidden' : ''}>
+          <div class="field grow"><label for="p-s">Começa</label><input type="text" id="p-s" inputmode="numeric" placeholder="14:00" value="${x.time || ''}"></div>
+          <div class="field grow"><label for="p-e">Termina</label><input type="text" id="p-e" inputmode="numeric" placeholder="15:00" value="${end}"></div>
+        </div>
+        ${isNew ? `<div class="field"><label for="p-rep">Repetir</label>
+          <select id="p-rep"><option value="">Não repetir</option><option value="7">Toda semana</option><option value="14">A cada 15 dias</option><option value="m">Todo mês</option></select></div>
+        <div class="field" id="p-for-f" hidden><label for="p-for">Por quanto tempo</label>
+          <select id="p-for">${[1, 2, 3, 6, 12].map(n => `<option value="${n}" ${n === 3 ? 'selected' : ''}>${n === 12 ? '1 ano' : n + (n === 1 ? ' mês' : ' meses')}</option>`).join('')}</select></div>`
+          : series.length > 1 ? `<p class="muted" style="font-size:.9rem">🔁 Repete: ${series.length} vezes (${seriesLabel(p.every)}). A mudança vale só para este dia.</p>` : ''}
+        <div class="field"><span class="lbl">No link de agendamento das clientes</span>${toggle2('p-block', x.block !== false, '🔒 Fechar este horário', 'Deixar livre', true)}
+          <small class="hint">A cliente só vê que o horário não está livre, nunca o que é.</small></div>
+        <div class="field"><label for="p-n">Anotação <span class="opt">(se quiser)</span></label><textarea id="p-n" rows="2" maxlength="300">${esc(x.notes || '')}</textarea></div>
+        <button class="btn main" id="save" type="submit">${isNew ? '✓ Salvar compromisso' : 'Salvar alterações'}</button>
+        ${isNew ? '' : `<button type="button" class="btn danger" id="del" style="margin-top:1.5rem">Apagar este compromisso</button>
+          ${ahead.length > 1 ? `<button type="button" class="btn danger" id="del-all" style="margin-top:.6rem">Apagar este e os próximos (${ahead.length})</button>` : ''}`}
+      </form>`,
+    bind(el) {
+      let allDay = !!x.allDay, block = x.block !== false;
+      bindToggle2($('#p-all', el), v => { allDay = !v; $('#p-times', el).hidden = allDay; });
+      bindToggle2($('#p-block', el), v => { block = v; });
+      maskTime($('#p-s', el)); maskTime($('#p-e', el));
+      $('#p-s', el).addEventListener('blur', () => {
+        const st = parseTime($('#p-s', el).value);
+        if (st && !parseTime($('#p-e', el).value)) $('#p-e', el).value = hhmm(Math.min(mins(st) + 60, 23 * 60 + 59));
+      });
+      el.querySelectorAll('[data-q]').forEach(b => b.onclick = () => { $('#p-t', el).value = b.dataset.q.replace(/^\S+\s/, ''); });
+      $('#p-rep', el) && ($('#p-rep', el).onchange = e => { $('#p-for-f', el).hidden = !e.target.value; });
+      const err = m => { $('#err', el).innerHTML = `<div class="error">${m}</div>`; window.scrollTo(0, 0); };
+      $('#f', el).addEventListener('submit', e => {
+        e.preventDefault();
+        const title = $('#p-t', el).value.trim(), date = $('#p-d', el).value;
+        if (!title) return err('Escreva o que é. Exemplo: Médico');
+        if (!date) return err('Escolha o dia.');
+        let time = '', duration = null;
+        if (!allDay) {
+          time = parseTime($('#p-s', el).value);
+          const e2 = parseTime($('#p-e', el).value);
+          if (!time) return err('Escreva a hora que começa. Exemplo: 14:00');
+          if (!e2 || mins(e2) <= mins(time)) return err('A hora que termina precisa ser depois da que começa.');
+          duration = mins(e2) - mins(time);
+        }
+        const data = { title: cap(title.replace(/\s+/g, ' ')), date, time, duration, allDay, block, notes: $('#p-n', el).value.trim() };
+        if (isNew) {
+          const every = $('#p-rep', el).value;
+          const dates = every ? seriesDates(date, every, +$('#p-for', el).value) : [date];
+          const seriesId = dates.length > 1 ? uid() : null;
+          dates.forEach((d, i) => db.personal.push({ id: uid(), createdAt: Date.now(), ...data, date: d, ...(seriesId ? { seriesId, seriesIndex: i, every } : {}) }));
+          save();
+          toast(dates.length > 1 ? `📌 ${dates.length} compromissos salvos ✓` : '📌 Compromisso salvo ✓');
+        } else {
+          Object.assign(p, data);
+          save();
+          toast('Salvo ✓');
+        }
+        // veio da agenda: volta para ela; senão (ex.: acabou de ligar a agenda pessoal) abre o dia do compromisso
+        if (/^#\/agenda(\?|$)/.test(stack[stack.length - 2] || '')) back(); else replaceTo(`#/agenda?d=${date}`);
+      });
+      $('#del', el) && ($('#del', el).onclick = () => {
+        if (!confirm(`Apagar "${p.title}" de ${fmtShort(p.date)}?`)) return;
+        db.personal = db.personal.filter(y => y.id !== p.id);
+        save(); toast('Compromisso apagado'); back();
+      });
+      $('#del-all', el) && ($('#del-all', el).onclick = () => {
+        if (!confirm(`Apagar "${p.title}" deste dia e das próximas ${ahead.length - 1} vezes?`)) return;
+        const gone = new Set(ahead.map(y => y.id));
+        db.personal = db.personal.filter(y => !gone.has(y.id));
+        save(); toast(`${ahead.length} compromissos apagados`); back();
+      });
+    },
   };
 }
 
@@ -4987,7 +5147,7 @@ function showLogin(mode = 'entrar') {
 // Horário de atendimento (dias, almoço) guardado no celular: a agenda usa para mostrar os horários livres
 const salonKey = () => `mf.salon.${session.tenant.id}`;
 const salonHours = () => readLS(salonKey());
-function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50, goal: S.finance?.goal || 0, wa: !!S.whatsapp?.instance && S.whatsapp?.saleReminders !== false, waSale: !!S.whatsapp?.instance && S.whatsapp?.saleConfirm !== false, payOnline: !!S.asaas?.connected && S.payments?.deposit !== false }); } catch { /* ok */ } }
+function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50, goal: S.finance?.goal || 0, wa: !!S.whatsapp?.instance && S.whatsapp?.saleReminders !== false, waSale: !!S.whatsapp?.instance && S.whatsapp?.saleConfirm !== false, payOnline: !!S.asaas?.connected && S.payments?.deposit !== false, personal: !!S.personal?.enabled }); } catch { /* ok */ } }
 function refreshSalon() { api('GET', '/api/settings').then(S => { cacheSalon(S); if (!$('#app form') && parseHash().parts[0] === 'agenda') render(); }).catch(() => {}); }
 
 function refreshPush() {
