@@ -280,7 +280,8 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
     const t = q.tenant.get(tenantId);
     if (!t || !evo.enabled) return 'off';
     const s = readSettings(t.settings);
-    if (!s.whatsapp.instance || !s.whatsapp.paidMessage || !(amount > 0)) return 'off';
+    const on = coll === 'appts' ? s.whatsapp.paidMessage : s.whatsapp.paidMessageSales; // serviços e compras ligam separado
+    if (!s.whatsapp.instance || !on || !(amount > 0)) return 'off';
     const METHOD = { pix: 'Pix', dinheiro: 'Dinheiro', cartao: 'Cartão' };
     let client, referente, restante, ref, kind;
     if (coll === 'appts') {

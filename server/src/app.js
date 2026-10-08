@@ -291,7 +291,7 @@ export function buildApp({
     // Pagamento registrado agora num horário ou compra que já existia: recibo para a cliente (se a opção estiver ligada).
     // Só pagamento com data recente (marcar pagamentos antigos não manda mensagem); venda nova já tem o comprovante.
     s ||= getSettings(tenantId);
-    if (s.whatsapp.paidMessage) {
+    if (s.whatsapp.paidMessage || s.whatsapp.paidMessageSales) { // cada tipo confere a sua opção em sendPaid
       const since = addDays(nowIn(s.timezone).date, -2);
       const added = (prev, cur) => {
         if (!prev) return null;

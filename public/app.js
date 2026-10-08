@@ -303,7 +303,8 @@ function addPayment(x, v, m, d = today()) {
   x.payments = [...paymentsOf(x), { v: round2(v), m, d }];
   x.paid = isPaid(x);
   // recibo no WhatsApp (opção ligada): o servidor manda quando o pagamento é de algo que já existia
-  if (salonHours()?.waPaid && x.clientId && d >= addDays(today(), -2) && (snap['appts/' + x.id] || snap['sales/' + x.id])) {
+  const isSale = 'product' in x, on = isSale ? salonHours()?.waPaidSale : salonHours()?.waPaid;
+  if (on && x.clientId && d >= addDays(today(), -2) && snap[(isSale ? 'sales/' : 'appts/') + x.id]) {
     clearTimeout(addPayment.t);
     addPayment.t = setTimeout(() => toast('💬 A cliente recebe o recibo no WhatsApp'), 2300);
   }
@@ -4860,7 +4861,8 @@ function vWhats(_, q = {}) {
             </div>
             <small class="hint">No máximo 3 dias antes.</small></div>
           <div class="field"><span class="lbl">🛍️ Comprovante da venda para a cliente <span class="opt">(logo depois de lançar; a prazo vai com as parcelas)</span></span>${toggle2('saleConfirm', w.saleConfirm !== false, '✓ Mandar', 'Não')}</div>
-          <div class="field"><span class="lbl">✅ Recibo para a cliente quando eu registro um pagamento <span class="opt">(atendimento ou compra: valor, forma e quanto ainda falta)</span></span>${toggle2('paidMessage', !!w.paidMessage, '✓ Mandar', 'Não')}</div>
+          <div class="field"><span class="lbl">✅ Recibo quando eu registro um pagamento de <b>serviço</b> <span class="opt">(valor, forma e quanto ainda falta)</span></span>${toggle2('paidMessage', !!w.paidMessage, '✓ Mandar', 'Não')}</div>
+          <div class="field"><span class="lbl">✅ Recibo quando eu registro um pagamento de <b>compra de produtos</b> <span class="opt">(valor, forma, o que falta e a próxima parcela)</span></span>${toggle2('paidMessageSales', !!w.paidMessageSales, '✓ Mandar', 'Não')}</div>
           <div class="field"><span class="lbl">🛍️ Cobrar compras a prazo <span class="opt">(lembrete no dia do vencimento e resumo no 1º dia útil do mês, às 9h)</span></span>${toggle2('saleReminders', w.saleReminders !== false, '✓ Mandar', 'Não')}</div>
           <div class="field"><label for="pix-s">💇 Chave Pix dos serviços <span class="opt">(vai na pré-reserva, para o sinal — se quiser)</span></label>
             <input type="text" id="pix-s" value="${esc(w.pixKeyService || '')}" placeholder="CPF, telefone, e-mail ou chave aleatória"></div>
@@ -4895,7 +4897,7 @@ function vWhats(_, q = {}) {
           ${status[m.status] || ''}</div>
           ${m.body ? `<details class="msgbody"><summary>Ver o que foi enviado</summary><p>${esc(m.body).replace(/\n/g, '<br>')}</p></details>` : ''}</div>`).join('') : '<div class="muted">Nenhuma mensagem ainda.</div>'}</div>`}`;
 
-      const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner, declineMessage: w.declineMessage, prereserveMessage: w.prereserveMessage, saleReminders: w.saleReminders !== false, saleConfirm: w.saleConfirm !== false, paidMessage: !!w.paidMessage };
+      const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner, declineMessage: w.declineMessage, prereserveMessage: w.prereserveMessage, saleReminders: w.saleReminders !== false, saleConfirm: w.saleConfirm !== false, paidMessage: !!w.paidMessage, paidMessageSales: !!w.paidMessageSales };
       for (const k of Object.keys(flags)) $('#' + k, box) && bindToggle2($('#' + k, box), v => (flags[k] = v));
 
       const err = e => { const m = e.offline ? 'Precisa de internet.' : e.message; const b = $('#err', box); if (b) b.innerHTML = `<div class="error">${esc(m)}</div>`; else alert(m); };
@@ -5154,7 +5156,7 @@ function showLogin(mode = 'entrar') {
 // Horário de atendimento (dias, almoço) guardado no celular: a agenda usa para mostrar os horários livres
 const salonKey = () => `mf.salon.${session.tenant.id}`;
 const salonHours = () => readLS(salonKey());
-function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50, goal: S.finance?.goal || 0, wa: !!S.whatsapp?.instance && S.whatsapp?.saleReminders !== false, waSale: !!S.whatsapp?.instance && S.whatsapp?.saleConfirm !== false, payOnline: !!S.asaas?.connected && S.payments?.deposit !== false, personal: !!S.personal?.enabled, waPaid: !!S.whatsapp?.instance && !!S.whatsapp?.paidMessage }); } catch { /* ok */ } }
+function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50, goal: S.finance?.goal || 0, wa: !!S.whatsapp?.instance && S.whatsapp?.saleReminders !== false, waSale: !!S.whatsapp?.instance && S.whatsapp?.saleConfirm !== false, payOnline: !!S.asaas?.connected && S.payments?.deposit !== false, personal: !!S.personal?.enabled, waPaid: !!S.whatsapp?.instance && !!S.whatsapp?.paidMessage, waPaidSale: !!S.whatsapp?.instance && !!S.whatsapp?.paidMessageSales }); } catch { /* ok */ } }
 function refreshSalon() { api('GET', '/api/settings').then(S => { cacheSalon(S); if (!$('#app form') && parseHash().parts[0] === 'agenda') render(); }).catch(() => {}); }
 
 function refreshPush() {

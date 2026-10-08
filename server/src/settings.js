@@ -29,7 +29,8 @@ export const DEFAULTS = {
     reminderMinutes: 1440,  // lembrete X minutos antes (0 = não manda; até 3 dias)
     saleConfirm: true,      // comprovante para a cliente logo depois de lançar a venda (com as parcelas, se for a prazo)
     saleReminders: true,    // compras pagas depois: resumo no 1º dia útil do mês e lembrete no vencimento
-    paidMessage: false,     // recibo para a cliente quando a profissional registra um pagamento (ou ele cai pelo banco)
+    paidMessage: false,     // recibo para a cliente quando a profissional registra um pagamento de SERVIÇO (ou ele cai pelo banco)
+    paidMessageSales: false, // o mesmo para pagamento de COMPRAS de produtos
     pixKey: '',             // chave Pix dos produtos: vai nas mensagens de venda (vazio = a linha some)
     pixKeyService: '',      // chave Pix dos serviços: vai na pré-reserva (sinal) e onde o texto tiver {pix}
     notifyOwner: true,      // avisar a profissional de agendamento pelo link
@@ -90,6 +91,8 @@ export function readSettings(json) {
     s.whatsapp.reminderMinutes = saved.whatsapp.reminderHours * 60;
   }
   delete s.whatsapp.reminderHours;
+  // o recibo era uma opção só (serviços e compras): quem já tinha ligado continua com os dois
+  if (saved.whatsapp?.paidMessageSales === undefined && saved.whatsapp?.paidMessage === true) s.whatsapp.paidMessageSales = true;
   return s;
 }
 
@@ -139,7 +142,7 @@ export function updateSettings(current, input) {
   const w = input.whatsapp;
   if (isObj(w)) {
     if (w.depositPercent !== undefined) s.whatsapp.depositPercent = int(w.depositPercent, 0, 100, 'sinal');
-    for (const k of ['confirmOnline', 'confirmManual', 'notifyOwner', 'declineMessage', 'prereserveMessage', 'saleReminders', 'saleConfirm', 'paidMessage']) if (w[k] !== undefined) s.whatsapp[k] = bool(w[k]);
+    for (const k of ['confirmOnline', 'confirmManual', 'notifyOwner', 'declineMessage', 'prereserveMessage', 'saleReminders', 'saleConfirm', 'paidMessage', 'paidMessageSales']) if (w[k] !== undefined) s.whatsapp[k] = bool(w[k]);
     if (w.pixKey !== undefined) s.whatsapp.pixKey = text(w.pixKey, 140).trim();
     if (w.pixKeyService !== undefined) s.whatsapp.pixKeyService = text(w.pixKeyService, 140).trim();
     if (w.reminderMinutes !== undefined) s.whatsapp.reminderMinutes = int(w.reminderMinutes, 0, 3 * 24 * 60, 'lembrete');

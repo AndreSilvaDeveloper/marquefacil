@@ -21,7 +21,9 @@ test('agenda pessoal: desligada não muda nada; ligada ocupa o horário no link 
   await call('POST', '/api/signup', { salonName: 'Studio Ana', name: 'Ana', email: 'ana@x.com', password: 'segredo1' });
   await call('PUT', '/api/settings', { booking: { enabled: true, minAdvanceHours: 0 } });
   assert.equal((await call('GET', '/api/settings')).body.personal.enabled, false, 'vem desligada');
-  const d = weekdayAhead(2), d2 = weekdayAhead(4);
+  const d = weekdayAhead(2);
+  let d2 = addDays(d, 1);
+  while (weekday(d2) === 0 || weekday(d2) === 6) d2 = addDays(d2, 1); // outro dia útil, sempre depois de d
   await call('POST', '/api/sync', { changes: [
     { coll: 'personal', id: 'p1', data: { title: 'Médico do Joãozinho', date: d, time: '10:00', duration: 60, block: true } },
     { coll: 'personal', id: 'p2', data: { title: 'Ligar pro contador', date: d, time: '15:00', duration: 30, block: false } },

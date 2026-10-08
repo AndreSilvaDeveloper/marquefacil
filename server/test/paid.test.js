@@ -49,8 +49,8 @@ test('recibo de pagamento: opcional, uma vez por pagamento, só pagamento recent
   await wait();
   assert.equal(evo.sent.length, 0);
 
-  // ligado
-  await call('PUT', '/api/settings', { whatsapp: { paidMessage: true } });
+  // só serviços ligado
+  await call('PUT', '/api/settings', { whatsapp: { paidMessage: true, paidMessageSales: false } });
   await sync([pay([{ v: 40, m: 'pix', d: T }, { v: 60, m: 'dinheiro', d: T }])]);
   await wait();
   assert.equal(evo.sent.length, 1);
@@ -79,15 +79,37 @@ test('recibo de pagamento: opcional, uma vez por pagamento, só pagamento recent
   await sync([{ coll: 'sales', id: 's1', data: s1 }, { coll: 'sales', id: 's2', data: s2 }]);
   await wait();
   const n = evo.sent.length;
+  await sync([{ coll: 'sales', id: 's1', data: { ...s1, payments: [{ v: 20, m: 'pix', d: T }] } }]);
+  await wait();
+  assert.equal(evo.sent.length, n, 'compras desligado: sem recibo');
+  await call('PUT', '/api/settings', { whatsapp: { paidMessageSales: true } });
   await sync([
-    { coll: 'sales', id: 's1', data: { ...s1, payments: [{ v: 50, m: 'cartao', d: T }] } },
+    { coll: 'sales', id: 's1', data: { ...s1, payments: [{ v: 20, m: 'pix', d: T }, { v: 30, m: 'cartao', d: T }] } },
     { coll: 'sales', id: 's2', data: { ...s2, payments: [{ v: 10, m: 'cartao', d: T }] } },
   ]);
   await wait();
   const got = evo.sent.slice(n);
   assert.equal(got.length, 1);
-  assert.match(got[0].text, /💰 R\$\s?60,00/);
+  assert.match(got[0].text, /💰 R\$\s?40,00/, 'só o que entrou agora (os 20 já tinham ido)');
   assert.match(got[0].text, /🛍️ Shampoo e Máscara/);
   assert.match(got[0].text, /Falta: R\$\s?60,00 \(próxima: R\$\s?60,00 em /);
+  // só compras: o recibo de serviço para
+  await call('PUT', '/api/settings', { whatsapp: { paidMessage: false } });
+  const a3 = { clientId: 'c1', date: past, time: '15:00', service: 'Hidratação', price: 70, status: 'feito', payments: [] };
+  await sync([{ coll: 'appts', id: 'a3', data: a3 }]);
+  const n2 = evo.sent.length;
+  await sync([{ coll: 'appts', id: 'a3', data: { ...a3, payments: [{ v: 70, m: 'pix', d: T }] } }]);
+  await wait();
+  assert.equal(evo.sent.length, n2);
   await app.close();
+});
+
+test('recibo: quem tinha a opção única ligada continua com serviços e compras', async () => {
+  const { readSettings } = await import('../src/settings.js');
+  const s = readSettings(JSON.stringify({ whatsapp: { paidMessage: true } }));
+  assert.deepEqual([s.whatsapp.paidMessage, s.whatsapp.paidMessageSales], [true, true]);
+  const s2 = readSettings(JSON.stringify({ whatsapp: { paidMessage: true, paidMessageSales: false } }));
+  assert.deepEqual([s2.whatsapp.paidMessage, s2.whatsapp.paidMessageSales], [true, false]);
+  const s3 = readSettings('{}');
+  assert.deepEqual([s3.whatsapp.paidMessage, s3.whatsapp.paidMessageSales], [false, false]);
 });
