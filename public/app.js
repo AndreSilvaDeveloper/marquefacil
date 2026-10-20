@@ -4903,7 +4903,7 @@ function vWhats(_, q = {}) {
             <div class="field"><label for="t-prereserve">Pré-reserva</label><textarea id="t-prereserve" rows="8">${esc(w.templates.prereserve)}</textarea></div>
             <div class="field"><label for="t-paid">✅ Recibo de pagamento <span class="opt">({valor}, {forma}, {referente}, {restante})</span></label><textarea id="t-paid" rows="8">${esc(w.templates.paid)}</textarea></div>
             <div class="field"><label for="t-saleNew">🛍️ Venda: comprovante <span class="opt">({produtos}, {total}, {pagamento}, {pix})</span></label><textarea id="t-saleNew" rows="8">${esc(w.templates.saleNew)}</textarea></div>
-            <div class="field"><label for="t-saleDue">🛍️ Venda: dia do vencimento <span class="opt">({parcela}, {produtos}, {valor}, {pix})</span></label><textarea id="t-saleDue" rows="7">${esc(w.templates.saleDue)}</textarea></div>
+            <div class="field"><label for="t-saleDue">🛍️ Venda: dia do vencimento <span class="opt">({parcela}, {produtos}, {valor} = o que falta, {pagamento} = já pago e falta, se pagou parte, {pix})</span></label><textarea id="t-saleDue" rows="7">${esc(w.templates.saleDue)}</textarea></div>
             <div class="field"><label for="t-saleMonth">🛍️ Venda: resumo do mês <span class="opt">({lista}, {total}, {pix})</span></label><textarea id="t-saleMonth" rows="7">${esc(w.templates.saleMonth)}</textarea></div>
             <div class="field"><label for="t-decline">Pedido recusado</label><textarea id="t-decline" rows="4">${esc(w.templates.decline)}</textarea></div>
             <div class="field"><label for="t-owner">Aviso para você</label><textarea id="t-owner" rows="5">${esc(w.templates.owner)}</textarea></div>

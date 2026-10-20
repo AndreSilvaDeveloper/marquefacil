@@ -48,11 +48,12 @@ export function evolutionClient({ url, apikey, fetchImpl = fetch, timeoutMs = 15
 }
 
 // Troca {nome}, {dia}… pelos valores. Linha com um campo vazio (ex.: sem serviço) some.
+// Campo que não existe nesta mensagem (ex.: {pagamento} copiado de outro texto) conta como vazio: nunca sai "{…}" para a cliente.
 export function renderTemplate(tpl, vars) {
   return String(tpl).split('\n').filter(line => {
     const keys = [...line.matchAll(/\{(\w+)\}/g)].map(m => m[1]);
-    return keys.every(k => !(k in vars) || String(vars[k] ?? '').trim() !== '');
-  }).join('\n').replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k] ?? '') : m)).trim();
+    return keys.every(k => k in vars && String(vars[k] ?? '').trim() !== '');
+  }).join('\n').replace(/\{(\w+)\}/g, (m, k) => String(vars[k] ?? '')).replace(/\n{3,}/g, '\n\n').trim();
 }
 
 const brl = v => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -337,7 +338,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
               ? `• ${productsText(o)} — ${next.of > 1 ? `parcela ${next.n} de ${next.of}: ` : ''}${brl(next.left)} (vence ${next.date === here.date ? 'hoje' : next.date.slice(8, 10) + '/' + next.date.slice(5, 7)})`
               : `• ${productsText(o)} — ${brl(o.left)}`;
           });
-          const body = renderTemplate(tplOf('saleMonth'), { ...base, nome: (client.name || '').split(' ')[0], lista: lines.join('\n'),
+          const body = renderTemplate(tplOf('saleMonth'), { ...base, nome: (client.name || '').split(' ')[0], lista: lines.join('\n'), pagamento: '',
             total: brl(list.reduce((t2, o) => t2 + o.left, 0)) });
           const r = await sendSale(t, s, { apptId: `client:${clientId}`, kind: `salemonth:${here.date.slice(0, 7)}`, client, body });
           if (r === 'sent') sent++;
@@ -357,7 +358,9 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
           }
           const body = renderTemplate(tplOf('saleDue'), { ...base, nome: (client?.name || '').split(' ')[0],
             parcela: p.of > 1 ? `a parcela ${p.n} de ${p.of}` : 'o pagamento', produtos: productsText(o), valor: brl(p.left),
-            vencimento: dayLabel(p.date), total: brl(o.left) });
+            vencimento: dayLabel(p.date), total: brl(o.left),
+            // pagou parte desta parcela: mostra o que já foi e o que falta (o {valor} já é só o que falta)
+            pagamento: p.paid > 0 ? `✅ Já pago: ${brl(p.paid)}\n⏳ Falta: ${brl(p.left)}` : '' });
           if (await sendSale(t, s, { apptId, kind, client, body }) === 'sent') sent++;
         }
       }

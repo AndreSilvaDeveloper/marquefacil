@@ -113,3 +113,42 @@ test('recibo: quem tinha a opção única ligada continua com serviços e compra
   const s3 = readSettings('{}');
   assert.deepEqual([s3.whatsapp.paidMessage, s3.whatsapp.paidMessageSales], [false, false]);
 });
+
+test('cobrança do vencimento: quitado não recebe; parcial recebe o que falta; {pagamento} nunca sai escrito', async () => {
+  const { zonedEpoch } = await import('../src/time.js');
+  const { renderTemplate } = await import('../src/whatsapp.js');
+  assert.equal(renderTemplate('Oi {nome}\n\n{naoexiste}\n\nTchau', { nome: 'Ana' }), 'Oi Ana\n\nTchau', 'campo desconhecido some');
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl } });
+  const call = client(app);
+  await call('POST', '/api/signup', { salonName: 'Studio Kadosh', name: 'Ana', email: 'ana@x.com', password: 'segredo1' });
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  // o texto que a profissional escreveu (com {pagamento}, que antes saía escrito)
+  await call('PUT', '/api/settings', { whatsapp: { pixKey: '32987153554', templates: { saleDue:
+    'Olá, {nome}! 😊\nPassando para lembrar que hoje vence {parcela} da sua compra no *{salao}*:\n🛍️ {produtos}\n💰 Valor: {valor}\n\n{pagamento}\n\n🔐chave pix 👇🏽\n\n{pix}\n\nSe já pagou, pode desconsiderar. Obrigada! 💖' } } });
+  let due = addDays(nowIn('America/Sao_Paulo').date, 3);
+  const { weekday } = await import('../src/time.js');
+  while (weekday(due) === 0 || weekday(due) === 6 || due.slice(8) <= '07') due = addDays(due, 1); // longe do 1º dia útil (resumo do mês)
+  const at9 = zonedEpoch(due, '09:05', 'America/Sao_Paulo');
+  const sale = (id, cid, payments) => ({ coll: 'sales', id, data: { clientId: cid, product: 'Lingerie', qty: 1, total: 137.7, date: addDays(due, -30), plan: { entrada: 0, dates: [due] }, payments, createdAt: Date.now() - 40 * 86400e3 } });
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'c1', data: { name: 'Juliana Igreja', phone: '32988212035' } },
+    { coll: 'clients', id: 'c2', data: { name: 'Bia Lima', phone: '11955554444' } },
+    { coll: 'clients', id: 'c3', data: { name: 'Carla Souza', phone: '11944443333' } },
+    sale('s1', 'c1', []),                                              // não pagou nada
+    sale('s2', 'c2', [{ v: 37.7, m: 'pix', d: addDays(due, -2) }]),   // pagou uma parte
+    sale('s3', 'c3', [{ v: 137.7, m: 'pix', d: addDays(due, -1) }]),  // quitou antes
+  ] });
+  await app.messenger.runSaleReminders(at9);
+  const to = n => evo.sent.find(m => m.number === n)?.text;
+  assert.ok(!to('5511944443333'), 'quitou: não recebe nada');
+  const ju = to('5532988212035'), bia = to('5511955554444');
+  assert.ok(!/\{|\}/.test(ju) && !/\{|\}/.test(bia), 'nada de {campo} na mensagem');
+  assert.match(ju, /Valor: R\$\s?137,70/);
+  assert.ok(!/Já pago/.test(ju), 'sem pagamento: a linha some');
+  assert.match(bia, /Valor: R\$\s?100,00/, 'parcial: cobra só o que falta');
+  assert.match(bia, /✅ Já pago: R\$\s?37,70\n⏳ Falta: R\$\s?100,00/);
+  assert.ok(!/\n\n\n/.test(ju), 'sem buraco de linhas em branco');
+  await app.close();
+});
