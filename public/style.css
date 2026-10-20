@@ -900,3 +900,10 @@ details.ready { padding: .7rem 1rem; }
 .addp.top b { color: var(--brand); }
 .mcal-d { position: relative; }
 .mcal-d .pdot { position: absolute; top: 2px; right: 3px; font-size: .62rem; text-decoration: none; line-height: 1; }
+/* Dinheiro: tocar no mês escolhe outro; filtros em campo de escolher */
+.monthnav .mpick { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; gap: .4rem; cursor: pointer; }
+.monthnav .mpick b { flex: 0 1 auto; }
+.monthnav .mpick em { font-style: normal; font-size: .95rem; }
+.monthnav .mpick input { position: absolute; inset: 0; opacity: 0; width: 100%; min-height: 0; cursor: pointer; }
+.selfield { margin: 0 0 .7rem; }
+.selfield select { min-height: 2.8rem; font-weight: 600; }

@@ -2106,6 +2106,7 @@ function packageCard(p) {
   </div>`;
 }
 
+let openPayFor = null; // ficha da cliente que deve abrir já no "Receber"
 function vClient(id, q) {
   const c = client(id);
   if (!c) return { title: 'Cliente', back: true, html: '<div class="empty">Cliente não encontrada.</div>' };
@@ -2248,6 +2249,9 @@ function vClient(id, q) {
       };
       // Receber: primeiro o que já venceu (mais antigo antes); o que passar disso adianta as parcelas que ainda vão vencer
       const all = round2(st.owes + toCome);
+      // veio do "Falta receber": já abre o pagamento (uma vez só; tira o ?pagar do endereço)
+      if (q?.pagar) { replaceTo(`#/cliente/${id}`); openPayFor = id; return; }
+      if (openPayFor === id) { openPayFor = null; setTimeout(() => $('#pay-all', el)?.click(), 50); }
       $('#pay-all', el) && ($('#pay-all', el).onclick = () => paySheet({ total: all }, `${c.name} — ${st.owes > 0 ? 'o que está devendo' : 'parcelas a vencer'}`, (v, m) => {
         let rest = v;
         for (const { it } of due) {
@@ -3147,7 +3151,8 @@ let finTab = 'dia'; // aba escolhida em "Números do mês"
 function vFin(_, q) {
   const m = q.m || today().slice(0, 7);
   const f = q.f || '';          // quadro escolhido (filtro)
-  const pm = q.pm || '';        // filtro dentro de "Entrou": pix, dinheiro, cartao, a (serviços), s (produtos)
+  const pm = q.pm || '';        // filtro dentro de "Entrou": pix, dinheiro, cartao, a (serviços), s (produtos), banco (Asaas)
+  const byItem = q.ver === 'item'; // "Falta receber": por cliente (padrão) ou item a item
   const dia = /^\d{4}-\d{2}-\d{2}$/.test(q.dia || '') ? q.dia : ''; // um dia do gráfico
   const [y, mo] = m.split('-').map(Number);
   const shift = n => { const d = new Date(y, mo - 1 + n, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
@@ -3155,7 +3160,7 @@ function vFin(_, q) {
   const sumBy = (xs, fn) => round2(xs.reduce((t, x) => t + (fn(x) || 0), 0));
   const link = (k, it) => (k === 'a' ? '#/agendamento/' + it.id : '#/venda?id=' + it.id);
   const what = (k, it) => (k === 'a' ? (it.service || 'Serviço') : `🛍️ ${it.product}${it.qty > 1 ? ` (${it.qty}x)` : ''}`);
-  const url = (o = {}) => { const p = { m, f, pm, dia, ...o }; return '#/financeiro?' + Object.entries(p).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join('&'); };
+  const url = (o = {}) => { const p = { m, f, pm, dia, ver: byItem ? 'item' : '', ...o }; return '#/financeiro?' + Object.entries(p).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join('&'); };
   const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
 
   // ENTROU: cada pagamento recebido no mês (pelo dia do pagamento)
@@ -3202,6 +3207,19 @@ function vFin(_, q) {
     }
     upcomingParts.sort((a, b) => a.p.date.localeCompare(b.p.date)); }
   const expected = round2(sumBy(upcoming, leftOf) + sumBy(upcomingParts, u => u.p.left));
+  // parcelas de compras que vencem depois deste mês (por mês), para saber o que ainda vai entrar
+  const laterParts = (() => {
+    const seen = new Set(), byM = {};
+    const end = `${m}-31`;
+    for (const x of db.sales) {
+      if (!x.plan?.dates?.length || seen.has(orderKey(x))) continue;
+      seen.add(orderKey(x));
+      for (const p of installmentsOf(orderOf(x))) if (p.left > 0 && p.date > end && p.date > t0) {
+        const k = p.date.slice(0, 7); (byM[k] ||= { m: k, n: 0, total: 0 }); byM[k].n++; byM[k].total = round2(byM[k].total + p.left);
+      }
+    }
+    return Object.values(byM).sort((a, b) => a.m.localeCompare(b.m)).slice(0, 12);
+  })();
   const upcomingNoPrice = upcoming.filter(a => !(a.price > 0)).length;
 
   // SEM VALOR: atendimentos que já aconteceram sem valor lançado
@@ -3229,11 +3247,16 @@ function vFin(_, q) {
   // Conteúdo de cada quadro
   const views = {
     entrou: () => {
-      const chips = [['', 'Tudo'], ...Object.entries(PAY), ['a', 'Serviços'], ['s', 'Produtos']];
-      const list = received.filter(p => (!pm || p.m === pm || p.k === pm) && (!dia || p.d === dia));
+      const bank = received.filter(p => p.via === 'asaas');
+      const opts = [['', 'Tudo'], ...Object.entries(PAY), ['a', 'Só serviços'], ['s', 'Só produtos'], ...(bank.length ? [['banco', '🏦 Pelo banco (Asaas)']] : [])];
+      const match = p => !pm || (pm === 'banco' ? p.via === 'asaas' : p.m === pm || p.k === pm);
+      const list = received.filter(p => match(p) && (!dia || p.d === dia));
       return `<h2>Entrou ${dia ? `em ${fmtDate(dia, { weekday: 'long', day: 'numeric', month: 'long' })}` : `em ${monthLabel}`} ${list.length ? `· ${brl(sumBy(list, p => p.v))}` : ''}</h2>
         ${dia ? `<a class="btn small" href="${url({ dia: '' })}" data-f style="margin-bottom:.6rem">✕ Ver o mês todo</a>` : ''}
-        <div class="chips filters hscroll">${chips.map(([k, n]) => `<a class="chip ${pm === k ? 'on' : ''}" href="${url({ pm: k })}" data-f>${n}${k && k.length > 1 ? ' ' + brl(sumBy(received.filter(p => p.m === k), p => p.v)) : ''}</a>`).join('')}</div>
+        <div class="field selfield"><select id="pm-sel" aria-label="Mostrar">${opts.map(([k, n]) => {
+          const tot = k ? sumBy(received.filter(p => (k === 'banco' ? p.via === 'asaas' : p.m === k || p.k === k)), p => p.v) : recTotal;
+          return `<option value="${k}" ${pm === k ? 'selected' : ''}>${n} · ${brl(tot)}</option>`;
+        }).join('')}</select></div>
         <div class="list clist">${list.length ? (() => {
           const icon = { pix: '💠', dinheiro: '💵', cartao: '💳' };
           let day = '';
@@ -3245,7 +3268,7 @@ function vFin(_, q) {
               head = `<div class="letter dayhead"><span>${day === today() ? 'Hoje' : day === addDays(today(), -1) ? 'Ontem' : cap(fmtDate(day, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', ',').replace('.', ''))}</span><b>${brl(tot).replace(',00', '')}</b></div>`;
             }
             return head + `<a class="dayrow" href="${link(p.k, p.it)}"><span class="dr-time pay-ic" title="${PAY[p.m] || ''}">${icon[p.m] || '•'}</span>
-              <span class="dr-info"><b>${esc(clientName(p.it.clientId))}</b><span>${esc(what(p.k, p.it))}${PAY[p.m] ? ' · ' + PAY[p.m] : ''}</span></span>
+              <span class="dr-info"><b>${esc(clientName(p.it.clientId))}</b><span>${esc(what(p.k, p.it))}${PAY[p.m] ? ' · ' + PAY[p.m] : ''}${p.via === 'asaas' ? ' · 🏦 pelo banco' : ''}</span></span>
               <span class="dr-money ok">+ ${brl(p.v).replace(',00', '')}</span></a>`;
           }).join('');
         })() : '<div class="empty">Nada recebido com esse filtro.</div>'}</div>`;
@@ -3268,13 +3291,37 @@ function vFin(_, q) {
         <div class="line sum"><b class="grow">Lucro do mês</b><b style="color:${profit >= 0 ? 'var(--ok)' : 'var(--bad)'}">${brl(profit)}</b></div>
       </div>
       <p class="muted">Conta só o dinheiro que já entrou. O que falta receber (${brl(owed)}) entra no lucro quando for pago.</p>`,
-    falta: () => `<h2>Falta receber de ${monthLabel} · ${brl(owed)}</h2>
+    falta: () => `<h2>${byItem ? `Falta receber de ${monthLabel} · ${brl(owed)}` : `Falta receber · ${brl(owed + owedOld)}`}</h2>
+      ${!byItem && owedOld ? `<p class="muted" style="margin-top:-.4rem">Deste mês ${brl(owed)} · de meses anteriores ${brl(owedOld)}</p>` : ''}
       ${(() => {
         const ids = [...new Set([...dueMonth, ...dueOld].map(d => d.it.clientId))].map(client).filter(c => c?.phone);
         return ids.length ? `<button type="button" class="btn small" id="cobrar-todas" style="margin-bottom:.7rem">📣 Cobrar pelo WhatsApp (${ids.length})</button>` : '';
       })()}
-      <div class="list clist">${dueMonth.length ? dueMonth.map(dueRow).join('') : '<div class="empty">Ninguém devendo neste mês. 🎉</div>'}</div>
-      ${dueOld.length ? `<h2>De meses anteriores · ${brl(owedOld)}</h2><div class="list clist">${dueOld.map(dueRow).join('')}</div>` : ''}`,
+      ${dueMonth.length || dueOld.length ? `<div class="field selfield"><select id="falta-sel" aria-label="Como mostrar">
+        <option value="" ${!byItem ? 'selected' : ''}>👩 Por cliente</option><option value="item" ${byItem ? 'selected' : ''}>📋 Cada atendimento e compra</option></select></div>` : ''}
+      ${byItem ? `<div class="list clist">${dueMonth.length ? dueMonth.map(dueRow).join('') : '<div class="empty">Ninguém devendo neste mês. 🎉</div>'}</div>
+        ${dueOld.length ? `<h2>De meses anteriores · ${brl(owedOld)}</h2><div class="list clist">${dueOld.map(dueRow).join('')}</div>` : ''}`
+        : (() => {
+          // uma linha por cliente: o total que ela deve (deste mês e de antes) e o que é; Receber abre a ficha já no pagamento
+          const by = new Map();
+          // desde quando deve: compra a prazo = a parcela mais antiga que venceu; o resto = o dia do atendimento/venda
+          const since = d => (d.k === 's' && d.it.plan?.dates?.length ? installmentsOf(orderOf(d.it)).find(p => p.left > 0 && p.date <= t0)?.date || d.it.date : d.it.date);
+          for (const d of [...dueOld, ...dueMonth]) {
+            const g = by.get(d.it.clientId) || { cid: d.it.clientId, items: [], total: 0, first: since(d) };
+            g.items.push(d); g.total = round2(g.total + leftOfDue(d)); if (since(d) < g.first) g.first = since(d);
+            by.set(d.it.clientId, g);
+          }
+          const groups = [...by.values()].sort((a, b) => b.total - a.total);
+          if (!groups.length) return '<div class="empty">Ninguém devendo. 🎉</div>';
+          return `<div class="list clist">${groups.map(g => {
+            const desc = g.items.map(d => d.k === 's' ? `🛍️ ${productsText(orderOf(d.it))}` : `💇 ${d.it.service || 'Serviço'} ${fmtShort(d.it.date).slice(0, 5)}`).join(' · ');
+            const old = g.first < addDays(t0, -7); // devendo há mais de uma semana: destaca
+            return `<div class="dayrow mrow wrap"><a class="mrow-main" href="#/cliente/${g.cid}?h=deve">
+              <span class="dr-info"><b>${esc(clientName(g.cid))}</b><span>${esc(desc)}${old ? ` · <span style="color:var(--bad)">⚠️ há ${Math.round((toDate(t0) - toDate(g.first)) / 86400000)} dias</span>` : ''}</span></span>
+              <span class="dr-money" style="color:var(--warn)">${brl(g.total).replace(',00', '')}</span></a>
+              <a class="btn small ok payin" href="#/cliente/${g.cid}?pagar=1">💰 Receber</a></div>`;
+          }).join('')}</div>`;
+        })()}`,
     vai: () => `<h2>Ainda vai entrar · ${brl(expected)}</h2>
       ${upcomingNoPrice ? `<p class="muted" style="margin-top:-.3rem">${plural(upcomingNoPrice, 'horário ainda sem valor', 'horários ainda sem valor')} (não entra na soma).</p>` : ''}
       ${upcomingParts.length ? `<h3 class="subh">📅 Horários · ${brl(sumBy(upcoming, leftOf))}</h3>` : ''}
@@ -3282,7 +3329,10 @@ function vFin(_, q) {
       ${upcomingParts.length ? `<h3 class="subh">🛍️ Parcelas de compras · ${brl(sumBy(upcomingParts, u => u.p.left))}</h3>
         <div class="list clist">${upcomingParts.map(({ o, p, it }) => mrow(link('s', it), p.date, esc(clientName(o.clientId)),
           `🛍️ ${esc(productsText(o))}${p.of > 1 ? ` · parcela ${p.n} de ${p.of}` : ''}`, brl(p.left).replace(',00', ''), 'inherit',
-          `<button class="btn small payin" data-pay="s:${it.id}">💰 Receber antes</button>`)).join('')}</div>` : ''}`,
+          `<button class="btn small payin" data-pay="s:${it.id}">💰 Receber antes</button>`)).join('')}</div>` : ''}
+      ${laterParts.length ? `<h3 class="subh">🗓️ Parcelas dos próximos meses · ${brl(sumBy(laterParts, x => x.total))}</h3>
+        <div class="card extrato">${laterParts.map(x => `<a class="ex-row" href="${url({ m: x.m, f: 'vai', pm: '', dia: '' })}" data-f>
+          <span>${cap(new Date(+x.m.slice(0, 4), +x.m.slice(5) - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }))} <small class="muted">${plural(x.n, 'parcela', 'parcelas')}</small></span><b>${brl(x.total)}</b><i>›</i></a>`).join('')}</div>` : ''}`,
     semvalor: () => `<h2>Atendimentos sem valor</h2>
       <p class="muted" style="margin-top:-.3rem">Coloque quanto foi cobrado:</p>
       <div class="list clist">${noPrice.map(a => mrow(`#/agendamento/${a.id}`, a.date, esc(clientName(a.clientId)),
@@ -3426,7 +3476,7 @@ function vFin(_, q) {
         if (!tabs.length) return '';
         const on = tabs.some(x => x[0] === finTab) ? finTab : tabs[0][0];
         return `<h2>📊 Números do mês</h2>
-          <div class="chips filters hscroll" id="ana-tabs">${tabs.map(([k, n]) => `<button type="button" class="chip ${k === on ? 'on' : ''}" data-tab="${k}">${n}</button>`).join('')}</div>
+          <div class="field selfield"><select id="ana-sel" aria-label="Qual número ver">${tabs.map(([k, n]) => `<option value="${k}" ${k === on ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
           ${tabs.map(([k, , h]) => `<div data-pane="${k}" ${k === on ? '' : 'hidden'}>${h}</div>`).join('')}`;
       })()}
       ${!tips.length && !received.length ? '<div class="empty">Nenhum dinheiro lançado neste mês ainda.</div>' : ''}
@@ -3449,7 +3499,7 @@ function vFin(_, q) {
     html: `
       <div class="monthnav">
         <a class="btn small" href="${url({ m: shift(-1) })}" data-f aria-label="Mês anterior">‹</a>
-        <b>${monthLabel}</b>
+        <label class="mpick"><b>${monthLabel}</b><em aria-hidden="true">📆</em><input type="month" id="mpick" value="${m}" aria-label="Escolher o mês"></label>
         <a class="btn small" href="${url({ m: shift(1) })}" data-f aria-label="Próximo mês">›</a>
       </div>
       <div class="finactions">
@@ -3481,13 +3531,7 @@ function vFin(_, q) {
           bulkSheet(ids.map(c => ({ c, st: clientStats(c) })), 'devendo');
           return;
         }
-        const tb = e.target.closest('[data-tab]');
-        if (tb) {
-          finTab = tb.dataset.tab;
-          el.querySelectorAll('#ana-tabs .chip').forEach(x => x.classList.toggle('on', x === tb));
-          el.querySelectorAll('[data-pane]').forEach(x => { x.hidden = x.dataset.pane !== finTab; });
-          return;
-        }
+
         const fx = e.target.closest('[data-fixed]');
         if (fx) {
           const list = fx.dataset.fixed === 'all' ? fixedTodo : fixedTodo.filter(x => x.id === fx.dataset.fixed);
@@ -3501,6 +3545,14 @@ function vFin(_, q) {
         replaceTo(a.getAttribute('href'));
         if (a.classList.contains('ex-row') || a.classList.contains('ex-top') || a.classList.contains('cbar')) setTimeout(() => $('#fin-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
       });
+      // campos de escolher: números do mês, filtro do "Entrou", como ver o "Falta receber", mês
+      $('#ana-sel', el) && ($('#ana-sel', el).onchange = e => {
+        finTab = e.target.value;
+        el.querySelectorAll('[data-pane]').forEach(x => { x.hidden = x.dataset.pane !== finTab; });
+      });
+      $('#pm-sel', el) && ($('#pm-sel', el).onchange = e => replaceTo(url({ pm: e.target.value })));
+      $('#falta-sel', el) && ($('#falta-sel', el).onchange = e => replaceTo(url({ ver: e.target.value })));
+      $('#mpick', el).onchange = e => e.target.value && replaceTo(url({ m: e.target.value, dia: '' }));
       // passar o dedo/mouse numa barra mostra o valor do dia
       el.querySelectorAll('.cbar').forEach(b => {
         const show = () => { const t = $('#chart-tip', el); if (t) t.textContent = b.dataset.tip; };
