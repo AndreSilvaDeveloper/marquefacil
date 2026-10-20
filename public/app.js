@@ -363,6 +363,15 @@ function clientOwes(id) {
   return round2(t);
 }
 // Parcelas de compras que ainda vão vencer (não é dívida ainda)
+// Data da próxima parcela em aberto que ainda vai vencer (compras a prazo da cliente)
+function nextDueOf(id) {
+  const dates = [];
+  for (const s of db.sales.filter(x => x.clientId === id && x.plan?.dates?.length && leftOf(x) > 0)) {
+    const p = installmentsOf(orderOf(s)).find(i => i.left > 0 && i.date > today());
+    if (p) dates.push(p.date);
+  }
+  return dates.sort()[0] || '';
+}
 function clientToCome(id) {
   const seen = new Set();
   let t = 0;
@@ -387,7 +396,7 @@ function payBadge(x, dueWord = 'Não pago') {
 }
 
 // Janela "Receber pagamento": quanto recebeu agora e como
-function paySheet(x, title, onDone, suggest = 0) {
+function paySheet(x, title, onDone, suggest = 0, quick = []) {
   const total = valueOf(x), left = leftOf(x) || total;
   let method = '';
   const bg = document.createElement('div');
@@ -398,6 +407,7 @@ function paySheet(x, title, onDone, suggest = 0) {
     ${paidOf(x) > 0 ? `<p>Valor ${brl(total)} · já pagou ${brl(paidOf(x))} · <b>falta ${brl(leftOf(x))}</b></p>` : ''}
     <div class="field"><label for="ps-v">Quanto recebeu agora?</label>
       <div class="money"><input type="text" id="ps-v" inputmode="numeric" value="${moneyVal(suggest || left)}"></div>
+      ${quick.length ? `<div class="chips" id="ps-q" style="margin-top:.5rem">${quick.map(([t, v]) => `<button type="button" class="chip" data-v="${v}">${esc(t)} · ${brl(v)}</button>`).join('')}</div>` : ''}
       <small class="hint">Se ela pagou só uma parte, troque o valor.</small></div>
     <div class="field"><span class="lbl">Como pagou?</span>
       <div class="paygrid" id="ps-m">${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}">${n}</button>`).join('')}</div></div>
@@ -414,6 +424,7 @@ function paySheet(x, title, onDone, suggest = 0) {
     method = b.dataset.m;
     bg.querySelectorAll('#ps-m button').forEach(x => x.classList.toggle('on', x === b));
   };
+  $('#ps-q', bg) && ($('#ps-q', bg).onclick = e => { const b = e.target.closest('[data-v]'); if (b) $('#ps-v', bg).value = moneyVal(+b.dataset.v); });
   $('#ps-no', bg).onclick = close;
   bg.onclick = e => { if (e.target === bg) close(); };
   $('#ps-ok', bg).onclick = () => {
@@ -2117,6 +2128,7 @@ function vClient(id, q) {
   };
   const history = allHistory.filter(hFilters[hf]?.[1] || (() => true));
   const due = allHistory.filter(hFilters.deve[1]).reverse(); // mais antigo primeiro
+  const toCome = clientToCome(id), nextDue = nextDueOf(id); // parcelas de compras que ainda vão vencer
   const url = h => `#/cliente/${id}${h ? '?h=' + h : ''}`;
   const first = c.name.split(' ')[0];
   // O que ajuda no atendimento: de quanto em quanto tempo ela vem, se está demorando, o que faz e o que compra
@@ -2174,11 +2186,12 @@ function vClient(id, q) {
           <b>${whenTxt(upcoming[0])}</b>${upcoming[0].service ? `<span>${esc(upcoming[0].service)}</span>` : ''}<i>›</i></a>`
         : `<div class="card nextcard none"><small>📅 Próximo horário</small><b>Nenhum marcado</b><a class="btn small main" href="#/agendar?c=${c.id}">📅 Agendar</a></div>`}
 
-      ${st.owes > 0 ? `<div class="card owebox">
-        <a class="line" href="${url(hf === 'deve' ? '' : 'deve')}" data-f style="color:inherit;text-decoration:none"><b class="grow">💸 Deve ${brl(st.owes)}</b><span class="muted">ver ›</span></a>
+      ${st.owes > 0 || toCome > 0 ? `<div class="card owebox">
+        <a class="line" href="${url(hf === 'deve' ? '' : 'deve')}" data-f style="color:inherit;text-decoration:none"><b class="grow">${st.owes > 0 ? `💸 Deve ${brl(st.owes)}` : '✅ Em dia'}</b><span class="muted">ver ›</span></a>
+        ${toCome > 0 ? `<small class="muted" style="display:block;margin-top:.2rem">📅 ${st.owes > 0 ? 'Mais' : 'Faltam'} ${brl(toCome)} em parcelas que ainda vão vencer${nextDue ? ` (próxima ${fmtShort(nextDue).slice(0, 5)})` : ''}</small>` : ''}
         <div class="row" style="margin-top:.5rem">
           <button class="btn small ok" id="pay-all">💰 Receber</button>
-          ${c.phone ? `<a class="btn small" target="_blank" rel="noopener" href="${waLink(c.phone, `Olá, ${first}! Tudo bem? 😊 Passando para lembrar que ficou um valor em aberto de ${brl(st.owes)} aqui no ${session.tenant.name}. Pode ser por Pix, dinheiro ou cartão. Obrigada! 💖`)}">💸 Cobrar</a>` : ''}
+          ${c.phone && st.owes > 0 ? `<a class="btn small" target="_blank" rel="noopener" href="${waLink(c.phone, `Olá, ${first}! Tudo bem? 😊 Passando para lembrar que ficou um valor em aberto de ${brl(st.owes)} aqui no ${session.tenant.name}. Pode ser por Pix, dinheiro ou cartão. Obrigada! 💖`)}">💸 Cobrar</a>` : ''}
         </div></div>` : ''}
 
       ${late ? `<div class="card latebox"><b>⏰ Já passou do tempo dela</b><span>Costuma vir a cada ${every} dias e a última vez foi há ${sinceLast} dias.</span>
@@ -2233,18 +2246,27 @@ function vClient(id, q) {
         if (v === null) return;
         c.notes = v.trim(); save(); toast('Observação salva ✓'); render();
       };
-      $('#pay-all', el) && ($('#pay-all', el).onclick = () => paySheet({ total: st.owes }, `${c.name} — tudo que está devendo`, (v, m) => {
+      // Receber: primeiro o que já venceu (mais antigo antes); o que passar disso adianta as parcelas que ainda vão vencer
+      const all = round2(st.owes + toCome);
+      $('#pay-all', el) && ($('#pay-all', el).onclick = () => paySheet({ total: all }, `${c.name} — ${st.owes > 0 ? 'o que está devendo' : 'parcelas a vencer'}`, (v, m) => {
         let rest = v;
         for (const { it } of due) {
           const part = Math.min(rest, leftOf(it));
           if (part > 0) { addPayment(it, part, m); rest = round2(rest - part); }
           if (it.status === 'marcado' && isPaid(it) && isPast(it)) it.status = 'feito';
         }
+        if (rest > 0) {
+          const open = [...new Map(db.sales.filter(x => x.clientId === id && x.plan?.dates?.length && leftOf(x) > 0).map(x => [orderKey(x), x])).values()]
+            .map(orderOf).sort((a, b) => (nextInstallment(a)?.date || '').localeCompare(nextInstallment(b)?.date || ''));
+          for (const o of open) { if (rest <= 0) break; const part = Math.min(rest, o.left); payOrder(o, part, m); rest = round2(rest - part); }
+        }
         save();
-        const left = clientOwes(id);
-        toast(left > 0 ? `Recebido ${brl(v)} ✓ Falta ${brl(left)}` : `Tudo pago ✓ (${PAY[m]})`);
+        const left = clientOwes(id), later = clientToCome(id), nx = nextDueOf(id);
+        toast(left > 0 ? `Recebido ${brl(v)} ✓ Falta ${brl(left)}`
+          : later > 0 ? `Em dia ✓ · ainda faltam ${brl(later)} em parcelas${nx ? ` (próxima ${fmtShort(nx).slice(0, 5)})` : ''}`
+          : `Tudo pago ✓ (${PAY[m]})`);
         render();
-      }));
+      }, st.owes > 0 ? st.owes : toCome, st.owes > 0 && toCome > 0 ? [['Só o que venceu', st.owes], ['Quitar tudo', all]] : []));
     },
   };
 }
