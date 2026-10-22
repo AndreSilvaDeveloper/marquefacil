@@ -309,6 +309,11 @@ function addPayment(x, v, m, d = today()) {
     addPayment.t = setTimeout(() => toast('💬 A cliente recebe o recibo no WhatsApp'), 2300);
   }
 }
+// Horário: recebeu mais do que faltava (ex.: fez algo a mais) → o valor do serviço sobe junto
+function payAppt(a, v, m) {
+  if (a.price > 0 && v > leftOf(a)) a.price = round2(paidOf(a) + v);
+  addPayment(a, v, m);
+}
 function clearPayments(x) { x.payments = []; x.paid = false; }
 function refreshPaid(x) { if (x.payments?.length) x.paid = leftOf(x) === 0; } // depois de mudar o valor
 const methodsOf = x => [...new Set(paymentsOf(x).map(p => PAY[p.m]).filter(Boolean))].join(' + ');
@@ -396,7 +401,8 @@ function payBadge(x, dueWord = 'Não pago') {
 }
 
 // Janela "Receber pagamento": quanto recebeu agora e como
-function paySheet(x, title, onDone, suggest = 0, quick = []) {
+// raise: o que é (ex.: 'do serviço') quando dá para receber mais do que falta — aí o valor aumenta (quem chama ajusta)
+function paySheet(x, title, onDone, suggest = 0, quick = [], { raise = '' } = {}) {
   const total = valueOf(x), left = leftOf(x) || total;
   let method = '';
   const bg = document.createElement('div');
@@ -408,7 +414,7 @@ function paySheet(x, title, onDone, suggest = 0, quick = []) {
     <div class="field"><label for="ps-v">Quanto recebeu agora?</label>
       <div class="money"><input type="text" id="ps-v" inputmode="numeric" value="${moneyVal(suggest || left)}"></div>
       ${quick.length ? `<div class="chips" id="ps-q" style="margin-top:.5rem">${quick.map(([t, v]) => `<button type="button" class="chip" data-v="${v}">${esc(t)} · ${brl(v)}</button>`).join('')}</div>` : ''}
-      <small class="hint">Se ela pagou só uma parte, troque o valor.</small></div>
+      <small class="hint">${raise ? 'Se ela pagou outro valor (menos ou mais), troque aqui.' : 'Se ela pagou só uma parte, troque o valor.'}</small></div>
     <div class="field"><span class="lbl">Como pagou?</span>
       <div class="paygrid" id="ps-m">${Object.entries(PAY).map(([k, n]) => `<button type="button" data-m="${k}">${n}</button>`).join('')}</div></div>
     <div id="ps-err"></div>
@@ -430,8 +436,11 @@ function paySheet(x, title, onDone, suggest = 0, quick = []) {
   $('#ps-ok', bg).onclick = () => {
     const v = parseMoney($('#ps-v', bg).value);
     if (!(v > 0)) return err('Escreva quanto recebeu. Exemplo: 50,00');
-    if (total > 0 && v > left + 0.004) return err(`É mais do que falta (${brl(left)}).`);
     if (!method) return err('Toque em Pix, Dinheiro ou Cartão.');
+    if (total > 0 && v > left + 0.004) {
+      if (!raise) return err(`É mais do que falta (${brl(left)}).`);
+      if (!confirm(`Ela pagou ${brl(v)}, mas faltava ${brl(left)}.\n\nO valor ${raise} passa de ${brl(total)} para ${brl(round2(total + v - left))}. Confirmar?`)) return;
+    }
     close();
     onDone(v, method);
   };
@@ -1600,7 +1609,7 @@ function vAppt(id) {
       });
       $('#later', el) && ($('#later', el).onclick = () => upd(() => (a.priceLater = !a.priceLater), () => (a.priceLater ? 'Valor fica para avaliar na hora' : 'Pronto')));
       $('#receive', el) && ($('#receive', el).onclick = () => paySheet(a, `${clientName(a.clientId)} — ${a.service || 'Serviço'}`, (v, m) =>
-        upd(() => addPayment(a, v, m), () => (isPaid(a) ? `Pago ✓ (${PAY[m]})` : `Recebido ${brl(v)} ✓ Falta ${brl(leftOf(a))}`))));
+        upd(() => payAppt(a, v, m), () => (isPaid(a) ? `Pago ✓ (${PAY[m]})` : `Recebido ${brl(v)} ✓ Falta ${brl(leftOf(a))}`)), 0, [], { raise: 'do serviço' }));
       // Receber serviço + produtos de uma vez: o valor quita primeiro o serviço, depois os produtos
       $('#receive-all', el) && ($('#receive-all', el).onclick = () => {
         const items = [a, ...salesOfAppt(a)].filter(x => leftOf(x) > 0);
@@ -1614,8 +1623,11 @@ function vAppt(id) {
       });
       $('#unpay', el) && ($('#unpay', el).onclick = () => confirm('Apagar os pagamentos lançados neste horário?') && upd(() => clearPayments(a), 'Pagamento desfeito'));
       // pré-reserva: recebeu o sinal (ou confirma sem) → vira confirmado; o servidor manda a confirmação
-      $('#pre-pay', el) && ($('#pre-pay', el).onclick = () => paySheet({ total: depositOf(a) || 0 }, `Sinal — ${clientName(a.clientId)}${a.service ? ' · ' + a.service : ''}`, (v, m) =>
-        upd(() => { addPayment(a, v, m); a.status = 'marcado'; }, () => `Sinal recebido ✓ Horário confirmado${client(a.clientId)?.phone ? ' — ela recebe a confirmação' : ''}`)));
+      // o sinal vem preenchido, mas ela pode ter pago mais: o que passar do sinal já abate do serviço
+      const dep = depositOf(a);
+      $('#pre-pay', el) && ($('#pre-pay', el).onclick = () => paySheet(a, `Sinal — ${clientName(a.clientId)}${a.service ? ' · ' + a.service : ''}`, (v, m) =>
+        upd(() => { payAppt(a, v, m); a.status = 'marcado'; }, () => `${dep && v > dep + 0.004 ? `Recebido ${brl(v)}` : 'Sinal recebido'} ✓ Horário confirmado${leftOf(a) > 0 ? ` · falta ${brl(leftOf(a))}` : ''}${client(a.clientId)?.phone ? ' — ela recebe a confirmação' : ''}`),
+        dep || leftOf(a), [], { raise: 'do serviço' }));
       $('#pre-ok', el) && ($('#pre-ok', el).onclick = () => confirm('Confirmar o horário sem o sinal?') && upd(() => (a.status = 'marcado'), 'Horário confirmado ✓'));
       $('#accept', el) && ($('#accept', el).onclick = () => confirmSheet(a, v => { decide(a, true, v); render(); }));
       $('#decline', el) && ($('#decline', el).onclick = () => { if (decide(a, false)) render(); });
@@ -2421,10 +2433,10 @@ function bindQuickPay(el) {
       if (it) {
         const what = `${clientName(it.clientId)} — ${k === 'a' ? (it.service || 'Serviço') : it.product} (${fmtShort(it.date)})`;
         paySheet(it, what, (v, m) => {
-          addPayment(it, v, m);
+          if (k === 'a') payAppt(it, v, m); else addPayment(it, v, m);
           if (k === 'a' && it.status === 'marcado' && isPast(it)) it.status = 'feito';
           save(); toast(isPaid(it) ? `Pago ✓ (${PAY[m]})` : `Recebido ${brl(v)} ✓ Falta ${brl(leftOf(it))}`); render();
-        });
+        }, 0, [], { raise: k === 'a' ? 'do serviço' : '' });
       }
       return;
     }
