@@ -3754,10 +3754,19 @@ function vMore() {
   const steps = readySteps();
   const stepsDone = steps.filter(x => x[1]).length;
   const activePkgs = db.packages.filter(pkgActive).length;
+  const toRemind = tom.filter(x => !x.remindedAt).length, pres = preAppts().length, bdays = bdaysSoon().length;
   // item do menu: abre uma página; o número em destaque quando pede atenção
   const item = (href, icon, title, sub = '', n = 0, alert = false) => `
     <a class="menu-item" href="${href}"><span class="mi-icon">${icon}</span>
       <span class="mi-text"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${n ? `<i class="mi-badge ${alert ? 'alert' : ''}">${n}</i>` : ''}<span class="mi-go">›</span></a>`;
+  // "Para fazer": só o que tem alguma coisa esperando (sem nada, o bloco some)
+  const todo = [
+    pend && item('#/pedidos', '⏳', 'Pedidos para confirmar', 'Pedidos que chegaram pelo link', pend, true),
+    tom.length && item('#/lembretes', '💬', 'Lembrar clientes de amanhã', `${tom.length} ${tom.length === 1 ? 'horário' : 'horários'} amanhã`, toRemind),
+    pres && item('#/buscar?k=prereservas', '💳', 'Pré-reservas', 'Esperando o sinal', pres, true),
+    owing && item('#/buscar?k=devendo', '💸', 'Quem deve', `${owing} ${owing === 1 ? 'cliente' : 'clientes'}`, owing, true),
+    bdays && item('#/buscar?k=aniver', '🎂', 'Aniversários', 'Próximos 7 dias', bdays),
+  ].filter(Boolean);
   return {
     title: 'Mais', tab: 'mais',
     html: `
@@ -3766,22 +3775,20 @@ function vMore() {
         <div class="grow">
           <b style="font-size:1.15rem">${esc(session.tenant.name)}</b>
           <div class="muted">${esc(session.user.name)} · ${esc(session.user.email)}</div>
+          <div class="muted" style="font-size:.85rem">Minha conta: nome do salão e senha</div>
           <div id="sync" class="sync"></div>
         </div><span class="mi-go">›</span>
       </a>
 
       ${stepsDone < steps.length ? `<div class="menu" style="margin-bottom:.4rem">${item('#/configurar', '🚀', 'Primeiros passos', `${stepsDone} de ${steps.length} prontos · o que falta configurar`)}</div>` : ''}
 
+      ${todo.length ? `<h2>Para fazer</h2>
+      <div class="menu">${todo.join('')}</div>` : ''}
+
       <h2>Dia a dia</h2>
       <div class="menu">
         ${item('#/buscar', '🔍', 'Buscar', 'Cliente, horário, venda, dia…')}
         ${item('#/relatorio', '📊', 'Relatórios', 'Resumo do período: serviços, clientes, produtos · PDF')}
-        ${item('#/pedidos', '⏳', 'Pedidos para confirmar', pend ? 'Pedidos que chegaram pelo link' : 'Nenhum esperando', pend, true)}
-        ${item('#/lembretes', '💬', 'Lembrar clientes de amanhã', tom.length ? `${tom.length} ${tom.length === 1 ? 'horário' : 'horários'} amanhã` : 'Nada marcado amanhã', tom.filter(x => !x.remindedAt).length)}
-        ${item('#/buscar?k=prereservas', '💳', 'Pré-reservas', 'Esperando o sinal', preAppts().length, true)}
-        ${item('#/buscar?k=devendo', '💸', 'Quem deve', owing ? `${owing} ${owing === 1 ? 'cliente' : 'clientes'}` : 'Ninguém devendo', owing, true)}
-        ${item('#/buscar?k=aniver', '🎂', 'Aniversários', 'Próximos 7 dias', bdaysSoon().length)}
-        ${item('#/despesa', '➖', 'Lançar despesa', 'Aluguel, produtos, contas…')}
       </div>
 
       <h2>Meu salão</h2>
@@ -3789,24 +3796,14 @@ function vMore() {
         ${item('#/itens/services', '💇', 'Serviços', `${db.services.length} ${db.services.length === 1 ? 'serviço' : 'serviços'}`)}
         ${item('#/itens/products', '🛍️', 'Produtos', `${db.products.length} ${db.products.length === 1 ? 'produto' : 'produtos'}${low ? ` · <span style="color:var(--bad)">⚠️ ${low} acabando</span>` : ''}`)}
         ${item('#/pacotes', '📦', 'Pacotes (cronogramas)', activePkgs ? `${activePkgs} em andamento` : 'Nenhum em andamento')}
-      </div>
-
-      <h2>Agendamento pelo link</h2>
-      <div class="menu">
-        ${item('#/link', '🔗', 'Link para as clientes', salon ? (salon.enabled ? '<span style="color:var(--ok)">● Ligado</span> · copiar, QR code, mandar' : '○ Desligado') : 'Clientes pedem horário pela internet')}
         ${item('#/link?p=horarios', '🕐', 'Dias e horários de atendimento', salon?.days ? esc(hoursSummary(salon.days)) : 'Dias, almoço, folgas e feriados')}
       </div>
 
-      <h2>Pagamento online</h2>
+      <h2>Clientes pelo celular</h2>
       <div class="menu">
+        ${item('#/link', '🔗', 'Link para as clientes', salon ? (salon.enabled ? '<span style="color:var(--ok)">● Ligado</span> · copiar, QR code, mandar' : '○ Desligado') : 'Clientes pedem horário pela internet')}
+        ${item('#/whatsapp', '📱', 'WhatsApp automático', '<span id="wa-status">Conexão, o que mandar e textos das mensagens</span>')}
         ${item('#/pagamentos', '🏦', 'Receber pelo banco (Asaas)', '<span id="pay-status">Sinal, serviços e compras pela página da cliente</span>')}
-      </div>
-
-      <h2>WhatsApp automático</h2>
-      <div class="menu">
-        ${item('#/whatsapp', '📱', 'Conexão', '<span id="wa-status">…</span>')}
-        ${item('#/whatsapp?p=mandar', '✅', 'O que mandar', 'Confirmação, lembrete, cobranças, Pix…')}
-        ${item('#/whatsapp?p=textos', '✏️', 'Textos das mensagens', 'Escrever do seu jeito')}
       </div>
 
       <h2>Configurações</h2>
@@ -3820,7 +3817,6 @@ function vMore() {
 
       <h2>Conta</h2>
       <div class="menu">
-        ${item('#/conta', '👤', 'Minha conta', 'Nome do salão, seu nome e senha')}
         ${item('#/ajuda', '❓', 'Ajuda', 'Perguntas mais comuns')}
         <button type="button" class="menu-item danger" id="logout"><span class="mi-icon">🚪</span><span class="mi-text"><b>Sair da conta</b><small>Neste aparelho</small></span></button>
       </div>
@@ -3836,7 +3832,7 @@ function vMore() {
         const w = $('#wa-status', el);
         if (!w) return;
         w.innerHTML = st.state === 'open' ? `<span style="color:var(--ok)">● Conectado</span>${st.number ? ' · +' + esc(st.number) : ''}`
-          : st.available === false ? 'Ainda não disponível' : '○ Não conectado';
+          : st.available === false ? 'Ainda não disponível' : '○ Não conectado · toque para conectar';
       }).catch(() => { const w = $('#wa-status', el); if (w) w.textContent = 'Conectar o WhatsApp do salão'; });
       $('#logout', el).onclick = async () => {
         const n = pendingChanges().length;
@@ -4985,7 +4981,11 @@ function vWhats(_, q = {}) {
       const connected = st.state === 'open';
       const kinds = { confirm: 'Confirmação', change: 'Horário mudou', saledue: 'Venda: vencimento', salemonth: 'Venda: resumo do mês', salenew: 'Venda: comprovante', paid: 'Recibo de pagamento', reminder: 'Lembrete', owner: 'Aviso para você', decline: 'Pedido recusado', prereserve: 'Pré-reserva', rescheduleNo: 'Remarcação recusada', access: 'Link "meus horários"', test: 'Teste' };
       const status = { sent: '<span class="badge ok">Enviada</span>', error: '<span class="badge bad">Falhou</span>', skipped: '<span class="badge warn">Sem telefone</span>', sending: '<span class="badge">Enviando</span>' };
+      // as três partes trocam sem encher o "voltar"
+      box.onclick = e => { const t = e.target.closest('a[data-wtab]'); if (t) { e.preventDefault(); replaceTo(t.getAttribute('href')); } };
       box.innerHTML = `
+        <div class="chips" style="margin-bottom:1rem">${[['', '📱 Conexão'], ['mandar', '✅ O que mandar'], ['textos', '✏️ Textos']]
+          .map(([k, n]) => `<a class="chip ${part === k ? 'on' : ''}" href="#/whatsapp${k ? '?p=' + k : ''}" data-wtab>${n}</a>`).join('')}</div>
         ${part && !connected ? '<div class="card pending-banner slim" style="margin-bottom:1rem"><a href="#/whatsapp" style="color:inherit">⚠️ O WhatsApp não está conectado. <b>Conectar ›</b></a></div>' : ''}
         ${part ? '' : `<div class="card">
           ${connected
@@ -4999,9 +4999,6 @@ function vWhats(_, q = {}) {
                <button class="btn" id="qr" style="margin-top:.6rem">📷 Conectar com QR code (outro aparelho)</button>
                <div id="connect" style="margin-top:1rem"></div>`}
         </div>
-        <div class="menu" style="margin-top:1rem">
-          <a class="menu-item" href="#/whatsapp?p=mandar"><span class="mi-icon">✅</span><span class="mi-text"><b>O que mandar</b><small>Confirmação, lembrete, cobranças, Pix…</small></span><span class="mi-go">›</span></a>
-          <a class="menu-item" href="#/whatsapp?p=textos"><span class="mi-icon">✏️</span><span class="mi-text"><b>Textos das mensagens</b><small>Escrever do seu jeito</small></span><span class="mi-go">›</span></a>
         </div>`}
 
         <div class="form">
