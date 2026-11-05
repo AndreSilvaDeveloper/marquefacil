@@ -1007,3 +1007,18 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 4px var(--brand-so
 @keyframes fade-in { from { background: rgba(0,0,0,0); } }
 @keyframes sheet-up { from { transform: translateY(40%); opacity: .4; } }
 @keyframes page-in { from { opacity: 0; transform: translateY(8px); } }
+
+/* Dinheiro: Saiu e Lucro lado a lado, logo abaixo do que entrou */
+.ex-duo { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); }
+.ex-duo a { display: block; padding: .7rem 1rem; text-decoration: none; color: inherit; min-width: 0; }
+.ex-duo a + a { border-left: 1px solid var(--line); }
+.ex-duo span { display: block; color: var(--muted); font-weight: 600; font-size: .88rem; }
+.ex-duo b { font-size: 1.15rem; overflow-wrap: anywhere; }
+.ex-duo a.on, .ex-duo a:active { background: var(--brand-soft); }
+
+/* Formulário (novo horário, venda): a barra de baixo sai e o botão de salvar fica colado no fim da tela */
+body.formpage #tabs { display: none; }
+body.formpage { padding-bottom: env(safe-area-inset-bottom); }
+body.formpage .savebar { bottom: 0; padding-bottom: calc(.7rem + env(safe-area-inset-bottom)); }
+body.formpage #toast { bottom: calc(8.5rem + env(safe-area-inset-bottom)); }
+.dayquick { margin-top: .5rem; margin-bottom: 0; }

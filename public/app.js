@@ -522,6 +522,7 @@ function render() {
   $$('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === v.tab));
   // entrada suave só quando muda de página (não a cada redesenho da mesma)
   const page = parts.slice(0, 2).join('/');
+  document.body.classList.toggle('formpage', !!main.querySelector('.savebar')); // formulário: a barra de baixo dá lugar ao botão de salvar
   if (page !== render.page) { render.page = page; main.classList.add('enter'); } else main.classList.remove('enter');
   if (curHash() !== lastHash) window.scrollTo(0, 0);
   lastHash = curHash();
@@ -1160,7 +1161,7 @@ function vApptForm(_, q) {
           <div id="c-info"></div>
         </div>
 
-        <div class="field">
+        <div class="field" id="phone-field">
           <label for="f-phone">Telefone / WhatsApp <span class="opt">(se quiser)</span></label>
           <input type="tel" id="f-phone" value="${esc(client(a.clientId)?.phone || '')}" placeholder="(11) 99999-9999">
         </div>
@@ -1172,6 +1173,7 @@ function vApptForm(_, q) {
             <label class="btn calbtn" aria-label="Abrir calendário">📆<input type="date" id="f-date" value="${a.date}"></label>
           </div>
           <small class="hint" id="date-label"></small>
+          <div class="chips hscroll dayquick" id="daychips"></div>
         </div>
 
         <div class="field">
@@ -1298,6 +1300,10 @@ function vApptForm(_, q) {
         const closed = v && salonHours()?.days && v >= today() && !salonHours().days[toDate(v).getDay()];
         $('#date-label', el).textContent = v ? cap(fmtDate(v, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))
           + (v === today() ? ' (hoje)' : v === addDays(today(), 1) ? ' (amanhã)' : '') + (closed ? ' · dia fechado no seu horário (pode agendar mesmo assim)' : '') : '';
+        // atalhos: os próximos dias abertos, para não precisar digitar a data
+        const open = salonHours()?.days, wk = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+        $('#daychips', el).innerHTML = Array.from({ length: 8 }, (_, i) => addDays(today(), i)).filter(d => !open || open[toDate(d).getDay()])
+          .map(d => `<button type="button" class="chip ${d === v ? 'on' : ''}" data-day="${d}">${d === today() ? 'Hoje' : d === addDays(today(), 1) ? 'Amanhã' : `${wk[toDate(d).getDay()]} ${d.slice(8)}`}</button>`).join('');
       };
       const refreshTimes = () => { $('#busy', el).innerHTML = busyList(iDate.value, a.id); checkConflict(); paintRep(); paintDay(); paintSum(); };
 
@@ -1412,6 +1418,10 @@ function vApptForm(_, q) {
       });
       iDText.addEventListener('blur', () => { const d = parseDateBR(iDText.value); if (d) iDText.value = fmtShort(d); });
       iDate.addEventListener('change', () => { if (iDate.value) iDText.value = fmtShort(iDate.value); refreshTimes(); });
+      $('#daychips', el).addEventListener('click', e => {
+        const b = e.target.closest('[data-day]');
+        if (b) { iDate.value = b.dataset.day; iDText.value = fmtShort(b.dataset.day); refreshTimes(); }
+      });
       maskTime(iTime);
       iTime.addEventListener('input', () => { checkConflict(); paintSum(); });
       $('#free', el).addEventListener('click', e => {
@@ -1419,8 +1429,12 @@ function vApptForm(_, q) {
         if (c) { iTime.value = c.dataset.t; checkConflict(); paintSum(); }
       });
       // Clientes recentes e informações da cliente
+      // cliente já cadastrada com telefone: o campo some e o número aparece numa linha (toque em "mudar" para trocar)
+      let phoneOpen = false;
       const paintClient = () => {
         const c = findByName(db.clients, iClient.value);
+        const known = !phoneOpen && c?.phone && $('#f-phone', el).value === c.phone;
+        $('#phone-field', el).hidden = !!known;
         if (!c) { $('#c-info', el).innerHTML = ''; return; }
         const st = clientStats(c);
         const bits = [];
@@ -1428,8 +1442,13 @@ function vApptForm(_, q) {
         const line = [st.last ? `Última vez ${daysAgo(st.last.date)}${st.last.service ? ' · ' + esc(st.last.service) : ''}` : 'Primeira vez',
           st.owes > 0 ? `<b style="color:var(--warn)">deve ${brl(st.owes)}</b>` : ''].filter(Boolean).join(' · ');
         bits.unshift(`<small class="hint">${line}</small>`);
+        if (known) bits.push(`<small class="hint">📱 ${esc(c.phone)} · <button type="button" class="linkish" id="ph-edit">mudar o telefone</button></small>`);
         $('#c-info', el).innerHTML = bits.join('');
       };
+      $('#c-info', el).addEventListener('click', e => {
+        if (e.target.id !== 'ph-edit') return;
+        phoneOpen = true; paintClient(); $('#f-phone', el).focus();
+      });
       iClient.addEventListener('input', () => { paintClient(); paintSum(); });
       iClient.addEventListener('change', () => { paintClient(); paintSum(); });
       $('#svc-chips', el)?.addEventListener('click', e => {
@@ -3619,11 +3638,11 @@ function vFin(_, q) {
           ${tabs.map(([k, , h]) => `<div data-pane="${k}" ${k === on ? '' : 'hidden'}>${h}</div>`).join('')}`;
       })()}
       ${!tips.length && !received.length ? '<div class="empty">Nenhum dinheiro lançado neste mês ainda.</div>' : ''}
-      ${received.length || expenses.length ? `<h2>📤 Levar os números</h2>
-        <a class="btn" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(shareText(diff, prev))}">💬 Enviar resumo pelo WhatsApp</a>
-        <button type="button" class="btn" id="fin-csv" style="margin-top:.6rem">📊 Baixar planilha do mês</button>
-        <a class="btn" href="#/relatorio?de=${m}-01&ate=${m}-${pad(new Date(y, mo, 0).getDate())}" style="margin-top:.6rem">📄 Relatório completo do mês (PDF)</a>` : ''}
-      ${goal ? '' : `<button type="button" class="btn small" data-goal style="margin:1rem auto 0">🎯 Definir uma meta para o mês</button>`}`;
+      ${received.length || expenses.length || !goal ? `<h2>📤 Levar os números</h2><div class="menu">
+        ${received.length || expenses.length ? `<a class="menu-item" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(shareText(diff, prev))}"><span class="mi-icon">💬</span><span class="mi-text"><b>Enviar resumo pelo WhatsApp</b></span><span class="mi-go">›</span></a>
+        <button class="menu-item" type="button" id="fin-csv"><span class="mi-icon">📊</span><span class="mi-text"><b>Baixar planilha do mês</b></span><span class="mi-go">›</span></button>
+        <a class="menu-item" href="#/relatorio?de=${m}-01&ate=${m}-${pad(new Date(y, mo, 0).getDate())}"><span class="mi-icon">📄</span><span class="mi-text"><b>Relatório completo (PDF)</b></span><span class="mi-go">›</span></a>` : ''}
+        ${goal ? '' : `<button class="menu-item" type="button" data-goal><span class="mi-icon">🎯</span><span class="mi-text"><b>Definir uma meta para o mês</b></span><span class="mi-go">›</span></button>`}</div>` : ''}`;
   };
 
   // Caixa de hoje: o que entrou hoje, separado por forma (o "Dinheiro" é o que tem na gaveta)
@@ -3633,6 +3652,7 @@ function vFin(_, q) {
     ${todayPays.length ? `<div class="paysplit">${Object.entries(PAY).map(([k, n]) => `<span><small>${n}</small><b>${brl(sumBy(todayPays.filter(p => p.m === k), p => p.v))}</b></span>`).join('')}</div>
     <small class="muted">${plural(todayPays.length, 'pagamento', 'pagamentos')} hoje · 💵 em dinheiro é o que deve ter na gaveta</small>` : '<small class="muted">Nenhum pagamento recebido hoje ainda.</small>'}</a>`;
 
+  const row = (k, n, v, c) => `<a class="ex-row ${f === k ? 'on' : ''}" href="${url({ f: f === k ? '' : k, pm: '' })}" data-f><span>${n}</span><b style="${c ? `color:${c}` : ''}">${v}</b><i>${f === k ? '▾' : '›'}</i></a>`;
   return {
     title: 'Dinheiro', tab: 'financeiro',
     html: `
@@ -3641,23 +3661,23 @@ function vFin(_, q) {
         <label class="mpick"><b>${monthLabel}</b><em aria-hidden="true">📆</em><input type="month" id="mpick" value="${m}" aria-label="Escolher o mês"></label>
         <a class="btn small" href="${url({ m: shift(1) })}" data-f aria-label="Próximo mês">›</a>
       </div>
-      <div class="finactions">
-        <a class="btn small ok" href="${url({ f: 'falta', pm: '', dia: '' })}" data-f>💰 Receber</a>
-        <a class="btn small" href="#/despesa">➖ Despesa</a>
-        <a class="btn small" href="#/venda">🛍️ Venda</a>
-      </div>
+      ${isNow ? '' : `<a class="btn small" href="${url({ m: today().slice(0, 7), dia: '' })}" data-f style="margin:-.3rem 0 .8rem">↩ Voltar para este mês</a>`}
       ${cashBox}
       <div class="card extrato">
         <a class="ex-top ${f === 'entrou' ? 'on' : ''}" href="${url({ f: f === 'entrou' ? '' : 'entrou', pm: '' })}" data-f>
           <span>Entrou no mês</span><b>${brl(recTotal)}</b>
           <small>${received.length ? `Serviços ${brl(recServ)} · Produtos ${brl(recProd)}` : 'Nenhum pagamento ainda'}</small></a>
-        ${[['saiu', '➖ Saiu (despesas)', brl(spent), 'var(--bad)'],
-          ['lucro', '📈 Lucro do mês', brl(profit), profit >= 0 ? 'var(--ok)' : 'var(--bad)'],
-          ...(titheOn ? [['dizimo', `🙏 Dízimo (${TITHE_PCT}%)`, brl(tithe), '']] : []),
-          ['falta', '💸 Falta receber', brl(owed + owedOld), owed + owedOld ? 'var(--warn)' : ''],
-          ['vai', '📅 Ainda vai entrar', brl(expected), ''],
-          ...(noPrice.length ? [['semvalor', '✏️ Sem valor', plural(noPrice.length, 'atendimento', 'atendimentos'), 'var(--warn)']] : []),
-        ].map(([k, n, v, c]) => `<a class="ex-row ${f === k ? 'on' : ''}" href="${url({ f: f === k ? '' : k, pm: '' })}" data-f><span>${n}</span><b style="${c ? `color:${c}` : ''}">${v}</b><i>${f === k ? '▾' : '›'}</i></a>`).join('')}
+        <div class="ex-duo">
+          <a class="ex-cell ${f === 'saiu' ? 'on' : ''}" href="${url({ f: f === 'saiu' ? '' : 'saiu', pm: '' })}" data-f><span>➖ Saiu</span><b style="color:var(--bad)">${brl(spent)}</b></a>
+          <a class="ex-cell ${f === 'lucro' ? 'on' : ''}" href="${url({ f: f === 'lucro' ? '' : 'lucro', pm: '' })}" data-f><span>📈 Lucro</span><b style="color:${profit >= 0 ? 'var(--ok)' : 'var(--bad)'}">${brl(profit)}</b></a>
+        </div>
+        ${titheOn ? row('dizimo', `🙏 Dízimo (${TITHE_PCT}%)`, brl(tithe), '') : ''}
+      </div>
+      <div class="card extrato also">
+        <div class="also-h">Ainda para receber</div>
+        ${row('falta', '💸 Falta receber', brl(owed + owedOld), owed + owedOld ? 'var(--warn)' : '')}
+        ${row('vai', '📅 Ainda vai entrar', brl(expected), '')}
+        ${noPrice.length ? row('semvalor', '✏️ Sem valor', plural(noPrice.length, 'atendimento', 'atendimentos'), 'var(--warn)') : ''}
       </div>
       <div id="fin-detail">${views[f] ? views[f]() : overview()}</div>`,
     bind(el) {
@@ -3683,7 +3703,7 @@ function vFin(_, q) {
         if (!a) return;
         e.preventDefault();
         replaceTo(a.getAttribute('href'));
-        if (a.classList.contains('ex-row') || a.classList.contains('ex-top') || a.classList.contains('cbar')) setTimeout(() => $('#fin-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+        if (a.classList.contains('ex-row') || a.classList.contains('ex-top') || a.classList.contains('ex-cell') || a.classList.contains('cbar')) setTimeout(() => $('#fin-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
       });
       // campos de escolher: números do mês, filtro do "Entrou", como ver o "Falta receber", mês
       $('#ana-sel', el) && ($('#ana-sel', el).onchange = e => {
