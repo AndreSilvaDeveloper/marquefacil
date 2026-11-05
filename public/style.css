@@ -910,3 +910,8 @@ details.ready { padding: .7rem 1rem; }
 
 .freetimes { margin-top: .35rem; margin-bottom: .2rem; }
 .freetimes .chip { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.cfilters { display: flex; gap: .5rem; margin: 0 0 .7rem; }
+.cfilters select { flex: 1 1 0; min-width: 0; min-height: 2.8rem; padding: .3rem .6rem; font-weight: 600; }
+.cfilters select.on { border-color: var(--brand); color: var(--brand); }
+#none .btn { display: flex; width: fit-content; }

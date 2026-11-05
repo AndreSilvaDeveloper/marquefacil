@@ -1983,7 +1983,7 @@ function clientWaText(c, st, f) {
 // Linha enxuta da cliente: nome, uma informação curta e no máximo um aviso. 💬 pequeno à direita.
 function clientRow(c, st = clientStats(c), f = '') {
   const info = st.next
-    ? `📅 ${st.next.status === 'pendente' ? 'Pedido' : 'Marcada'}: ${esc(fmtDate(st.next.date, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', '').replace('.', ''))} ${st.next.time}`
+    ? `${st.next.status === 'pendente' ? '⏳ Pedido:' : '📅'} ${st.next.date <= addDays(today(), 1) ? dayName(st.next.date) : esc(fmtDate(st.next.date, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', '').replace('.', ''))} às ${st.next.time}`
     : st.last ? `${cap(daysAgo(st.last.date))}${st.last.service ? ' · ' + esc(st.last.service) : ''}` : 'Ainda não veio';
   const bd = bdayIn(c.birthday);
   const note = st.owes > 0 ? `<em class="warn">Deve ${brl(st.owes)}</em>`
@@ -2092,15 +2092,17 @@ function vClients(_, q) {
         return !k || cnt || f === k ? `<a class="chip ${f === k ? 'on' : ''}" href="${url({ f: k })}" data-f>${n} <small>${cnt}</small></a>` : '';
       }).join('')}</div>
       ${hints[f] ? `<p class="muted" style="margin:0 0 .6rem;font-size:.9rem">${hints[f]}</p>` : ''}
-      ${db.services.length ? `<div class="svcfilter"><select id="svcf" aria-label="Fez o serviço">
-        <option value="">💇 Fez qual serviço? (todos)</option>
-        ${[...db.services].sort(byName).map(x => `<option value="${esc(x.name)}" ${x.name === sv ? 'selected' : ''}>💇 Fez ${esc(x.name)}</option>`).join('')}</select></div>` : ''}
+      <div class="cfilters">
+        ${db.services.length ? `<select id="svcf" aria-label="Fez o serviço" class="${sv ? 'on' : ''}">
+        <option value="">💇 Por serviço</option>
+        ${[...db.services].sort(byName).map(x => `<option value="${esc(x.name)}" ${x.name === sv ? 'selected' : ''}>💇 Fez ${esc(x.name)}</option>`).join('')}</select>` : ''}
+        <select id="ord" aria-label="Ordem da lista">${[['nome', 'A–Z'], ['ultima', 'Última visita'], ['visitas', 'Quem mais vem']].map(([k, n]) => `<option value="${k}" ${order === k ? 'selected' : ''}>↕ ${n}</option>`).join('')}</select></div>
       ${sv ? `<p class="muted" style="margin:0 0 .5rem;font-size:.9rem"><b>${list.length}</b> ${list.length === 1 ? 'cliente já fez' : 'clientes já fizeram'} ${esc(sv)}. Toque em 📣 para mandar uma mensagem para elas.</p>` : ''}
-      <div class="sortrow">
-        ${(f || sv) && withPhone.length ? `<button type="button" class="btn small" id="bulk" style="white-space:nowrap">📣 Mensagem (${withPhone.length})</button>` : ''}
-        <select id="ord" aria-label="Ordem da lista" style="margin-left:auto;max-width:11rem">${[['nome', 'A–Z'], ['ultima', 'Última visita'], ['visitas', 'Quem mais vem']].map(([k, n]) => `<option value="${k}" ${order === k ? 'selected' : ''}>↕ ${n}</option>`).join('')}</select></div>` : ''}
+      ${(f || sv) && withPhone.length ? `<button type="button" class="btn small" id="bulk" style="margin-bottom:.8rem">📣 Mandar mensagem para ${withPhone.length === 1 ? 'ela' : `as ${withPhone.length}`}</button>` : ''}` : ''}
       <div class="list clist" id="list">${rows || (all.length ? '<div class="empty">Nenhuma cliente neste filtro.</div>' : '<div class="empty">Nenhuma cliente ainda.<br>Elas aparecem aqui sozinhas quando você agenda.</div>')}</div>
-      <div class="empty" id="none" hidden>Nenhuma cliente com esse nome.</div>`,
+      <div class="empty" id="none" hidden>Nenhuma cliente com esse nome${f || sv ? ' neste filtro' : ''}.
+        ${f || sv ? `<a class="btn small" href="${url({ f: '', sv: '' })}" data-f style="margin:.8rem auto 0">🔍 Procurar em todas</a>` : ''}
+        <a class="btn small main" id="add-typed" href="#/cliente-editar" style="margin:.6rem auto 0">+ Cadastrar</a></div>`,
     bind(el) {
       const search = () => {
         const n = norm($('#s', el).value);
@@ -2110,6 +2112,10 @@ function vClients(_, q) {
         $$('#list > .client-row', el).forEach(a => { const ok = a.dataset.name.includes(n) || (digits.length > 2 && a.dataset.name.includes(digits)); a.hidden = !ok; shown += ok; });
         $$('#list > .letter', el).forEach(h => (h.hidden = !!n));
         $('#none', el).hidden = !!shown || !list.length;
+        // não achou: cadastrar já com o que ela digitou (nome ou telefone)
+        const typed = $('#s', el).value.trim(), isPhone = digits.length >= 8 && !/[a-zà-ú]/i.test(typed);
+        $('#add-typed', el).textContent = typed ? `+ Cadastrar ${isPhone ? typed : `"${typed}"`}` : '+ Cadastrar';
+        $('#add-typed', el).href = '#/cliente-editar' + (typed ? `?${isPhone ? 'p' : 'n'}=${encodeURIComponent(typed)}` : '');
       };
       $('#s', el).addEventListener('input', search);
       if (clientsSearch) search();
@@ -2500,10 +2506,10 @@ function vClientForm(_, q) {
       <form class="form" id="f" autocomplete="off" novalidate>
         <div id="err"></div>
         <div class="field"><label for="n">Nome <em>*</em></label>
-          <input type="text" id="n" value="${esc(c?.name || '')}" autocapitalize="words"></div>
+          <input type="text" id="n" value="${esc(c?.name || (q.n ? q.n.replace(/(^|\s)\S/g, m => m.toUpperCase()) : ''))}" autocapitalize="words"></div>
         ${!c && 'contacts' in navigator && 'ContactsManager' in window ? '<button type="button" class="btn small" id="pick-contact" style="margin-bottom:1rem">📇 Pegar da agenda do celular</button>' : ''}
         <div class="field"><label for="p">Telefone / WhatsApp <span class="opt">(se quiser)</span></label>
-          <input type="tel" id="p" value="${esc(c?.phone ? fmtPhone(c.phone) : '')}" placeholder="(11) 99999-9999">
+          <input type="tel" id="p" value="${esc(c?.phone ? fmtPhone(c.phone) : q.p ? fmtPhone(q.p) : '')}" placeholder="(11) 99999-9999">
           <small class="hint" id="dup"></small></div>
         <div class="field"><span class="lbl">🎂 Aniversário <span class="opt">(se quiser — você recebe um aviso no dia)</span></span>
           <div class="row">
