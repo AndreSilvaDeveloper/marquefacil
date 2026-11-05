@@ -54,3 +54,16 @@ test('agenda pessoal: desligada não muda nada; ligada ocupa o horário no link 
   assert.ok(pushed.some(p => p.title === '📌 Em 10 min: Médico do Joãozinho' && /até 11:00/.test(p.body)));
   await app.close();
 });
+
+test('dízimo: vem desligado, liga e desliga sem mexer na meta', async () => {
+  const app = buildApp();
+  const call = client(app);
+  await call('POST', '/api/signup', { salonName: 'Studio Ana', name: 'Ana', email: 'ana@x.com', password: 'segredo1' });
+  assert.equal((await call('GET', '/api/settings')).body.finance.tithe, false);
+  await call('PUT', '/api/settings', { finance: { goal: 5000 } });
+  assert.equal((await call('PUT', '/api/settings', { finance: { tithe: true } })).body.finance.tithe, true);
+  const s = (await call('GET', '/api/settings')).body.finance;
+  assert.deepEqual(s, { goal: 5000, tithe: true });
+  assert.equal((await call('PUT', '/api/settings', { finance: { tithe: false } })).body.finance.tithe, false);
+  await app.close();
+});

@@ -471,7 +471,7 @@ function parseHash() {
 const routes = {
   agenda: vAgenda, buscar: vBuscar, clientes: vClients, cliente: vClient, 'cliente-editar': vClientForm,
   agendar: vApptForm, agendamento: vAppt, pedidos: vPedidos, despesa: vExpenseForm, lembretes: vLembretes, venda: (id, q) => (q.id ? (q.editar ? vSaleForm(id, q) : vSaleView(id, q)) : vSell(id, q)), financeiro: vFin, mais: vMore,
-  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, ajuda: vAjuda, aparelho: vAparelho, dados: vDados, configurar: vConfigurar, pacotes: vPacotes, relatorio: vRelatorio, pagamentos: vPagamentos, pessoal: vPessoal, agendapessoal: vAgendaPessoal, conta: vConta, pacote: vPackageForm,
+  itens: (kind, q) => (kind === 'products' ? vProducts(kind, q) : vServices(kind, q)), item: vItemForm, link: vLink, whatsapp: vWhats, avisos: vAvisos, ajuda: vAjuda, aparelho: vAparelho, dados: vDados, configurar: vConfigurar, pacotes: vPacotes, relatorio: vRelatorio, pagamentos: vPagamentos, pessoal: vPessoal, agendapessoal: vAgendaPessoal, dizimo: vDizimo, conta: vConta, pacote: vPackageForm,
 };
 
 let lastHash = '';
@@ -3159,6 +3159,7 @@ function vSaleForm(_, q) {
 /* =====================================================================
    FINANCEIRO
    ===================================================================== */
+const TITHE_PCT = 10;
 let finTab = 'dia'; // aba escolhida em "Números do mês"
 function vFin(_, q) {
   const m = q.m || today().slice(0, 7);
@@ -3190,6 +3191,12 @@ function vFin(_, q) {
   const byCat = Object.entries(expenses.reduce((t, e) => { const c = e.cat || 'Outros'; t[c] = (t[c] || 0) + e.amount; return t; }, {}))
     .sort((a, b) => b[1] - a[1]);
   const profit = round2(recTotal - spent);
+
+  // DÍZIMO (opcional, ligado em Mais → Dízimo): 10% do líquido do mês. O próprio dízimo lançado como despesa não diminui a conta.
+  const titheOn = !!salonHours()?.tithe;
+  const titheGiven = sumBy(expenses.filter(e => norm(`${e.cat} ${e.desc}`).includes('dizimo')), e => e.amount);
+  const titheBase = round2(recTotal - (spent - titheGiven));
+  const tithe = round2(Math.max(0, titheBase) * TITHE_PCT / 100);
 
   // FALTA RECEBER (do mês) e de meses anteriores
   const monthAppts = db.appts.filter(a => a.date.startsWith(m) && a.status !== 'cancelado' && a.status !== 'pendente');
@@ -3414,6 +3421,17 @@ function vFin(_, q) {
       </div></div>`;
   };
 
+  if (titheOn) views.dizimo = () => `<h2>🙏 Dízimo de ${monthLabel}</h2>
+      <div class="card statement">
+        <div class="line"><span class="grow">Entrou no mês</span><b style="color:var(--ok)">+ ${brl(recTotal)}</b></div>
+        <div class="line"><span class="grow">Saiu (despesas${titheGiven ? ', sem o dízimo' : ''})</span><b style="color:var(--bad)">− ${brl(round2(spent - titheGiven))}</b></div>
+        <div class="line sum"><b class="grow">Líquido do mês</b><b style="color:${titheBase >= 0 ? 'var(--ok)' : 'var(--bad)'}">${brl(titheBase)}</b></div>
+        <div class="line sum"><b class="grow">Dízimo (${TITHE_PCT}% do líquido)</b><b>${brl(tithe)}</b></div>
+        ${titheGiven ? `<div class="line"><span class="grow">Já lançado nas despesas</span><b>${brl(titheGiven)}</b></div>
+        <div class="line"><b class="grow">Ainda falta</b><b>${brl(Math.max(0, round2(tithe - titheGiven)))}</b></div>` : ''}
+      </div>
+      <p class="muted">${titheBase < 0 ? 'Neste mês saiu mais do que entrou, então não há dízimo a calcular. ' : ''}${isNow ? 'O mês ainda está aberto: o valor muda a cada pagamento ou despesa lançada. ' : ''}Conta só o dinheiro que já entrou. Este cálculo não vai na planilha nem no resumo do WhatsApp.</p>`;
+
   // Planilha do mês: cada entrada e saída (para a contadora ou para guardar)
   const exportCsv = () => {
     const cell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
@@ -3526,6 +3544,7 @@ function vFin(_, q) {
           <small>${received.length ? `Serviços ${brl(recServ)} · Produtos ${brl(recProd)}` : 'Nenhum pagamento ainda'}</small></a>
         ${[['saiu', '➖ Saiu (despesas)', brl(spent), 'var(--bad)'],
           ['lucro', '📈 Lucro do mês', brl(profit), profit >= 0 ? 'var(--ok)' : 'var(--bad)'],
+          ...(titheOn ? [['dizimo', `🙏 Dízimo (${TITHE_PCT}%)`, brl(tithe), '']] : []),
           ['falta', '💸 Falta receber', brl(owed + owedOld), owed + owedOld ? 'var(--warn)' : ''],
           ['vai', '📅 Ainda vai entrar', brl(expected), ''],
           ...(noPrice.length ? [['semvalor', '✏️ Sem valor', plural(noPrice.length, 'atendimento', 'atendimentos'), 'var(--warn)']] : []),
@@ -3764,6 +3783,7 @@ function vMore() {
       <h2>Configurações</h2>
       <div class="menu">
         ${item('#/agendapessoal', '📌', 'Agenda pessoal', personalOn() ? '<span style="color:var(--ok)">● Ligada</span> · seus compromissos na agenda' : 'Seus compromissos na agenda (opcional)')}
+        ${item('#/dizimo', '🙏', 'Dízimo', salonHours()?.tithe ? '<span style="color:var(--ok)">● Ligado</span> · cálculo na página Dinheiro' : 'Cálculo do dízimo no Dinheiro (opcional)')}
         ${item('#/avisos', '🔔', 'Avisos no celular', pushSupported() && Notification.permission === 'granted' ? '<span style="color:var(--ok)">● Ligados</span>' : 'Pedidos, horário chegando, resumo do dia…')}
         ${item('#/aparelho', '🔠', 'Letra e aplicativo', `Letra ${db.settings.big ? 'grande' : 'normal'}${isInstalled() ? '' : ' · instalar na tela inicial'}`)}
         ${item('#/dados', '💾', 'Seus dados', 'Cópia de segurança e planilha de clientes')}
@@ -4078,6 +4098,37 @@ function vAvisos() {
       <div id="push-card"></div>`,
     bind(el) { paintPushCard($('#push-card', el), true); },
   };
+}
+
+/* ---------------- Dízimo ---------------- */
+// Ligar/desligar o cálculo na página Dinheiro (vale para todos os aparelhos do salão)
+function vDizimo() {
+  return onlineView('Dízimo', () => api('GET', '/api/settings'), (box, S) => {
+    cacheSalon(S);
+    let on = !!S.finance?.tithe;
+    box.innerHTML = `
+      <p class="muted" style="margin-top:0">Ligando, a página <b>Dinheiro</b> passa a mostrar quanto dá o seu dízimo em cada mês: <b>${TITHE_PCT}% do líquido</b> (o que entrou menos as despesas).</p>
+      <div class="card">
+        <ul style="margin:0;padding-left:1.2rem;line-height:1.6">
+          <li>🧮 Exemplo: entrou R$ 5.000,00 e saiu R$ 1.000,00 → líquido R$ 4.000,00 → dízimo <b>R$ 400,00</b></li>
+          <li>📝 Se lançar o dízimo como despesa (escreva "dízimo" na despesa), ele não diminui a conta e o app mostra quanto ainda falta</li>
+          <li>🔒 Não vai na planilha nem no resumo do WhatsApp</li>
+        </ul>
+      </div>
+      <div class="form" style="margin-top:1rem">
+        <div class="field"><span class="lbl">Cálculo do dízimo</span>${toggle2('dz-on', on, '✓ Ligado', 'Desligado')}</div>
+        <div id="err"></div>
+        <button class="btn main" id="save">✓ Salvar</button>
+      </div>`;
+    bindToggle2($('#dz-on', box), v => { on = v; });
+    $('#save', box).onclick = async () => {
+      try {
+        cacheSalon(await api('PUT', '/api/settings', { finance: { tithe: on } }));
+        toast(on ? '🙏 Dízimo ligado: veja na página Dinheiro' : 'Dízimo desligado');
+        if (on) location.hash = '#/financeiro?f=dizimo'; else render();
+      } catch (e) { $('#err', box).innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+    };
+  });
 }
 
 /* ---------------- Agenda pessoal ---------------- */
@@ -5242,7 +5293,7 @@ function showLogin(mode = 'entrar') {
 // Horário de atendimento (dias, almoço) guardado no celular: a agenda usa para mostrar os horários livres
 const salonKey = () => `mf.salon.${session.tenant.id}`;
 const salonHours = () => readLS(salonKey());
-function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50, goal: S.finance?.goal || 0, wa: !!S.whatsapp?.instance && S.whatsapp?.saleReminders !== false, waSale: !!S.whatsapp?.instance && S.whatsapp?.saleConfirm !== false, payOnline: !!S.asaas?.connected && S.payments?.deposit !== false, personal: !!S.personal?.enabled, waPaid: !!S.whatsapp?.instance && !!S.whatsapp?.paidMessage, waPaidSale: !!S.whatsapp?.instance && !!S.whatsapp?.paidMessageSales }); } catch { /* ok */ } }
+function cacheSalon(S) { try { writeLS(salonKey(), { days: S.booking.days, lunch: S.booking.lunch, enabled: S.booking.enabled, slug: S.slug, deposit: S.whatsapp?.depositPercent ?? 50, goal: S.finance?.goal || 0, tithe: !!S.finance?.tithe, wa: !!S.whatsapp?.instance && S.whatsapp?.saleReminders !== false, waSale: !!S.whatsapp?.instance && S.whatsapp?.saleConfirm !== false, payOnline: !!S.asaas?.connected && S.payments?.deposit !== false, personal: !!S.personal?.enabled, waPaid: !!S.whatsapp?.instance && !!S.whatsapp?.paidMessage, waPaidSale: !!S.whatsapp?.instance && !!S.whatsapp?.paidMessageSales }); } catch { /* ok */ } }
 function refreshSalon() { api('GET', '/api/settings').then(S => { cacheSalon(S); if (!$('#app form') && parseHash().parts[0] === 'agenda') render(); }).catch(() => {}); }
 
 function refreshPush() {

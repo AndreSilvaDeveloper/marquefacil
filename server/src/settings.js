@@ -62,6 +62,7 @@ export const DEFAULTS = {
   },
   finance: {
     goal: 0,                // meta de entradas do mês (R$; 0 = sem meta)
+    tithe: false,           // mostrar o cálculo do dízimo no Dinheiro: desligado até ela ligar
   },
   // avisos no celular da profissional (push)
   alerts: {
@@ -172,5 +173,6 @@ export function updateSettings(current, input) {
     if (!Number.isFinite(g) || g < 0 || g > 10_000_000) fail(400, 'Meta inválida.');
     s.finance.goal = Math.round(g * 100) / 100;
   }
+  if (isObj(f) && f.tithe !== undefined) s.finance.tithe = bool(f.tithe);
   return s;
 }
