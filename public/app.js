@@ -1077,7 +1077,10 @@ const seriesLabel = e => ({ 7: 'toda semana', 14: 'a cada 15 dias', m: 'todo mê
 
 function vApptForm(_, q) {
   const edit = q.id ? db.appts.find(a => a.id === q.id) : null;
-  const a = edit || { date: q.d || today(), time: TIME_RE.test(q.t || '') ? q.t : '', clientId: q.c || '', service: '', duration: null, price: null, paid: false, notes: '' };
+  // rep = horário para repetir (mesma cliente, serviços, valor e tempo; só falta o dia e a hora)
+  const src = !edit && q.rep ? db.appts.find(x => x.id === q.rep) : null;
+  const a = edit || { date: q.d || today(), time: TIME_RE.test(q.t || '') ? q.t : '', clientId: q.c || src?.clientId || '', service: src?.service || '', duration: src?.duration || null, price: src?.price ?? null, paid: false, notes: '',
+    ...(src?.items?.length ? { items: src.items } : {}) };
   const cName = a.clientId ? clientName(a.clientId) : '';
   const durs = [30, 60, 90, 120, 180];
   let dur = a.duration || null;
@@ -1086,8 +1089,8 @@ function vApptForm(_, q) {
   let pkgId = a.packageId || (q.pk && pkgOf(q.pk) ? q.pk : '');
   let method = paymentsOf(a).at(-1)?.m || '';
   // Serviços do horário: [{ name, price }] (preço de cada é opcional); o total soma sozinho ou é digitado
-  const svcs = edit ? (a.items?.length ? a.items.map(i => ({ name: i.name, price: i.price ?? null })) : a.service ? [{ name: a.service, price: a.price ?? null }] : []) : [];
-  let manualTotal = edit && a.price != null && round2(svcs.reduce((t, x) => t + (x.price || 0), 0)) !== a.price;
+  const svcs = edit || src ? (a.items?.length ? a.items.map(i => ({ name: i.name, price: i.price ?? null })) : a.service ? [{ name: a.service, price: a.price ?? null }] : []) : [];
+  let manualTotal = (edit || src) && a.price != null && round2(svcs.reduce((t, x) => t + (x.price || 0), 0)) !== a.price;
   let durAuto = !a.duration;
 
   return {
@@ -2153,6 +2156,25 @@ function packageCard(p) {
   </div>`;
 }
 
+// Janela para escrever a observação da cliente (cabe mais de uma linha)
+function noteSheet(current, onDone) {
+  const bg = document.createElement('div');
+  bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet form" role="dialog" aria-modal="true">
+    <h2>📝 Observação</h2>
+    <p class="muted" style="margin-top:-.3rem">Alergias, preferências, a cor que ela usa… Só você vê.</p>
+    <div class="field"><textarea id="ns-v" rows="5" maxlength="1000" aria-label="Observação">${esc(current)}</textarea></div>
+    <button class="btn main" id="ns-ok">✓ Salvar</button>
+    <button class="btn" id="ns-no" style="margin-top:.6rem">Cancelar</button>
+  </div>`;
+  document.body.appendChild(bg);
+  const close = () => bg.remove();
+  bg.onclick = e => { if (e.target === bg) close(); };
+  $('#ns-no', bg).onclick = close;
+  $('#ns-ok', bg).onclick = () => { close(); onDone($('#ns-v', bg).value.trim()); };
+  const t = $('#ns-v', bg); t.focus(); t.setSelectionRange(t.value.length, t.value.length);
+}
+
 let openPayFor = null; // ficha da cliente que deve abrir já no "Receber"
 function vClient(id, q) {
   const c = client(id);
@@ -2197,6 +2219,7 @@ function vClient(id, q) {
   const topProds = Object.entries(prodCount).sort((a, b) => b[1] - a[1]).slice(0, 3);
   const valued = visits.filter(a => valueOf(a) > 0);
   const avgVisit = valued.length ? round2(valued.reduce((t, a) => t + valueOf(a), 0) / valued.length) : 0;
+  const again = [...visits].reverse().find(a => a.service && !a.packageId); // último atendimento, para "repetir"
   const whenTxt = a => `${cap(fmtDate(a.date, { weekday: 'short', day: '2-digit', month: '2-digit' }).replace('.,', ',').replace('.', ''))} às ${a.time}`;
 
   let month = '';
@@ -2215,7 +2238,7 @@ function vClient(id, q) {
         ${avatar(c.name, true)}
         <div class="grow">
           <p class="big">${esc(c.name)}</p>
-          ${c.phone ? `<p>📞 ${esc(fmtPhone(c.phone))}</p>` : '<p class="muted">Sem telefone · <a href="#/cliente-editar?id=' + c.id + '">colocar</a></p>'}
+          ${c.phone ? `<p><a href="tel:${esc(String(c.phone).replace(/[^\d+]/g, ''))}" style="color:inherit;text-decoration:none" aria-label="Ligar para ${esc(c.name)}">📞 ${esc(fmtPhone(c.phone))}</a></p>` : '<p class="muted">Sem telefone · <a href="#/cliente-editar?id=' + c.id + '">colocar</a></p>'}
           <div class="badges">${c.birthday ? `<span class="badge ${bdayIn(c.birthday) === 0 ? 'warn' : ''}">🎂 ${bdayIn(c.birthday) === 0 ? 'Aniversário hoje!' : bdayLabel(c.birthday)}</span>` : ''}${st.online ? '<span class="badge">🌐 Veio pelo link</span>' : ''}${appts.some(a => a.seriesId && !a.packageId && !isPast(a) && a.status !== 'cancelado') ? '<span class="badge">🔁 Cliente fixa</span>' : ''}${activePkgs.length ? '<span class="badge">📦 Pacote</span>' : ''}${visits.length <= 1 ? '<span class="badge ok">✨ Cliente nova</span>' : ''}</div>
         </div>
       </div>
@@ -2232,7 +2255,9 @@ function vClient(id, q) {
 
       ${upcoming[0] ? `<a class="card nextcard" href="#/agendamento/${upcoming[0].id}"><small>📅 Próximo horário${upcoming[0].status === 'pendente' ? ' · ⏳ pedido para confirmar' : ''}</small>
           <b>${whenTxt(upcoming[0])}</b>${upcoming[0].service ? `<span>${esc(upcoming[0].service)}</span>` : ''}<i>›</i></a>`
-        : `<div class="card nextcard none"><small>📅 Próximo horário</small><b>Nenhum marcado</b><a class="btn small main" href="#/agendar?c=${c.id}">📅 Agendar</a></div>`}
+        : `<div class="card nextcard none"><small>📅 Próximo horário</small><b>Nenhum marcado</b>
+          <div class="row" style="margin-top:.5rem;flex-wrap:wrap"><a class="btn small main" href="#/agendar?c=${c.id}">📅 Agendar</a>
+          ${again ? `<a class="btn small" href="#/agendar?rep=${again.id}${expectedBack > today() ? '&d=' + expectedBack : ''}">🔁 Repetir ${esc(again.service)}</a>` : ''}</div></div>`}
 
       ${st.owes > 0 || toCome > 0 ? `<div class="card owebox">
         <a class="line" href="${url(hf === 'deve' ? '' : 'deve')}" data-f style="color:inherit;text-decoration:none"><b class="grow">${st.owes > 0 ? `💸 Deve ${brl(st.owes)}` : '✅ Em dia'}</b><span class="muted">ver ›</span></a>
@@ -2253,7 +2278,6 @@ function vClient(id, q) {
         ${topSvcs.length ? `<div class="ex-row"><span>Faz</span><b class="ex-list">${topSvcs.map(([n, k]) => `${esc(n)} <small class="muted">${k}×</small>`).join('<br>')}</b></div>` : ''}
         ${topProds.length ? `<div class="ex-row"><span>Compra</span><b class="ex-list">${topProds.map(([n, k]) => `${esc(n)} <small class="muted">${k}×</small>`).join('<br>')}</b></div>` : ''}
         <div class="ex-row"><span>Já gastou</span><b style="color:var(--ok)">${brl(st.paid)}${avgVisit ? `<small class="muted" style="display:block;font-weight:600">média ${brl(avgVisit).replace(',00', '')} por visita</small>` : ''}</b></div>
-        ${clientToCome(c.id) ? `<div class="ex-row"><span>Parcelas a vencer</span><b>${brl(clientToCome(c.id))}</b></div>` : ''}
         ${st.since ? `<div class="ex-row"><span>Cliente desde</span><b>${fmtDate(st.since, { month: 'short', year: 'numeric' }).replace('.', '')}</b></div>` : ''}
       </div>
 
@@ -2275,7 +2299,6 @@ function vClient(id, q) {
       <div class="list clist">${historyHtml || `<div class="muted">${allHistory.length ? 'Nada neste filtro.' : 'Ainda não tem histórico.'}</div>`}</div>
 
       <div class="menu" style="margin-top:1.5rem">
-        <a class="menu-item" href="#/cliente-editar?id=${c.id}"><span class="mi-icon">✏️</span><span class="mi-text"><b>Editar dados</b><small>Nome, telefone, aniversário, observação</small></span><span class="mi-go">›</span></a>
         <a class="menu-item" href="#/pacote?c=${c.id}"><span class="mi-icon">📦</span><span class="mi-text"><b>Novo pacote</b><small>Cronograma ou sessões vendidas juntas</small></span><span class="mi-go">›</span></a>
         <button type="button" class="menu-item danger" id="del-client"><span class="mi-icon">🗑️</span><span class="mi-text"><b>Apagar cliente</b><small>Apaga também o histórico dela</small></span></button>
       </div>`,
@@ -2290,9 +2313,7 @@ function vClient(id, q) {
         setTimeout(() => $('#hist')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
       });
       $('#edit-note', el).onclick = () => {
-        const v = prompt('Observação da cliente (alergias, preferências…):', c.notes || '');
-        if (v === null) return;
-        c.notes = v.trim(); save(); toast('Observação salva ✓'); render();
+        noteSheet(c.notes || '', v => { c.notes = v; save(); toast(v ? 'Observação salva ✓' : 'Observação apagada'); render(); });
       };
       // Receber: primeiro o que já venceu (mais antigo antes); o que passar disso adianta as parcelas que ainda vão vencer
       const all = round2(st.owes + toCome);
