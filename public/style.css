@@ -907,3 +907,6 @@ details.ready { padding: .7rem 1rem; }
 .monthnav .mpick input { position: absolute; inset: 0; opacity: 0; width: 100%; min-height: 0; cursor: pointer; }
 .selfield { margin: 0 0 .7rem; }
 .selfield select { min-height: 2.8rem; font-weight: 600; }
+
+.freetimes { margin-top: .35rem; margin-bottom: .2rem; }
+.freetimes .chip { font-weight: 700; font-variant-numeric: tabular-nums; }

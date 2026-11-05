@@ -314,6 +314,12 @@ function payAppt(a, v, m) {
   if (a.price > 0 && v > leftOf(a)) a.price = round2(paidOf(a) + v);
   addPayment(a, v, m);
 }
+// Recebeu tudo de um horário que já começou: o atendimento fica como feito (dá para desmarcar)
+function doneIfPaid(a) {
+  const started = a.date < today() || (a.date === today() && mins(a.time) <= nowMins());
+  if (a.status === 'marcado' && started && isPaid(a)) { a.status = 'feito'; return true; }
+  return false;
+}
 function clearPayments(x) { x.payments = []; x.paid = false; }
 function refreshPaid(x) { if (x.payments?.length) x.paid = leftOf(x) === 0; } // depois de mudar o valor
 const methodsOf = x => [...new Set(paymentsOf(x).map(p => PAY[p.m]).filter(Boolean))].join(' + ');
@@ -843,7 +849,7 @@ function vAgenda(_, q) {
     title = d === t ? fmtDate(d, { day: 'numeric', month: 'long' }) : `${cap(fmtDate(d, { weekday: 'long' }).replace('-feira', ''))}, ${d.slice(8)}/${d.slice(5, 7)}${d.slice(0, 4) !== t.slice(0, 4) ? '/' + d.slice(2, 4) : ''}`;
     body = `
       ${d === t ? alsoToday() : ''}
-      ${active.length ? `<p class="csum" style="text-align:center"><b>${active.length}</b> ${active.length === 1 ? 'horário' : 'horários'}${done ? ` · <b>${done}</b> ${done === 1 ? 'feito' : 'feitos'}` : ''}${expectedDay ? ` · <b>${brl(expectedDay).replace(',00', '')}</b>${paidDay ? ` · recebido <b style="color:var(--ok)">${brl(paidDay).replace(',00', '')}</b>` : ''}` : ''}</p>` : ''}
+      ${active.length ? `<p class="csum" style="text-align:center"><b>${active.length}</b> ${active.length === 1 ? 'horário' : 'horários'}${done ? ` · <b>${done}</b> ${done === 1 ? 'feito' : 'feitos'}` : ''}${expectedDay ? ` · previsto <b>${brl(expectedDay).replace(',00', '')}</b>${paidDay ? ` · recebido <b style="color:var(--ok)">${brl(paidDay).replace(',00', '')}</b>` : ''}` : ''}</p>` : ''}
       ${tl.closedDay ? '<div class="muted" style="text-align:center;margin:.5rem 0">🔒 Dia fechado no seu horário de atendimento.</div>' : ''}
       <div class="list timeline">
         ${tl.html || `<div class="empty">Nenhum horário marcado neste dia.${d >= t ? `<br><a class="btn main" href="#/agendar?d=${d}" style="margin-top:1rem">📅 Agendar neste dia</a>` : ''}</div>`}
@@ -993,6 +999,20 @@ function maskTime(input) {
   });
   input.addEventListener('blur', () => { const t = parseTime(input.value); if (t) input.value = t; });
 }
+// Horários livres do dia (dentro do horário de atendimento, fora do almoço), para escolher com um toque
+function freeTimes(date, dur, exceptId) {
+  const S = salonHours(), day = date && S?.days?.[toDate(date).getDay()];
+  if (!day) return [];
+  const d = dur || DEFAULT_SLOT, lunch = S.lunch?.[0] && S.lunch?.[1] ? S.lunch.map(mins) : null;
+  const from = date === today() ? nowMins() : 0, out = [];
+  if (date < today()) return [];
+  for (let t = mins(day[0]); t + d <= mins(day[1]); t += 30) {
+    if (t < from || (lunch && t < lunch[1] && t + d > lunch[0])) continue;
+    const time = hhmm(t);
+    if (!conflictsFor(date, time, d, exceptId).length && !personalClash(date, time, d).length) out.push(time);
+  }
+  return out;
+}
 function busyList(date, exceptId) {
   const list = db.appts.filter(a => a.date === date && a.status !== 'cancelado' && a.id !== exceptId).sort(byWhen);
   const mine = personalOf(date);
@@ -1101,6 +1121,7 @@ function vApptForm(_, q) {
         <div class="field">
           <label for="f-time">Horário <em>*</em></label>
           <input type="text" id="f-time" inputmode="numeric" maxlength="5" value="${a.time}" placeholder="Ex.: 12:10" style="font-size:1.3rem;font-weight:700;max-width:12rem">
+          <div id="free"></div>
           <div id="busy">${busyList(a.date, a.id)}</div>
           <div id="conflict"></div>
         </div>
@@ -1189,6 +1210,9 @@ function vApptForm(_, q) {
         else if (document.activeElement !== iDur) iDur.value = '';
       };
       const checkConflict = () => {
+        const free = freeTimes(iDate.value, dur, a.id), sel = parseTime(iTime.value);
+        $('#free', el).innerHTML = free.length ? `<small class="hint">Livres neste dia — toque para escolher:</small>
+          <div class="chips hscroll freetimes">${free.map(t => `<button type="button" class="chip ${t === sel ? 'on' : ''}" data-t="${t}">${t}</button>`).join('')}</div>` : '';
         const list = conflictsFor(iDate.value, parseTime(iTime.value), dur, a.id);
         const mine = personalClash(iDate.value, parseTime(iTime.value), dur);
         $('#conflict', el).innerHTML = list.length || mine.length ? `<div class="conflict-box">⚠️ Atenção: nesse horário já tem
@@ -1334,6 +1358,10 @@ function vApptForm(_, q) {
       iDate.addEventListener('change', () => { if (iDate.value) iDText.value = fmtShort(iDate.value); refreshTimes(); });
       maskTime(iTime);
       iTime.addEventListener('input', () => { checkConflict(); paintSum(); });
+      $('#free', el).addEventListener('click', e => {
+        const c = e.target.closest('[data-t]');
+        if (c) { iTime.value = c.dataset.t; checkConflict(); paintSum(); }
+      });
       // Clientes recentes e informações da cliente
       const paintClient = () => {
         const c = findByName(db.clients, iClient.value);
@@ -1608,8 +1636,9 @@ function vAppt(id) {
         upd(() => { a.price = p; if (p > 0) a.priceLater = false; refreshPaid(a); }, 'Valor salvo ✓');
       });
       $('#later', el) && ($('#later', el).onclick = () => upd(() => (a.priceLater = !a.priceLater), () => (a.priceLater ? 'Valor fica para avaliar na hora' : 'Pronto')));
+      let autoDone = false;
       $('#receive', el) && ($('#receive', el).onclick = () => paySheet(a, `${clientName(a.clientId)} — ${a.service || 'Serviço'}`, (v, m) =>
-        upd(() => payAppt(a, v, m), () => (isPaid(a) ? `Pago ✓ (${PAY[m]})` : `Recebido ${brl(v)} ✓ Falta ${brl(leftOf(a))}`)), 0, [], { raise: 'do serviço' }));
+        upd(() => { payAppt(a, v, m); autoDone = doneIfPaid(a); }, () => (isPaid(a) ? `Pago ✓ (${PAY[m]})${autoDone ? ' · atendimento feito' : ''}` : `Recebido ${brl(v)} ✓ Falta ${brl(leftOf(a))}`)), 0, [], { raise: 'do serviço' }));
       // Receber serviço + produtos de uma vez: o valor quita primeiro o serviço, depois os produtos
       $('#receive-all', el) && ($('#receive-all', el).onclick = () => {
         const items = [a, ...salesOfAppt(a)].filter(x => leftOf(x) > 0);
