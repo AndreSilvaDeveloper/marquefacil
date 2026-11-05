@@ -26,7 +26,18 @@ const DEFAULT_SLOT = 30; // minutos considerados quando o horário não tem dura
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const norm = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+// (guarda o resultado: os mesmos nomes de serviço e cliente são comparados milhares de vezes numa tela)
+const normCache = new Map();
+const norm = s => {
+  const k = String(s ?? '');
+  let v = normCache.get(k);
+  if (v === undefined) {
+    v = k.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+    if (normCache.size > 4000) normCache.clear();
+    normCache.set(k, v);
+  }
+  return v;
+};
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 const brl = v => (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -123,7 +134,22 @@ function loadCache() {
   seq = fresh ? 0 : c.seq || 0;
   db.settings = { ...readLS('mf.settings'), ...db.settings };
 }
+/* Índices para não varrer tudo a cada cliente (com milhares de horários a lista de clientes ficava lenta no celular):
+   horários e vendas por cliente, linhas por compra. Refeitos quando algo é salvo, chega do servidor ou a tela é redesenhada. */
+let ix = null;
+function index() {
+  if (ix && ix.a === db.appts && ix.s === db.sales && ix.na === db.appts.length && ix.ns === db.sales.length) return ix;
+  const byC = new Map(), sByC = new Map(), byO = new Map();
+  const add = (m, k, v) => { const l = m.get(k); if (l) l.push(v); else m.set(k, [v]); };
+  for (const a of db.appts) add(byC, a.clientId, a);
+  for (const x of db.sales) { add(sByC, x.clientId, x); add(byO, x.orderId || x.id, x); }
+  return (ix = { a: db.appts, s: db.sales, na: db.appts.length, ns: db.sales.length, byC, sByC, byO });
+}
+const NONE = Object.freeze([]);
+const apptsOf = clientId => index().byC.get(clientId) || NONE;
+const salesOfClient = clientId => index().sByC.get(clientId) || NONE;
 function persist() {
+  ix = null;
   try {
     writeLS(cacheKey(), { db, snap, seq });
     writeLS('mf.settings', db.settings);
@@ -334,7 +360,7 @@ const saleDue = s => valueOf(s) > 0 && leftOf(s) > 0 && (!s.plan?.dates?.length 
 const orderKey = s => s.orderId || s.id;
 function orderOf(s) {
   const key = orderKey(s);
-  const lines = db.sales.filter(x => orderKey(x) === key);
+  const lines = index().byO.get(key) || [];
   const total = round2(lines.reduce((t, x) => t + valueOf(x), 0)), paid = round2(lines.reduce((t, x) => t + paidOf(x), 0));
   return { key, lines, clientId: s.clientId, total, paid, left: Math.max(0, round2(total - paid)), plan: lines.find(x => x.plan?.dates?.length)?.plan || null };
 }
@@ -365,8 +391,8 @@ function payOrder(o, v, m, d = today()) {
 const dueText = p => `${p.of > 1 ? `parcela ${p.n} de ${p.of} · ` : ''}${p.date < today() ? '⚠️ venceu' : p.date === today() ? 'vence hoje' : 'vence'} ${p.date === today() ? '' : fmtShort(p.date).slice(0, 5)}`.trim();
 function clientOwes(id) {
   const seen = new Set();
-  let t = db.appts.filter(a => a.clientId === id && apptDue(a)).reduce((sum, a) => sum + leftOf(a), 0);
-  for (const s of db.sales.filter(x => x.clientId === id && valueOf(x) > 0 && leftOf(x) > 0)) {
+  let t = apptsOf(id).filter(apptDue).reduce((sum, a) => sum + leftOf(a), 0);
+  for (const s of salesOfClient(id).filter(x => valueOf(x) > 0 && leftOf(x) > 0)) {
     if (!s.plan?.dates?.length) { t += leftOf(s); continue; }
     if (seen.has(orderKey(s))) continue;
     seen.add(orderKey(s)); t += orderDueNow(orderOf(s));
@@ -377,7 +403,7 @@ function clientOwes(id) {
 // Data da próxima parcela em aberto que ainda vai vencer (compras a prazo da cliente)
 function nextDueOf(id) {
   const dates = [];
-  for (const s of db.sales.filter(x => x.clientId === id && x.plan?.dates?.length && leftOf(x) > 0)) {
+  for (const s of salesOfClient(id).filter(x => x.plan?.dates?.length && leftOf(x) > 0)) {
     const p = installmentsOf(orderOf(s)).find(i => i.left > 0 && i.date > today());
     if (p) dates.push(p.date);
   }
@@ -386,7 +412,7 @@ function nextDueOf(id) {
 function clientToCome(id) {
   const seen = new Set();
   let t = 0;
-  for (const s of db.sales.filter(x => x.clientId === id && x.plan?.dates?.length)) {
+  for (const s of salesOfClient(id).filter(x => x.plan?.dates?.length)) {
     if (seen.has(orderKey(s))) continue;
     seen.add(orderKey(s));
     t += installmentsOf(orderOf(s)).filter(p => p.date > today()).reduce((sum, p) => sum + p.left, 0);
@@ -394,8 +420,8 @@ function clientToCome(id) {
   return round2(t);
 }
 function clientPaid(id) {
-  return round2(db.appts.filter(a => a.clientId === id && a.status !== 'cancelado').reduce((t, a) => t + paidOf(a), 0) +
-    db.sales.filter(s => s.clientId === id).reduce((t, s) => t + paidOf(s), 0));
+  return round2(apptsOf(id).filter(a => a.status !== 'cancelado').reduce((t, a) => t + paidOf(a), 0) +
+    salesOfClient(id).reduce((t, s) => t + paidOf(s), 0));
 }
 // Selo de pagamento: "Pago R$ 60 (Pix)", "Pagou R$ 30 · falta R$ 30", "Não pago R$ 60"
 function payBadge(x, dueWord = 'Não pago') {
@@ -482,6 +508,7 @@ const routes = {
 
 let lastHash = '';
 function render() {
+  ix = null;
   if (!session) return showLogin();
   const { parts, q } = parseHash();
   const view = routes[parts[0]] || vAgenda;
@@ -769,7 +796,7 @@ function clientFlags(a) {
   const c = client(a.clientId);
   if (!c) return [];
   const f = [];
-  if (a.status !== 'cancelado' && !db.appts.some(x => x.clientId === a.clientId && x.id !== a.id && x.status !== 'cancelado' && x.status !== 'pendente' && x.date + x.time < a.date + a.time)) f.push('nova');
+  if (a.status !== 'cancelado' && !apptsOf(a.clientId).some(x => x.id !== a.id && x.status !== 'cancelado' && x.status !== 'pendente' && x.date + x.time < a.date + a.time)) f.push('nova');
   if (c.birthday && c.birthday === a.date.slice(5)) f.push('aniver');
   if (c.notes) f.push('obs');
   if (clientOwes(c.id) > 0) f.push('deve');
@@ -1933,13 +1960,13 @@ function vBuscar(_, q) {
    ===================================================================== */
 // Resumo de uma cliente: visitas, última vez, serviço preferido…
 function clientStats(c) {
-  const appts = db.appts.filter(a => a.clientId === c.id);
+  const appts = apptsOf(c.id);
   const visits = appts.filter(a => a.status === 'feito' || (a.status === 'marcado' && isPast(a))).sort(byWhen);
   const next = appts.filter(a => !isPast(a) && (a.status === 'marcado' || a.status === 'pendente')).sort(byWhen)[0];
   const count = {};
   for (const a of visits) if (a.service) count[a.service] = (count[a.service] || 0) + 1;
   const fav = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
-  const firstDate = [...appts.map(a => a.date), ...db.sales.filter(x => x.clientId === c.id).map(x => x.date)].sort()[0];
+  const firstDate = [...appts.map(a => a.date), ...salesOfClient(c.id).map(x => x.date)].sort()[0];
   return {
     visits: visits.length, last: visits.at(-1), next, fav: fav?.[0] || '',
     since: firstDate || (c.createdAt ? dstr(new Date(c.createdAt)) : ''),
@@ -2181,14 +2208,14 @@ function vClient(id, q) {
   if (!c) return { title: 'Cliente', back: true, html: '<div class="empty">Cliente não encontrada.</div>' };
   const st = clientStats(c);
   const hf = q.h || '';
-  const appts = db.appts.filter(a => a.clientId === id);
+  const appts = apptsOf(id);
   const next = appts.filter(a => !isPast(a) && a.status !== 'cancelado').sort(byWhen);
   const pres = next.filter(a => a.status === PRE);
   const pkgs = clientPackages(id);
   const activePkgs = pkgs.filter(pkgActive), donePkgs = pkgs.filter(p => !pkgActive(p));
   const allHistory = [
     ...appts.filter(a => isPast(a) || a.status === 'cancelado').map(a => ({ k: 'a', when: a.date + a.time, it: a })),
-    ...db.sales.filter(x => x.clientId === id).map(x => ({ k: 's', when: x.date + '99', it: x })),
+    ...salesOfClient(id).map(x => ({ k: 's', when: x.date + '99', it: x })),
   ].sort((x, y) => y.when.localeCompare(x.when));
   const hFilters = {
     '': ['Tudo', () => true],

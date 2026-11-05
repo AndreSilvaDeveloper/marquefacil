@@ -915,3 +915,24 @@ details.ready { padding: .7rem 1rem; }
 .cfilters select { flex: 1 1 0; min-width: 0; min-height: 2.8rem; padding: .3rem .6rem; font-weight: 600; }
 .cfilters select.on { border-color: var(--brand); color: var(--brand); }
 #none .btn { display: flex; width: fit-content; }
+
+/* ---------- Celular: toque, telas pequenas e listas longas ---------- */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+a, button, select, summary, label, .chip { touch-action: manipulation; } /* sem a espera do toque duplo */
+/* janelas de baixo: cabem com o teclado aberto e não arrastam a página de trás */
+.sheet-bg { overscroll-behavior: contain; }
+.sheet { max-height: 92dvh; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+/* alvos de toque que estavam pequenos para o dedo */
+.rm { min-width: 2.5rem; min-height: 2.5rem; }
+.owebox > a.line { padding: .35rem 0; }
+.help details.faq summary { min-height: 2.6rem; }
+.linkpill { min-height: 2.3rem; }
+.chip input { min-height: 2.1rem; }
+a.hint { padding: .4rem 0; }
+.pick button { min-height: 2.6rem; }
+.checkline { min-height: 2.4rem; }
+/* botões flutuantes da agenda: nunca saem da tela (letra grande em celular estreito) */
+.fab { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 420px) { html.big .fab { font-size: .95rem; padding: .8rem .5rem; } }
+/* listas longas (centenas de clientes): o celular só desenha o que está na tela */
+.clist > .crow, .clist > .dayrow, .clist > .hrow { content-visibility: auto; contain-intrinsic-size: auto 4.4rem; }
