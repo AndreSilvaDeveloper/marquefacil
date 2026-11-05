@@ -1,6 +1,6 @@
 import { readSettings, DEFAULTS } from './settings.js';
 import { fail, isObj, waNumber } from './util.js';
-import { nowIn, zonedEpoch, addDays, dayLabel, weekday } from './time.js';
+import { nowIn, zonedEpoch, addDays, dayLabel, firstBusinessDay } from './time.js';
 import { newPortalToken, portalUrl } from './portal.js';
 import { groupOrders, installments, productsText, leftOf, paidOf } from './sales.js';
 
@@ -213,18 +213,12 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
     return sent;
   }
   /* Vendas pagas depois: cobrança pelo WhatsApp (a partir das 9h, no fuso do salão)
-     - no 1º dia útil do mês: resumo do que a cliente ainda deve de compras;
+     - no 1º dia útil do mês: resumo do que a cliente ainda deve de compras (só de quem tem algo vencido ou
+       vencendo neste mês: quem adiantou e só tem parcela de mês que vem não recebe cobrança);
      - no dia de cada vencimento: lembrete da parcela (ou do pagamento único).
      No 1º dia útil o resumo já cita o que vence no dia, então não manda os dois. */
   const salesOf = db.prepare("SELECT data FROM records WHERE tenant_id = ? AND coll = 'sales' AND deleted = 0");
   const DAY_START = 9 * 60;
-  function firstBusinessDay(ym, closed = []) {
-    for (let d = 1; d <= 7; d++) {
-      const date = `${ym}-${String(d).padStart(2, '0')}`;
-      if (weekday(date) !== 0 && weekday(date) !== 6 && !closed.includes(date)) return date;
-    }
-    return `${ym}-01`;
-  }
   async function sendSale(t, s, { apptId, kind, client, body }) {
     const phone = waNumber(client?.phone);
     const row = { tenantId: t.id, apptId, kind, phone, name: client?.name || '', body, now: Date.now() };
@@ -327,7 +321,9 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
       const summarized = new Set();
       if (monthDay) {
         const byClient = new Map();
-        for (const o of orders) byClient.set(o.clientId, [...(byClient.get(o.clientId) || []), o]);
+        const ym = here.date.slice(0, 7);
+        const dueThisMonth = o => { const next = installments(o).find(p => p.left > 0); return !next || next.date.slice(0, 7) <= ym; };
+        for (const o of orders.filter(dueThisMonth)) byClient.set(o.clientId, [...(byClient.get(o.clientId) || []), o]);
         for (const [clientId, list] of byClient) {
           const client = clientOf(clientId);
           if (!client) continue;

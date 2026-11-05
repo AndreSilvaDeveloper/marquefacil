@@ -4,7 +4,7 @@ import { buildApp } from '../src/app.js';
 import { computeSlots } from '../src/booking.js';
 import { renderTemplate } from '../src/whatsapp.js';
 import { DEFAULTS } from '../src/settings.js';
-import { nowIn, addDays, weekday } from '../src/time.js';
+import { nowIn, addDays, weekday, firstBusinessDay, nationalHolidays } from '../src/time.js';
 
 function client(app) {
   let cookie = '';
@@ -729,6 +729,39 @@ test('vendas pagas depois: lembrete no vencimento e resumo no 1º dia útil do m
   // desligado: não manda
   await call('PUT', '/api/settings', { whatsapp: { saleReminders: false } });
   assert.equal(await m.runSaleReminders(at('2027-05-15', '10:00')), 0);
+  await app.close();
+});
+
+test('1º dia útil: pula fim de semana, feriado nacional e folga do salão', () => {
+  assert.equal(firstBusinessDay('2026-11'), '2026-11-03', 'dia 1 é domingo e dia 2 é Finados');
+  assert.equal(firstBusinessDay('2027-01'), '2027-01-04', 'Ano Novo na sexta');
+  assert.equal(firstBusinessDay('2025-03'), '2025-03-05', 'Carnaval em 03 e 04/03');
+  assert.equal(firstBusinessDay('2024-03'), '2024-03-01', 'dia comum');
+  assert.equal(firstBusinessDay('2026-12', ['2026-12-01']), '2026-12-02', 'folga do salão');
+  assert.ok(nationalHolidays(2026).includes('2026-04-03'), 'Sexta-feira Santa de 2026');
+});
+
+test('resumo do mês: quem já pagou o que vence no mês não recebe cobrança', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl }, saleDelay: 0 });
+  const call = await salon(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  await call('GET', '/api/whatsapp/status');
+  const plan = { entrada: 0, dates: ['2026-11-15', '2026-12-15'] };
+  const sale = (id, clientId, payments, p) => ({ coll: 'sales', id, data: { clientId, product: 'Shampoo', qty: 1, total: 100, date: '2026-10-20', payments, ...(p ? { plan: p } : {}) } });
+  await call('POST', '/api/sync', { changes: [
+    ...['c1', 'c2', 'c3', 'c4', 'c5'].map((id, i) => ({ coll: 'clients', id, data: { name: `Cliente${i + 1}`, phone: `(11) 97777-000${i + 1}` } })),
+    sale('v1', 'c1', [{ v: 100, m: 'pix', d: '2026-10-30' }]),            // quitou: nada
+    sale('v2', 'c2', [{ v: 50, m: 'pix', d: '2026-10-30' }], plan),       // adiantou a de novembro: só tem a de dezembro → nada
+    sale('v3', 'c3', [], plan),                                           // vence em novembro: recebe
+    sale('v4', 'c4', [{ v: 30, m: 'pix', d: '2026-10-30' }]),             // pagou parte, sem plano: recebe o que falta
+    sale('v5', 'c5', [], { entrada: 0, dates: ['2026-10-15', '2026-12-15'] }), // tem parcela vencida: recebe
+  ] });
+  const at = (date, time) => Date.parse(`${date}T${time}:00-03:00`);
+  assert.equal(await app.messenger.runSaleReminders(at('2026-11-02', '10:00')), 0, 'Finados não é dia útil');
+  assert.equal(await app.messenger.runSaleReminders(at('2026-11-03', '10:00')), 3);
+  assert.deepEqual(evo.sent.map(x => x.number).sort(), ['5511977770003', '5511977770004', '5511977770005']);
   await app.close();
 });
 

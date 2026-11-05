@@ -47,3 +47,26 @@ export function dayLabel(date) {
   const x = new Date(date + 'T12:00:00Z');
   return x.toLocaleDateString('pt-BR', { timeZone: 'UTC', weekday: 'long', day: '2-digit', month: '2-digit' });
 }
+
+// Feriados nacionais do Brasil (com o Carnaval, que quase ninguém trabalha). Páscoa pelo algoritmo de Meeus.
+export function nationalHolidays(year) {
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100, d = Math.floor(b / 4), e = b % 4;
+  const f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31), day = (h + l - 7 * m + 114) % 31 + 1;
+  const easter = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  return [
+    ...['01-01', '04-21', '05-01', '09-07', '10-12', '11-02', '11-15', '11-20', '12-25'].map(x => `${year}-${x}`),
+    ...[-48, -47, -2, 60].map(n => addDays(easter, n)), // Carnaval (seg e ter), Sexta-feira Santa, Corpus Christi
+  ];
+}
+
+// 1º dia útil do mês 'YYYY-MM': sem fim de semana, feriado nacional nem as folgas do salão
+export function firstBusinessDay(ym, closed = []) {
+  const holidays = nationalHolidays(+ym.slice(0, 4));
+  for (let d = 1; d <= 10; d++) {
+    const date = `${ym}-${String(d).padStart(2, '0')}`;
+    if (weekday(date) !== 0 && weekday(date) !== 6 && !holidays.includes(date) && !closed.includes(date)) return date;
+  }
+  return `${ym}-01`;
+}
