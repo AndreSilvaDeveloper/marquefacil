@@ -520,6 +520,9 @@ function render() {
   main.innerHTML = v.html || '';
   $('#app').replaceWith(main);
   $$('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === v.tab));
+  // entrada suave só quando muda de página (não a cada redesenho da mesma)
+  const page = parts.slice(0, 2).join('/');
+  if (page !== render.page) { render.page = page; main.classList.add('enter'); } else main.classList.remove('enter');
   if (curHash() !== lastHash) window.scrollTo(0, 0);
   lastHash = curHash();
   v.bind?.($('#app'));
@@ -535,6 +538,33 @@ window.addEventListener('hashchange', () => {
   render();
 });
 $('#btn-back').addEventListener('click', () => back());
+
+// Botão "＋ Novo" da barra de baixo: as ações mais usadas, de qualquer página.
+// Na agenda já leva o dia aberto; na ficha de uma cliente, já leva ela.
+function quickSheet() {
+  if (!session || $('.sheet-bg')) return;
+  const { parts, q } = parseHash();
+  const c = parts[0] === 'cliente' ? client(parts[1]) : null;
+  const day = parts[0] === 'agenda' && /^\d{4}-\d{2}-\d{2}$/.test(q.d || '') ? q.d : '';
+  const who = c ? `c=${c.id}` : '';
+  const tile = (href, icon, title, sub) => `<a class="qa" href="${href}"><span>${icon}</span><b>${title}</b><small>${sub}</small></a>`;
+  const bg = document.createElement('div');
+  bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet" role="dialog" aria-modal="true">
+    <h2>${c ? `Novo para ${esc(firstName(c))}` : 'O que você quer fazer?'}</h2>
+    <div class="qa-grid">
+      ${tile(`#/agendar${who || day ? '?' + [who, day && 'd=' + day].filter(Boolean).join('&') : ''}`, '📅', 'Novo horário', day && day !== today() ? `Em ${fmtShort(day).slice(0, 5)}` : 'Marcar um atendimento')}
+      ${tile(`#/venda${who ? '?' + who : ''}`, '🛍️', 'Vender', 'Produto para a cliente')}
+      ${c ? '' : tile('#/cliente-editar', '👩', 'Nova cliente', 'Cadastrar nome e telefone')}
+      ${tile('#/despesa', '➖', 'Despesa', 'Aluguel, produtos, contas…')}
+      ${personalOn() ? tile(`#/pessoal/novo?d=${day || today()}`, '📌', 'Compromisso', 'Na sua agenda pessoal') : ''}
+    </div>
+    <button class="btn" id="qa-no" style="margin-top:.8rem">Fechar</button>
+  </div>`;
+  document.body.appendChild(bg);
+  bg.onclick = e => { if (e.target === bg || e.target.closest('.qa, #qa-no')) bg.remove(); };
+}
+$('#tab-add').addEventListener('click', quickSheet);
 
 /* ---------------------------- componentes ---------------------------- */
 function badgesFor(a) {
@@ -971,11 +1001,7 @@ function vAgenda(_, q) {
       </div>
       ${pend.length ? `<a class="card pending-banner slim" href="#/pedidos">⏳ <b>${pend.length} ${pend.length === 1 ? 'pedido' : 'pedidos'}</b> para confirmar<i>›</i></a>` : ''}
       <div id="push-card"></div>
-      ${body}
-      <div class="fabs">
-        <a class="fab sell" href="#/venda">🛍️ Vender</a>
-        <a class="fab" href="#/agendar?d=${d}">📅 Agendar</a>
-      </div>`,
+      ${body}`,
     bind(el) {
       const goDay = n => replaceTo(url({ d: view === 'mes' ? monthShift(n) : addDays(d, n * step) }));
       $('#pick', el).onchange = e => e.target.value && replaceTo(url({ d: e.target.value }));

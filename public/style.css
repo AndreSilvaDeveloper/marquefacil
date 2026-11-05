@@ -936,3 +936,74 @@ a.hint { padding: .4rem 0; }
 @media (max-width: 420px) { html.big .fab { font-size: .95rem; padding: .8rem .5rem; } }
 /* listas longas (centenas de clientes): o celular só desenha o que está na tela */
 .clist > .crow, .clist > .dayrow, .clist > .hrow { content-visibility: auto; contain-intrinsic-size: auto 4.4rem; }
+
+/* ================= Visual de aplicativo (celular) ================= */
+:root { --shadow: 0 1px 2px rgba(60,20,40,.06), 0 6px 18px rgba(60,20,40,.06); --radius: 18px; }
+:root { --bg: #f7f1f4; }
+body { padding-bottom: calc(5.4rem + env(safe-area-inset-bottom)); }
+
+/* topo: cantos arredondados e sombra */
+#top { border-radius: 0 0 20px 20px; box-shadow: 0 4px 16px rgba(60,20,40,.16); min-height: 3.5rem; }
+#top h1 { font-size: 1.28rem; font-weight: 800; letter-spacing: -.01em; }
+#top .back { border-radius: 999px; padding: .45rem .9rem; }
+#top .back:active { background: rgba(255,255,255,.32); }
+
+/* barra de baixo: flutuante, com o botão "Novo" no meio */
+#tabs {
+  left: .6rem; right: .6rem; bottom: calc(.5rem + env(safe-area-inset-bottom)); padding: .25rem .2rem;
+  border: 0; border-radius: 22px; background: rgba(255,255,255,.94);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  box-shadow: 0 2px 6px rgba(60,20,40,.10), 0 10px 28px rgba(60,20,40,.16);
+  max-width: 640px; margin: 0 auto; align-items: center;
+}
+#tabs a { padding: .3rem 0; font-size: .7rem; transition: color .15s; }
+#tabs a span { display: block; font-size: 1.35rem; line-height: 1.5; padding: 0 .9rem; border-radius: 999px; transition: background .15s, transform .15s; }
+#tabs a.on { background: none; color: var(--brand); font-weight: 800; }
+#tabs a.on span { background: var(--brand-soft); }
+#tabs a:active span { transform: scale(.9); }
+#tab-add {
+  flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: .05rem;
+  border: 0; background: none; padding: 0 .35rem; font-size: .7rem; font-weight: 800; color: var(--brand); cursor: pointer;
+}
+#tab-add i {
+  display: grid; place-items: center; width: 2.9rem; height: 2.3rem; border-radius: 16px; font-style: normal;
+  background: var(--brand); color: #fff; font-size: 1.5rem; font-weight: 700; line-height: 1;
+  box-shadow: 0 4px 12px rgba(142,58,107,.4); transition: transform .12s;
+}
+#tab-add:active i { transform: scale(.9); }
+.savebar { bottom: calc(4.6rem + env(safe-area-inset-bottom)); }
+#toast { bottom: calc(6.2rem + env(safe-area-inset-bottom)); }
+
+/* janela "Novo": ações grandes, fáceis de acertar com o dedo */
+.qa-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+.qa { display: flex; flex-direction: column; gap: .1rem; padding: .9rem; border-radius: var(--radius); background: #fff; text-decoration: none; color: inherit; min-height: 6.2rem; }
+.qa span { font-size: 1.7rem; line-height: 1.2; }
+.qa b { font-size: 1.05rem; }
+.qa small { color: var(--muted); font-size: .8rem; line-height: 1.25; }
+.qa:active { background: var(--brand-soft); transform: scale(.98); }
+
+/* cartões e listas: sombra suave no lugar da borda */
+.card, .hero, .menu, .list.timeline, .list.clist, .crow, .qa { border-color: transparent; box-shadow: var(--shadow); }
+.list.clist .crow, .menu-sub .card { box-shadow: none; }
+.card.owebox { border-color: var(--warn); }
+.card.pending-banner, .dayrow.personal { box-shadow: none; }
+.btn { border-radius: 16px; transition: transform .1s, filter .1s; }
+.btn.main, .btn.ok { box-shadow: 0 3px 10px rgba(60,20,40,.14); }
+.btn:active { transform: scale(.97); filter: brightness(.96); }
+input[type=text], input[type=tel], input[type=date], input[type=number], input[type=search], input[type=month], input[type=email], input[type=password], select, textarea { border-radius: 14px; }
+input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 4px var(--brand-soft); }
+.chip { transition: transform .1s; }
+.chip:active, .paygrid button:active, .toggle2 button:active { transform: scale(.96); }
+.dayrow:active, .crow-main:active, .ex-row:active, .mrow-main:active { background: var(--brand-soft); }
+
+/* janelas de baixo: alça, cantos maiores e entrada suave */
+.sheet { border-radius: 26px 26px 0 0; padding-top: 1.6rem; position: relative; box-shadow: 0 -8px 30px rgba(0,0,0,.18); }
+.sheet::before { content: ''; position: absolute; top: .55rem; left: 50%; width: 2.6rem; height: .3rem; margin-left: -1.3rem; border-radius: 999px; background: var(--line); }
+@media (prefers-reduced-motion: no-preference) {
+  .sheet-bg { animation: fade-in .18s ease-out; }
+  .sheet { animation: sheet-up .24s cubic-bezier(.2,.8,.2,1); }
+  main.enter { animation: page-in .2s ease-out; }
+}
+@keyframes fade-in { from { background: rgba(0,0,0,0); } }
+@keyframes sheet-up { from { transform: translateY(40%); opacity: .4; } }
+@keyframes page-in { from { opacity: 0; transform: translateY(8px); } }
