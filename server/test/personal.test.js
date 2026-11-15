@@ -65,5 +65,11 @@ test('dízimo: vem desligado, liga e desliga sem mexer na meta', async () => {
   const s = (await call('GET', '/api/settings')).body.finance;
   assert.deepEqual(s, { goal: 5000, tithe: true });
   assert.equal((await call('PUT', '/api/settings', { finance: { tithe: false } })).body.finance.tithe, false);
+  // agenda ao abrir o app e feriados
+  assert.equal((await call('GET', '/api/settings')).body.agenda.start, 'proximos');
+  assert.equal((await call('PUT', '/api/settings', { agenda: { start: 'hoje' } })).body.agenda.start, 'hoje');
+  assert.equal((await call('PUT', '/api/settings', { agenda: { start: 'x' } })).status, 400);
+  assert.equal((await call('GET', '/api/settings')).body.booking.closedHolidays, false);
+  assert.equal((await call('PUT', '/api/settings', { booking: { closedHolidays: true } })).body.booking.closedHolidays, true);
   await app.close();
 });

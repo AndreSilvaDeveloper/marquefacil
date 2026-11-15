@@ -1022,3 +1022,12 @@ body.formpage { padding-bottom: env(safe-area-inset-bottom); }
 body.formpage .savebar { bottom: 0; padding-bottom: calc(.7rem + env(safe-area-inset-bottom)); }
 body.formpage #toast { bottom: calc(8.5rem + env(safe-area-inset-bottom)); }
 .dayquick { margin-top: .5rem; margin-bottom: 0; }
+
+/* Agenda: próximas duas semanas — o próximo dia com horário em destaque, feriados e dias fechados */
+.wnote { padding: .4rem .9rem; border-top: 1px solid var(--line); font-size: .88rem; font-weight: 600; color: var(--muted); }
+.wnote.nextday { background: var(--brand); color: #fff; border-top: 0; font-weight: 700; }
+.wday.next { box-shadow: 0 0 0 2px var(--brand), var(--shadow); }
+.wday.next .wday-head { background: var(--brand-soft); }
+.wday.off.noappt { background: transparent; box-shadow: none; border: 1px dashed var(--line); }
+.wday.off.noappt .wday-head { background: transparent; }
+.wday.off.noappt .wday-head b, .wday.off.noappt .wday-head em { color: var(--muted); }

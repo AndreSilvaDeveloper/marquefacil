@@ -16,6 +16,7 @@ export const DEFAULTS = {
     defaultDuration: 60,    // duração quando o serviço não tem tempo definido
     message: '',            // recado que aparece no topo do link
     closedDates: [],        // folgas e feriados: ['2026-12-25', …]
+    closedHolidays: false,  // não atende em feriado nacional: o dia fica sem horários livres
     requireApproval: true,  // pedido pelo link espera a profissional confirmar
   },
   whatsapp: {
@@ -59,6 +60,10 @@ export const DEFAULTS = {
   // agenda pessoal (compromissos da profissional): desligada até ela ligar
   personal: {
     enabled: false,
+  },
+  // agenda: o que aparece ao abrir o app ('proximos' = próximas duas semanas, 'hoje' = só o dia)
+  agenda: {
+    start: 'proximos',
   },
   finance: {
     goal: 0,                // meta de entradas do mês (R$; 0 = sem meta)
@@ -134,6 +139,7 @@ export function updateSettings(current, input) {
     if (b.defaultDuration !== undefined) s.booking.defaultDuration = int(b.defaultDuration, 5, 600, 'duração');
     if (b.message !== undefined) s.booking.message = text(b.message, 500);
     if (b.requireApproval !== undefined) s.booking.requireApproval = bool(b.requireApproval);
+    if (b.closedHolidays !== undefined) s.booking.closedHolidays = bool(b.closedHolidays);
     if (b.closedDates !== undefined) {
       if (!Array.isArray(b.closedDates) || b.closedDates.some(d => !DATE_RE.test(d))) fail(400, 'Datas de folga inválidas.');
       s.booking.closedDates = [...new Set(b.closedDates)].sort().slice(-200);
@@ -166,6 +172,11 @@ export function updateSettings(current, input) {
 
   const pm = input.payments;
   if (isObj(pm)) for (const k of ['deposit', 'services', 'products', 'card']) if (pm[k] !== undefined) s.payments[k] = bool(pm[k]);
+
+  if (isObj(input.agenda) && input.agenda.start !== undefined) {
+    if (!['proximos', 'hoje'].includes(input.agenda.start)) fail(400, 'Opção de agenda inválida.');
+    s.agenda.start = input.agenda.start;
+  }
 
   const f = input.finance;
   if (isObj(f) && f.goal !== undefined) {

@@ -72,6 +72,11 @@ test('horários livres: expediente, almoço, ocupados, antecedência', () => {
   assert.equal(sameDay[0], '15:00', 'hoje: 2h de antecedência a partir das 13:00');
   assert.deepEqual(computeSlots({ booking, appts, date: '2026-09-27', duration: 60, now }), [], 'domingo fechado');
   assert.deepEqual(computeSlots({ booking: { ...booking, closedDates: [date] }, appts, date, duration: 60, now }), [], 'folga');
+  // feriado nacional (20/11/2026, sexta): só fecha se ela marcou que não atende em feriado
+  const hol = { date: '2026-11-10', minutes: 0 };
+  assert.ok(computeSlots({ booking, appts: [], date: '2026-11-20', duration: 60, now: hol }).length, 'feriado: atende por padrão');
+  assert.deepEqual(computeSlots({ booking: { ...booking, closedHolidays: true }, appts: [], date: '2026-11-20', duration: 60, now: hol }), [], 'feriado fechado');
+  assert.ok(computeSlots({ booking: { ...booking, closedHolidays: true }, appts: [], date: '2026-11-19', duration: 60, now: hol }).length, 'dia comum segue aberto');
 });
 
 test('mensagem: troca os campos e tira linha vazia', () => {

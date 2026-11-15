@@ -1,6 +1,6 @@
 import { readSettings } from './settings.js';
 import { fail, isObj, uid, TIME_RE, DATE_RE, mins, hhmm, waNumber, norm } from './util.js';
-import { nowIn, addDays, weekday, dayLabel } from './time.js';
+import { nowIn, addDays, weekday, dayLabel, nationalHolidays } from './time.js';
 import { applyChanges } from './db.js';
 import { newPortalToken } from './portal.js';
 
@@ -10,6 +10,7 @@ const DEFAULT_SLOT = 30; // horários sem duração ocupam 30 min (igual ao app)
 export function computeSlots({ booking, appts, date, duration, now }) {
   if (date < now.date || date > addDays(now.date, booking.maxDays)) return [];
   if (booking.closedDates.includes(date)) return [];
+  if (booking.closedHolidays && nationalHolidays(+date.slice(0, 4)).includes(date)) return [];
   const open = booking.days[weekday(date)];
   if (!open) return [];
 
