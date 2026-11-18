@@ -427,7 +427,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
 }
 
 /* ------------------------- rotas (profissional logada) ------------------------- */
-export function registerWhatsapp(app, { db, evo, messenger, auth, getSettings, saveSettings }) {
+export function registerWhatsapp(app, { db, evo, messenger, auth, getSettings, saveSettings, restartWait = 0 }) {
   const instanceName = tenantId => `mf-${tenantId}`.replace(/[^A-Za-z0-9_-]/g, '');
   const needEvo = () => { if (!evo.enabled) fail(503, 'O WhatsApp automático ainda não foi configurado no servidor.'); };
   const ownerNumber = info => {
@@ -471,7 +471,11 @@ export function registerWhatsapp(app, { db, evo, messenger, auth, getSettings, s
     try {
       const st = await evo.state(name);
       if (st?.instance?.state === 'open') {
-        if (!messenger.isStuck(name)) return { state: 'open' };
+        if (!messenger.isStuck(name)) {
+          // já está conectado na Evolution (ex.: um "desconectar" que não chegou lá): o app volta a usar essa conexão
+          if (s.whatsapp.instance !== name) saveSettings(tenantId, { ...s, whatsapp: { ...s.whatsapp, instance: name, number: '' } });
+          return { state: 'open' };
+        }
         await evo.logout(name).catch(() => {}); // sessão travada: sai de vez para poder ler o QR de novo
         messenger.clearStuck(name);
       }
@@ -497,9 +501,13 @@ export function registerWhatsapp(app, { db, evo, messenger, auth, getSettings, s
   app.post('/api/whatsapp/disconnect', { preHandler: auth }, async req => {
     const s = getSettings(req.s.tenant_id);
     if (s.whatsapp.instance && evo.enabled) {
-      await evo.logout(s.whatsapp.instance).catch(() => {});
-      await evo.remove(s.whatsapp.instance).catch(() => {});
-      messenger.clearStuck(s.whatsapp.instance);
+      const name = s.whatsapp.instance;
+      const drop = async () => { await evo.logout(name).catch(() => {}); await evo.remove(name); };
+      // sessão travada não aceita sair: reinicia e tenta de novo, para o número não continuar ligado sem ela saber
+      try { await drop(); } catch (e) {
+        if (e.status !== 404) { await evo.restart(name).catch(() => {}); await new Promise(r => setTimeout(r, restartWait)); await drop().catch(() => {}); }
+      }
+      messenger.clearStuck(name);
     }
     saveSettings(req.s.tenant_id, { ...s, whatsapp: { ...s.whatsapp, instance: null, number: '' } });
     return { ok: true };

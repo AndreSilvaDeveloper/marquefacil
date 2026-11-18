@@ -964,5 +964,13 @@ test('WhatsApp travado ("Connection Closed" com estado conectado): reinicia, avi
   const again = await call('POST', '/api/whatsapp/connect');
   assert.equal(again.status, 200);
   assert.ok(again.body.qr, 'QR novo');
+
+  // o app esqueceu a conexão, mas ela continua viva na Evolution: "conectar" volta a usar, sem QR
+  evo.state.dead = false;
+  evo.instances[inst] = 'open';
+  app.db.prepare("UPDATE tenants SET settings = json_set(settings, '$.whatsapp.instance', NULL)").run();
+  assert.equal((await call('GET', '/api/whatsapp/status')).body.state, 'off');
+  assert.equal((await call('POST', '/api/whatsapp/connect')).body.state, 'open');
+  assert.equal((await call('GET', '/api/whatsapp/status')).body.state, 'open');
   await app.close();
 });

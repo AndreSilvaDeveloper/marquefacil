@@ -371,7 +371,7 @@ export function buildApp({
     return { ...s, slug: req.s.slug, today: nowIn(s.timezone).date, whatsappAvailable: evo.enabled, asaas: pay.info(req.s.tenant_id) };
   });
 
-  registerWhatsapp(app, { db, evo, messenger, auth, getSettings, saveSettings });
+  registerWhatsapp(app, { db, evo, messenger, auth, getSettings, saveSettings, restartWait });
   registerBooking(app, { db, messenger, push, limitBook });
   registerPush(app, { db, auth, push });
   registerPortal(app, { db, messenger, push, pay, publicUrl, limitBook, limitAccess, limitPay });
