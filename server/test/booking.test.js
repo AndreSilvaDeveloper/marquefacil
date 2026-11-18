@@ -33,7 +33,7 @@ function fakeEvolution() {
       sent.push({ instance: name, ...body }); return json(201, {});
     }
     if (u.pathname.startsWith('/settings/set/')) { calls.push(['settings', name, body]); return json(201, {}); }
-    if (u.pathname.startsWith('/instance/setPresence/')) { calls.push(['presence', name, body.presence]); return json(201, {}); }
+    if (u.pathname.startsWith('/instance/setPresence/')) { if (state.dead) return json(400, { response: { message: ['Connection Closed'] } }); calls.push(['presence', name, body.presence]); return json(201, {}); }
     if (u.pathname.startsWith('/instance/logout/') || u.pathname.startsWith('/instance/delete/')) { delete instances[name]; return json(200, {}); }
     return json(404, {});
   };
@@ -1024,5 +1024,32 @@ test('reenviar mensagens que falharam: uma, todas, sem repetir e sem horário qu
   assert.equal(msgs.filter(m => m.status === 'error').length, 0);
   assert.equal((await call('POST', '/api/messages/resend', { all: true })).body.queued, 0);
   assert.equal((await call('POST', '/api/messages/resend', {})).status, 400);
+  await app.close();
+});
+
+test('WhatsApp travado é percebido pela checagem de 10 minutos, antes de uma mensagem falhar', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl } });
+  const call = await salon(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  const restarts = () => evo.calls.filter(c => c[0] === 'restart').length;
+
+  // trava e o reinício resolve: ninguém percebe
+  evo.state.dead = true; evo.state.revive = true;
+  await app.messenger.keepQuiet();
+  assert.equal(restarts(), 1);
+  assert.equal((await call('GET', '/api/whatsapp/status')).body.state, 'open');
+
+  // trava e o reinício não resolve (nem pode reiniciar de novo tão cedo): aparece como parado
+  evo.state.dead = true; evo.state.revive = false;
+  await app.messenger.keepQuiet();
+  assert.equal(restarts(), 1, 'no máximo um reinício a cada 10 minutos');
+  assert.equal((await call('GET', '/api/whatsapp/status')).body.state, 'stuck');
+
+  // voltou sozinho: a checagem seguinte limpa
+  evo.state.dead = false;
+  await app.messenger.keepQuiet();
+  assert.equal((await call('GET', '/api/whatsapp/status')).body.state, 'open');
   await app.close();
 });

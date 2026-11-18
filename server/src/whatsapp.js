@@ -90,6 +90,22 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
       throw e;
     }
   }
+  // Sessão travada vista fora de um envio: reinicia e confere; se não voltar, fica marcada (a profissional é avisada)
+  async function revive(inst) {
+    if (Date.now() - (restartedAt.get(inst) || 0) > 10 * 60e3) {
+      restartedAt.set(inst, Date.now());
+      try {
+        await evo.restart(inst);
+        if (restartWait > 0) await new Promise(r => setTimeout(r, restartWait));
+        await evo.setPresence(inst, 'unavailable');
+        stuck.delete(inst);
+        log.info?.({ inst }, 'whatsapp: sessão travada reiniciada sozinha');
+        return true;
+      } catch (e) { log.warn?.({ inst, err: e.message }, 'whatsapp: reinício não resolveu'); }
+    }
+    if (!stuck.has(inst)) stuck.set(inst, Date.now());
+    return false;
+  }
   const isStuck = inst => stuck.has(inst);
   const clearStuck = inst => { stuck.delete(inst); restartedAt.delete(inst); };
   function queuedSend(inst, number, text) {
@@ -444,9 +460,12 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
       try {
         if (!quieted.has(name)) { await evo.setSettings(name); quieted.add(name); }
         await evo.setPresence(name, 'unavailable');
+        stuck.delete(name); // respondeu: a sessão está viva
         n++;
       } catch (e) {
         if (e.status !== 404) log.warn?.({ err: e.message, name }, 'whatsapp: não consegui deixar offline');
+        // esta checagem roda a cada 10 minutos: é ela que percebe a sessão travada antes de uma mensagem falhar
+        if (isDead(e)) await revive(name);
       }
     }
     return n;
