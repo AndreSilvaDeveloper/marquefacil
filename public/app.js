@@ -5109,7 +5109,7 @@ function vWhats(_, q = {}) {
       const w = S.whatsapp;
       const connected = st.state === 'open';
       const kinds = { confirm: 'Confirmação', change: 'Horário mudou', saledue: 'Venda: vencimento', salemonth: 'Venda: resumo do mês', salenew: 'Venda: comprovante', paid: 'Recibo de pagamento', reminder: 'Lembrete', owner: 'Aviso para você', decline: 'Pedido recusado', prereserve: 'Pré-reserva', rescheduleNo: 'Remarcação recusada', access: 'Link "meus horários"', test: 'Teste' };
-      const status = { sent: '<span class="badge ok">Enviada</span>', error: '<span class="badge bad">Falhou</span>', skipped: '<span class="badge warn">Sem telefone</span>', sending: '<span class="badge">Enviando</span>' };
+      const status = { sent: '<span class="badge ok">Enviada</span>', error: '<span class="badge bad">Falhou</span>', skipped: '<span class="badge warn">Não enviada</span>', sending: '<span class="badge">Enviando</span>' };
       // as três partes trocam sem encher o "voltar"
       box.onclick = e => { const t = e.target.closest('a[data-wtab]'); if (t) { e.preventDefault(); replaceTo(t.getAttribute('href')); } };
       box.innerHTML = `
@@ -5183,11 +5183,31 @@ function vWhats(_, q = {}) {
         </div>
 
         ${part ? '' : `<h2>Últimas mensagens</h2>
+        ${(() => { const n = msgs.filter(m => m.status === 'error' && m.createdAt > Date.now() - 3 * 86400e3).length;
+          return n && connected ? `<div class="card" style="margin-bottom:.7rem"><b>⚠️ ${n === 1 ? '1 mensagem não saiu' : `${n} mensagens não saíram`}</b>
+            <p class="muted" style="margin:.2rem 0 .6rem">Manda de novo as dos últimos 3 dias. Não repete a mesma mensagem para a mesma cliente e pula horário que já passou.</p>
+            <button type="button" class="btn small main" id="resend-all">🔁 Reenviar ${n === 1 ? 'a que falhou' : 'as que falharam'}</button></div>` : ''; })()}
         <div class="list">${msgs.length ? msgs.map(m => `<div class="card">
           <div class="line"><div class="grow"><b>${kinds[m.kind.split(':')[0]] || m.kind}${m.name ? ' — ' + esc(m.name) : ''}</b>
           <span>${new Date(m.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${m.phone ? ' · para ' + esc(m.phone.replace(/^55(\d\d)(\d+)(\d{4})$/, '($1) $2-$3')) : ''}${m.error ? ' · ' + esc(m.error) : ''}</span></div>
           ${status[m.status] || ''}</div>
-          ${m.body ? `<details class="msgbody"><summary>Ver o que foi enviado</summary><p>${esc(m.body).replace(/\n/g, '<br>')}</p></details>` : ''}</div>`).join('') : '<div class="muted">Nenhuma mensagem ainda.</div>'}</div>`}`;
+          ${m.body ? `<details class="msgbody"><summary>${m.status === 'sent' ? 'Ver o que foi enviado' : 'Ver a mensagem'}</summary><p>${esc(m.body).replace(/\n/g, '<br>')}</p></details>` : ''}
+          ${m.status === 'error' && m.phone && m.body && connected ? `<button type="button" class="btn small" data-resend="${m.id}" style="margin-top:.6rem">🔁 Reenviar</button>` : ''}</div>`).join('') : '<div class="muted">Nenhuma mensagem ainda.</div>'}</div>`}`;
+
+      // reenviar o que falhou: entra na fila e a lista atualiza sozinha
+      if (!box.dataset.rs) box.addEventListener('click', async e => {
+        const one = e.target.closest('[data-resend]'), all = e.target.closest('#resend-all');
+        if (!one && !all) return;
+        const btn = one || all;
+        btn.disabled = true;
+        try {
+          const r = await api('POST', '/api/messages/resend', one ? { id: +one.dataset.resend } : { all: true });
+          toast(r.queued ? (r.queued === 1 ? 'Reenviando 1 mensagem…' : `Reenviando ${r.queued} mensagens…`) : 'Nada para reenviar.');
+          render();
+          if (r.queued) [6000, 20000, 45000].forEach(ms => setTimeout(() => { if (location.hash.startsWith('#/whatsapp') && !location.hash.includes('p=')) render(); }, ms));
+        } catch (err) { btn.disabled = false; toast(err.offline ? 'Precisa de internet para reenviar.' : err.message || 'Não deu para reenviar.'); }
+      });
+      box.dataset.rs = '1';
 
       const flags = { confirmOnline: w.confirmOnline, confirmManual: w.confirmManual, notifyOwner: w.notifyOwner, declineMessage: w.declineMessage, prereserveMessage: w.prereserveMessage, saleReminders: w.saleReminders !== false, saleConfirm: w.saleConfirm !== false, paidMessage: !!w.paidMessage, paidMessageSales: !!w.paidMessageSales };
       for (const k of Object.keys(flags)) $('#' + k, box) && bindToggle2($('#' + k, box), v => (flags[k] = v));

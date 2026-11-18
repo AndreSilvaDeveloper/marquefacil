@@ -974,3 +974,55 @@ test('WhatsApp travado ("Connection Closed" com estado conectado): reinicia, avi
   assert.equal((await call('GET', '/api/whatsapp/status')).body.state, 'open');
   await app.close();
 });
+
+test('reenviar mensagens que falharam: uma, todas, sem repetir e sem horário que já passou', async () => {
+  const evo = fakeEvolution();
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl } });
+  const call = await salon(app);
+  await call('POST', '/api/whatsapp/connect');
+  evo.instances[Object.keys(evo.instances)[0]] = 'open';
+  const wait = () => new Promise(r => setTimeout(r, 60));
+  const d = nextWeekday(4);
+
+  // o WhatsApp cai: confirmações de duas clientes e um teste falham
+  evo.state.dead = true;
+  await call('POST', '/api/sync', { changes: [
+    { coll: 'clients', id: 'c1', data: { name: 'Inês', phone: '11911112222' } },
+    { coll: 'clients', id: 'c2', data: { name: 'Clarice', phone: '11933334444' } },
+    { coll: 'appts', id: 'r1', data: { clientId: 'c1', date: d, time: '10:00', status: 'marcado', createdAt: Date.now() } },
+    { coll: 'appts', id: 'r2', data: { clientId: 'c2', date: d, time: '11:00', status: 'marcado', createdAt: Date.now() } },
+  ] });
+  await wait();
+  await call('POST', '/api/whatsapp/test', { phone: '11955556666' });
+  let msgs = (await call('GET', '/api/messages')).body;
+  assert.equal(msgs.filter(m => m.status === 'error').length, 3);
+  assert.equal(evo.sent.length, 0);
+
+  // ainda caído: reenviar uma volta a falhar e continua na lista
+  const ines = msgs.find(m => m.name === 'Inês');
+  assert.equal((await call('POST', '/api/messages/resend', { id: ines.id })).body.queued, 1);
+  await wait();
+  assert.equal((await call('GET', '/api/messages')).body.find(m => m.id === ines.id).status, 'error');
+
+  // voltou: uma só
+  evo.state.dead = false;
+  assert.equal((await call('POST', '/api/messages/resend', { id: ines.id })).body.queued, 1);
+  await wait();
+  assert.deepEqual(evo.sent.map(m => m.number), ['5511911112222']);
+  assert.equal((await call('POST', '/api/messages/resend', { id: ines.id })).status, 404, 'já enviada');
+
+  // todas: a da Clarice e o teste; o horário cancelado fica de fora
+  await call('POST', '/api/sync', { changes: [{ coll: 'appts', id: 'r2', data: { clientId: 'c2', date: d, time: '11:00', status: 'cancelado', createdAt: Date.now() } }] });
+  await wait();
+  const before = evo.sent.length;
+  const all = (await call('POST', '/api/messages/resend', { all: true })).body;
+  await wait();
+  msgs = (await call('GET', '/api/messages')).body;
+  assert.equal(all.queued, 1, 'só o teste');
+  assert.ok(evo.sent.slice(before).some(m => m.number === '5511955556666'));
+  assert.ok(!evo.sent.slice(before).some(m => m.number === '5511933334444' && /marcado/.test(m.text)), 'cancelado não recebe confirmação');
+  assert.equal(msgs.filter(m => m.status === 'error').length, 0);
+  assert.equal((await call('POST', '/api/messages/resend', { all: true })).body.queued, 0);
+  assert.equal((await call('POST', '/api/messages/resend', {})).status, 400);
+  await app.close();
+});

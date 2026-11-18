@@ -209,6 +209,50 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
     }
   }
 
+  // Reenviar o que falhou (ex.: o WhatsApp ficou fora do ar). id = uma mensagem; sem id = todas as dos últimos 3 dias.
+  // No "todas": só a mais recente de cada tipo para a mesma pessoa, e nada de horário que já passou.
+  // As mensagens entram na fila (com o intervalo entre elas) e a resposta volta na hora.
+  const RESEND_DAYS = 3;
+  const rq = {
+    failed: db.prepare("SELECT id, appt_id AS apptId, kind, phone, body FROM messages WHERE tenant_id = ? AND status = 'error' AND created_at > ? ORDER BY created_at DESC"),
+    one: db.prepare("SELECT id, appt_id AS apptId, kind, phone, body FROM messages WHERE tenant_id = ? AND id = ? AND status = 'error'"),
+    take: db.prepare("UPDATE messages SET status = 'sending', error = NULL WHERE id = ? AND status = 'error'"),
+    done: db.prepare('UPDATE messages SET status = ?, error = ?, attempts = attempts + 1, created_at = ? WHERE id = ?'),
+    skip: db.prepare("UPDATE messages SET status = 'skipped', error = ? WHERE id = ? AND status = 'error'"),
+  };
+  function resend(tenantId, id = null, now = Date.now()) {
+    const tenant = q.tenant.get(tenantId);
+    const s = readSettings(tenant.settings);
+    if (!evo.enabled || !s.whatsapp.instance) fail(400, 'Conecte o WhatsApp primeiro.');
+    const inst = s.whatsapp.instance, today = nowIn(s.timezone, now).date;
+    let rows;
+    if (id != null) {
+      const row = rq.one.get(tenantId, id);
+      if (!row) fail(404, 'Essa mensagem já foi enviada ou não existe mais.');
+      rows = [row];
+    } else {
+      const seen = new Set();
+      rows = rq.failed.all(tenantId, now - RESEND_DAYS * 86400e3).filter(m => {
+        const appt = m.apptId ? getRecord(tenantId, 'appts', m.apptId) : null;
+        if (appt && (appt.date < today || appt.status === 'cancelado')) { rq.skip.run(appt.status === 'cancelado' ? 'o horário foi cancelado' : 'o horário já passou', m.id); return false; }
+        const dup = `${m.phone}|${m.kind.split(':')[0]}`;
+        if (seen.has(dup)) { rq.skip.run('reenviada a mais recente', m.id); return false; }
+        seen.add(dup);
+        return true;
+      });
+    }
+    let queued = 0;
+    for (const m of rows.reverse()) { // da mais antiga para a mais nova
+      if (!m.phone || !m.body) { rq.skip.run('sem telefone', m.id); continue; }
+      if (!rq.take.run(m.id).changes) continue; // outro toque já pegou
+      queued++;
+      queuedSend(inst, m.phone, m.body)
+        .then(() => rq.done.run('sent', null, Date.now(), m.id))
+        .catch(e => { rq.done.run('error', String(e.message).slice(0, 300), Date.now(), m.id); log.warn?.({ err: e.message, tenantId, id: m.id }, 'whatsapp: falha ao reenviar'); });
+    }
+    return { queued };
+  }
+
   // Dispara sem esperar (a resposta para a cliente não fica presa no WhatsApp)
   const fire = (...args) => { sendForAppt(...args).catch(e => log.error?.(e)); };
 
@@ -423,7 +467,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
     return setInterval(tick, everyMs);
   }
 
-  return { sendForAppt, sendText, fire, runReminders, runSaleReminders, sendSaleNew, sendPaid, startScheduler, packageLabel, keepQuiet, isStuck, clearStuck };
+  return { sendForAppt, sendText, fire, runReminders, runSaleReminders, sendSaleNew, sendPaid, startScheduler, packageLabel, keepQuiet, isStuck, clearStuck, resend };
 }
 
 /* ------------------------- rotas (profissional logada) ------------------------- */
@@ -520,8 +564,16 @@ export function registerWhatsapp(app, { db, evo, messenger, auth, getSettings, s
     return { ok: true };
   });
 
+  // Reenviar mensagens que falharam: { id } para uma, { all: true } para todas as recentes
+  app.post('/api/messages/resend', { preHandler: auth }, async req => {
+    needEvo();
+    const b = isObj(req.body) ? req.body : {};
+    if (!b.all && !Number.isInteger(b.id)) fail(400, 'Escolha a mensagem para reenviar.');
+    return messenger.resend(req.s.tenant_id, b.all ? null : b.id);
+  });
+
   app.get('/api/messages', { preHandler: auth }, async req => {
-    return db.prepare(`SELECT appt_id AS apptId, kind, phone, name, body, status, error, created_at AS createdAt
+    return db.prepare(`SELECT id, appt_id AS apptId, kind, phone, name, body, status, error, created_at AS createdAt
                        FROM messages WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 30`).all(req.s.tenant_id);
   });
 }
