@@ -11,7 +11,7 @@ import { nowIn, zonedEpoch, addDays, dayLabel } from './time.js';
    Cada aviso sai uma vez só (tabela push_log). */
 const MIN = 60e3;
 
-export function createAlerts({ db, push, evo, log = console }) {
+export function createAlerts({ db, push, evo, messenger = null, log = console }) {
   db.exec(`CREATE TABLE IF NOT EXISTS push_log (
     tenant_id TEXT NOT NULL, key TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (tenant_id, key))`);
   const q = {
@@ -148,7 +148,7 @@ export function createAlerts({ db, push, evo, log = console }) {
       if (!s.alerts.whatsappDown || !s.whatsapp.instance) continue;
       let state = 'close';
       try { state = (await evo.state(s.whatsapp.instance))?.instance?.state || 'close'; } catch { continue; } // Evolution fora: não acusa
-      if (state === 'open' || state === 'connecting') continue;
+      if ((state === 'open' && !messenger?.isStuck(s.whatsapp.instance)) || state === 'connecting') continue;
       if (await once(t.id, `wadown:${nowIn(s.timezone, now).date}`, {
         title: '⚠️ WhatsApp automático desconectado',
         body: 'As mensagens para as clientes não estão saindo. Toque para conectar de novo.',

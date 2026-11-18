@@ -42,6 +42,8 @@ export function evolutionClient({ url, apikey, fetchImpl = fetch, timeoutMs = 15
     info: name => call('GET', `/instance/fetchInstances?instanceName=${enc(name)}`),
     // delay (ms): o WhatsApp mostra "digitando…" antes de a mensagem chegar
     send: (name, number, text, delay = 0) => call('POST', `/message/sendText/${enc(name)}`, { number, text, ...(delay > 0 ? { delay } : {}) }),
+    // reinicia a sessão sem pedir QR de novo (a rota mudou de POST para PUT entre versões da Evolution)
+    restart: name => call('POST', `/instance/restart/${enc(name)}`).catch(e => { if (e.status === 404 || e.status === 405) return call('PUT', `/instance/restart/${enc(name)}`); throw e; }),
     logout: name => call('DELETE', `/instance/logout/${enc(name)}`),
     remove: name => call('DELETE', `/instance/delete/${enc(name)}`),
   };
@@ -62,14 +64,39 @@ const brl = v => Number(v).toLocaleString('pt-BR', { style: 'currency', currency
 /* Para o WhatsApp não bloquear o número: as mensagens de cada número saem uma por vez, com um intervalo
    aleatório entre elas (sendGap) e "digitando…" antes de cada uma (typing). A primeira depois de um tempo
    parado sai na hora; numa leva grande (lembretes, resumo do mês) elas vão saindo espaçadas. */
-export function createMessenger({ db, evo, publicUrl = '', log = console, sendGap = [0, 0], typing = [0, 0] }) {
+export function createMessenger({ db, evo, publicUrl = '', log = console, sendGap = [0, 0], typing = [0, 0], restartWait = 8000 }) {
   const rand = ([a, b]) => a + Math.random() * Math.max(0, b - a);
   const queues = new Map(), lastAt = new Map();
+  // Sessão "zumbi": a Evolution diz que está conectada, mas todo envio volta "Connection Closed".
+  // Na primeira falha assim, reinicia a sessão e tenta de novo; se não voltar, marca como travada
+  // (a página mostra desconectado e a profissional é avisada) até um envio dar certo ou ela reconectar.
+  const stuck = new Map(), restartedAt = new Map();
+  const isDead = e => /connection closed/i.test(String(e?.message || ''));
+  async function sendOrRevive(inst, number, text) {
+    const go = () => evo.send(inst, number, text, Math.round(rand(typing)));
+    try { return await go(); } catch (e) {
+      if (!isDead(e)) throw e;
+      if (Date.now() - (restartedAt.get(inst) || 0) > 10 * 60e3) { // no máximo um reinício a cada 10 minutos
+        restartedAt.set(inst, Date.now());
+        try {
+          await evo.restart(inst);
+          if (restartWait > 0) await new Promise(r => setTimeout(r, restartWait));
+          const r = await go();
+          log.info?.({ inst }, 'whatsapp: sessão reiniciada, envio voltou');
+          return r;
+        } catch (e2) { log.warn?.({ inst, err: e2.message }, 'whatsapp: reinício não resolveu'); }
+      }
+      if (!stuck.has(inst)) stuck.set(inst, Date.now());
+      throw e;
+    }
+  }
+  const isStuck = inst => stuck.has(inst);
+  const clearStuck = inst => { stuck.delete(inst); restartedAt.delete(inst); };
   function queuedSend(inst, number, text) {
     const run = (queues.get(inst) || Promise.resolve()).catch(() => {}).then(async () => {
       const wait = (lastAt.get(inst) || 0) + rand(sendGap) - Date.now();
       if (wait > 0) await new Promise(r => setTimeout(r, wait));
-      try { return await evo.send(inst, number, text, Math.round(rand(typing))); }
+      try { const r = await sendOrRevive(inst, number, text); stuck.delete(inst); return r; }
       finally { lastAt.set(inst, Date.now()); }
     });
     queues.set(inst, run);
@@ -396,7 +423,7 @@ export function createMessenger({ db, evo, publicUrl = '', log = console, sendGa
     return setInterval(tick, everyMs);
   }
 
-  return { sendForAppt, sendText, fire, runReminders, runSaleReminders, sendSaleNew, sendPaid, startScheduler, packageLabel, keepQuiet };
+  return { sendForAppt, sendText, fire, runReminders, runSaleReminders, sendSaleNew, sendPaid, startScheduler, packageLabel, keepQuiet, isStuck, clearStuck };
 }
 
 /* ------------------------- rotas (profissional logada) ------------------------- */
@@ -416,6 +443,8 @@ export function registerWhatsapp(app, { db, evo, messenger, auth, getSettings, s
     let state = 'close';
     try { state = (await evo.state(s.whatsapp.instance))?.instance?.state || 'close'; }
     catch (e) { if (e.status !== 404) return { available: true, state: 'error', error: e.message }; }
+    // diz "conectado", mas os envios estão voltando "Connection Closed": para ela, está desconectado
+    if (state === 'open' && messenger.isStuck(s.whatsapp.instance)) return { available: true, state: 'stuck', number: s.whatsapp.number || '' };
     if (state === 'open' && !quietDone.has(s.whatsapp.instance)) {
       quietDone.add(s.whatsapp.instance);
       evo.setSettings(s.whatsapp.instance).then(() => evo.setPresence(s.whatsapp.instance, 'unavailable')).catch(() => {});
@@ -441,7 +470,11 @@ export function registerWhatsapp(app, { db, evo, messenger, auth, getSettings, s
     let exists = true;
     try {
       const st = await evo.state(name);
-      if (st?.instance?.state === 'open') return { state: 'open' };
+      if (st?.instance?.state === 'open') {
+        if (!messenger.isStuck(name)) return { state: 'open' };
+        await evo.logout(name).catch(() => {}); // sessão travada: sai de vez para poder ler o QR de novo
+        messenger.clearStuck(name);
+      }
     } catch (e) {
       if (e.status !== 404) fail(502, 'Não foi possível falar com o WhatsApp: ' + e.message);
       exists = false;
@@ -466,6 +499,7 @@ export function registerWhatsapp(app, { db, evo, messenger, auth, getSettings, s
     if (s.whatsapp.instance && evo.enabled) {
       await evo.logout(s.whatsapp.instance).catch(() => {});
       await evo.remove(s.whatsapp.instance).catch(() => {});
+      messenger.clearStuck(s.whatsapp.instance);
     }
     saveSettings(req.s.tenant_id, { ...s, whatsapp: { ...s.whatsapp, instance: null, number: '' } });
     return { ok: true };

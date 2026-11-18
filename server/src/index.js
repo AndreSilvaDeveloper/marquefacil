@@ -17,6 +17,7 @@ const app = buildApp({
   logger: { level: env.LOG_LEVEL || 'info' },
   // proteção contra bloqueio do WhatsApp: 8 a 20 s entre mensagens e 1,5 a 3,5 s de "digitando…"
   sendGap: [Number(env.WA_GAP_MIN || 8000), Number(env.WA_GAP_MAX || 20000)],
+  restartWait: 8000,
   typing: [Number(env.WA_TYPING_MIN || 1500), Number(env.WA_TYPING_MAX || 3500)],
 });
 

@@ -5120,8 +5120,8 @@ function vWhats(_, q = {}) {
           ${connected
             ? `<b style="color:var(--ok)">✓ WhatsApp conectado</b>${st.number ? `<div class="muted">+${esc(st.number)}</div>` : ''}
                <div class="row" style="margin-top:.7rem"><button class="btn small" id="test">📨 Mandar teste</button><button class="btn small danger" id="disc">Desconectar</button></div>`
-            : `<b>WhatsApp não conectado</b>
-               <p class="muted">Conecte o WhatsApp do salão para as mensagens saírem sozinhas.</p>
+            : `<b>${st.state === 'stuck' ? '⚠️ O WhatsApp parou de enviar' : 'WhatsApp não conectado'}</b>
+               <p class="muted">${st.state === 'stuck' ? 'A ligação com o WhatsApp do salão caiu e as mensagens não estão saindo. Conecte de novo aqui embaixo.' : 'Conecte o WhatsApp do salão para as mensagens saírem sozinhas.'}</p>
                <div class="field form"><label for="ph">Número do WhatsApp do salão</label>
                  <input type="tel" id="ph" placeholder="(11) 99999-9999" value="${esc(w.ownerPhone || '')}"></div>
                <button class="btn main" id="code">🔢 Conectar com código</button>

@@ -18,7 +18,7 @@ function client(app) {
 
 // Evolution de mentira: guarda o que foi enviado
 function fakeEvolution() {
-  const sent = [], instances = {}, calls = [];
+  const sent = [], instances = {}, calls = [], state = { dead: false, revive: false };
   const json = (status, body) => ({ ok: status < 400, status, json: async () => body });
   const fetchImpl = async (url, opts) => {
     const u = new URL(url), body = opts.body ? JSON.parse(opts.body) : null;
@@ -27,13 +27,17 @@ function fakeEvolution() {
     if (u.pathname.startsWith('/instance/connectionState/')) return instances[name] ? json(200, { instance: { state: instances[name] } }) : json(404, { message: ['not found'] });
     if (u.pathname.startsWith('/instance/connect/')) return json(200, { base64: 'data:image/png;base64,QR2', pairingCode: u.searchParams.get('number') ? 'ABCD1234' : undefined });
     if (u.pathname === '/instance/fetchInstances') return json(200, [{ ownerJid: '5511900000000@s.whatsapp.net' }]);
-    if (u.pathname.startsWith('/message/sendText/')) { sent.push({ instance: name, ...body }); return json(201, {}); }
+    if (u.pathname.startsWith('/instance/restart/')) { calls.push(['restart', name]); if (state.revive) state.dead = false; return json(200, {}); }
+    if (u.pathname.startsWith('/message/sendText/')) {
+      if (state.dead) return json(400, { response: { message: ['Connection Closed'] } }); // sessão "zumbi"
+      sent.push({ instance: name, ...body }); return json(201, {});
+    }
     if (u.pathname.startsWith('/settings/set/')) { calls.push(['settings', name, body]); return json(201, {}); }
     if (u.pathname.startsWith('/instance/setPresence/')) { calls.push(['presence', name, body.presence]); return json(201, {}); }
     if (u.pathname.startsWith('/instance/logout/') || u.pathname.startsWith('/instance/delete/')) { delete instances[name]; return json(200, {}); }
     return json(404, {});
   };
-  return { sent, instances, calls, fetchImpl };
+  return { sent, instances, calls, state, fetchImpl };
 }
 
 // Próxima data (a partir de amanhã) que cai no dia da semana pedido
@@ -927,5 +931,38 @@ test('WhatsApp: mensagens saem uma por vez, espaçadas e com "digitando…"', as
   assert.deepEqual(evo.sent.map(m => m.text), ['oi 1', 'oi 2', 'oi 3'], 'na ordem');
   assert.ok(evo.sent.every(m => m.delay === 900), 'mostra "digitando…"');
   assert.ok(times[1] - times[0] >= 110 && times[2] - times[1] >= 110, 'espaçadas');
+  await app.close();
+});
+
+test('WhatsApp travado ("Connection Closed" com estado conectado): reinicia, avisa e deixa reconectar', async () => {
+  const evo = fakeEvolution();
+  const pushed = [];
+  const app = buildApp({ evolution: { url: 'http://evo.test', apikey: 'k', fetchImpl: evo.fetchImpl }, pushSender: async (sub, body) => { pushed.push(JSON.parse(body)); } });
+  const call = await salon(app);
+  await call('POST', '/api/push/subscribe', { subscription: { endpoint: 'https://push.test/9', keys: { p256dh: 'a', auth: 'b' } } });
+  await call('POST', '/api/whatsapp/connect');
+  const inst = Object.keys(evo.instances)[0];
+  evo.instances[inst] = 'open';
+  assert.equal((await call('GET', '/api/whatsapp/status')).body.state, 'open');
+
+  // a sessão cai, mas o reinício resolve: a mensagem sai e nada muda para ela
+  evo.state.dead = true; evo.state.revive = true;
+  assert.equal((await call('POST', '/api/whatsapp/test', { phone: '11955554444' })).status, 200);
+  assert.equal(evo.calls.filter(c => c[0] === 'restart').length, 1);
+  assert.equal(evo.sent.length, 1);
+  assert.equal((await call('GET', '/api/whatsapp/status')).body.state, 'open');
+
+  // cai de novo e o reinício não resolve: aparece como travado e o aviso do celular conta como caído
+  evo.state.dead = true; evo.state.revive = false;
+  assert.equal((await call('POST', '/api/whatsapp/test', { phone: '11955554444' })).status, 502);
+  assert.equal((await call('GET', '/api/whatsapp/status')).body.state, 'stuck');
+  assert.equal(await app.alerts.checkWhatsapp(), 1, 'avisa a profissional');
+  assert.equal(await app.alerts.checkWhatsapp(), 0, 'uma vez por dia');
+  assert.ok(pushed.some(p => /desconectado/i.test(p.title)), 'aviso no celular');
+
+  // conectar de novo sai da sessão morta e devolve um QR
+  const again = await call('POST', '/api/whatsapp/connect');
+  assert.equal(again.status, 200);
+  assert.ok(again.body.qr, 'QR novo');
   await app.close();
 });

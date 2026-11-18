@@ -60,6 +60,7 @@ export function buildApp({
   publicUrl = '',        // endereço do sistema, para links nas mensagens
   pushSender = null,     // para testes
   saleDelay = 4000,      // espera antes do comprovante de venda (os produtos da compra chegam juntos)
+  restartWait = 0,       // espera depois de reiniciar a sessão do WhatsApp antes de tentar o envio de novo (ms)
   sendGap = [0, 0],      // intervalo aleatório entre mensagens do mesmo WhatsApp (ms)
   typing = [0, 0],       // "digitando…" antes de cada mensagem (ms)
   asaasFetch = fetch,    // para testes (Asaas de mentira)
@@ -76,11 +77,11 @@ export function buildApp({
   const limitPay = rateLimiter({ max: 30, windowMs: 60 * 60 * 1000 });
 
   const evo = evolutionClient(evolution);
-  const messenger = createMessenger({ db, evo, publicUrl, log: app.log, sendGap, typing });
+  const messenger = createMessenger({ db, evo, publicUrl, log: app.log, sendGap, typing, restartWait });
   app.decorate('messenger', messenger);
   const push = createPush({ db, sender: pushSender, log: app.log });
   app.decorate('push', push);
-  app.decorate('alerts', createAlerts({ db, push, evo, log: app.log }));
+  app.decorate('alerts', createAlerts({ db, push, evo, messenger, log: app.log }));
   const pay = createPayments({ db, call: asaasClient({ fetchImpl: asaasFetch }), messenger, push, log: app.log });
   app.decorate('payments', pay);
 
